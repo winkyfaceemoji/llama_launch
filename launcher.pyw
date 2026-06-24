@@ -188,29 +188,61 @@ _DEFAULT_CONFIG = {
 }
 
 
-def load_config():
-    if os.path.exists(CONFIG_FILE):
+def load_config() -> dict:
+    if not os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(_DEFAULT_CONFIG, f, indent=2, ensure_ascii=False)
+        except IOError:
+            pass
+        return dict(_DEFAULT_CONFIG)
+    try:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
+    except (IOError, json.JSONDecodeError) as e:
+        print(f"Error reading config file: {e}")
+        return dict(_DEFAULT_CONFIG)
+
+
+def save_config(config: dict) -> None:
     try:
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(_DEFAULT_CONFIG, f, indent=2, ensure_ascii=False)
-    except OSError:
-        pass
-    return dict(_DEFAULT_CONFIG)
+            json.dump(config, f, indent=2, ensure_ascii=False)
+    except IOError as e:
+        messagebox.showerror("Save Error", f"Could not save settings:\n{e}")
 
 
-def save_config(config):
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2, ensure_ascii=False)
-
-
-def load_presets(config):
-    # Read presets from the "presets" key in config.json.
-    raw = config.get("presets", {})
+def load_presets(config: dict) -> dict:
+    """Load and validate presets with enhanced migration logic."""
+    presets = config.get("presets", {})
+    
+    # Validate and migrate presets
     migrated = {}
-    for name, value in raw.items():
-        migrated[name] = {"command": value, "models": []} if isinstance(value, str) else value
+    for name, value in presets.items():
+        if not isinstance(value, dict):
+            # Handle legacy string-based presets
+            migrated[name] = {
+                "command": value,
+                "models": []
+            }
+        else:
+            # Validate modern dict-based presets
+            if not isinstance(value.get("command"), str):
+                raise ValueError(f"Invalid preset '{name}': 'command' must be a string")
+                
+            models = value.get("models", [])
+            if not isinstance(models, list):
+                raise ValueError(f"Invalid preset '{name}': 'models' must be a list")
+                
+            # Ensure all model entries are strings
+            if not all(isinstance(model, str) for model in models):
+                raise ValueError(f"Invalid preset '{name}': all models must be strings")
+                
+            migrated[name] = {
+                "command": value["command"],
+                "models": models
+            }
+    
     return migrated
 
 
@@ -458,10 +490,12 @@ class PresetDialog(tk.Toplevel):
         if not cmd:
             messagebox.showerror("Error", "Command template cannot be empty.", parent=self)
             return
+            
         raw_kw = self.models_var.get().strip()
+        self.result_models = [k.strip() for k in raw_kw.split(",") if k.strip()] if raw_kw else []
+            
         self.result_name    = name
         self.result_command = cmd
-        self.result_models  = [k.strip() for k in raw_kw.split(",") if k.strip()] if raw_kw else []
         self.destroy()
 
 
@@ -644,7 +678,13 @@ class CommandLauncherGUI:
         self.master.grid_columnconfigure(0, weight=1)
 
         # Application state
-        self.presets       = load_presets(self.config)
+        try:
+            self.presets = load_presets(self.config)
+        except ValueError as e:
+            messagebox.showerror("Config Error",
+                f"One or more presets in config.json are invalid:\n{e}\n\n"
+                "Proceeding with an empty preset list.")
+            self.presets = {}
         self._uvx_expanded = False
         self.llama_cmd     = ""
         self._llama_proc   = None
