@@ -79,9 +79,11 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import subprocess
 import os
+import sys
 import json
 import webbrowser
 import re
+import shlex
 import threading
 import urllib.request
 import time
@@ -141,24 +143,12 @@ H_RUNNING   = 750    # height of the running/log view
 
 
 # ============================================================
-# SECTION 2 — FILE PATHS & DEFAULT PRESETS
+# SECTION 2 — FILE PATHS
 # All paths are resolved relative to this script's location.
 # ============================================================
 
-PRESETS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "presets.json")
-MODELS_DIR   = "Models"  # resolved at runtime relative to llama_dir
-CONFIG_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
-
-DEFAULT_PRESETS = {
-    "Default Gemma (Q8_0, ctx 131072)": {
-        "command": r'llama-server -m "{model}" -c 131072 --jinja --webui-mcp-proxy --keep -1 --context-shift --swa-full --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 -ngl 999 --tools all',
-        "models": ["gemma"],
-    },
-    "Default Qwen (Q8_0, ctx 32768)": {
-        "command": r'llama-server -m "{model}" -c 32768 --jinja --webui-mcp-proxy --keep -1 --context-shift --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 -ngl 999 --tools all',
-        "models": ["qwen"],
-    },
-}
+MODELS_DIR  = "Models"  # resolved at runtime relative to llama_dir
+CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
 
 # ============================================================
@@ -179,26 +169,18 @@ def save_config(config):
         json.dump(config, f, indent=2)
 
 
-def load_presets():
-    # Load presets.json, migrating any old flat-string entries to the new dict format.
-    if os.path.exists(PRESETS_FILE):
-        with open(PRESETS_FILE, "r") as f:
-            raw = json.load(f)
-        migrated = {}
-        for name, value in raw.items():
-            migrated[name] = {"command": value, "models": []} if isinstance(value, str) else value
-        return migrated
-    return {k: dict(v) for k, v in DEFAULT_PRESETS.items()}
-
-
-def save_presets(presets):
-    with open(PRESETS_FILE, "w") as f:
-        json.dump(presets, f, indent=2)
+def load_presets(config):
+    # Read presets from the "presets" key in config.json.
+    raw = config.get("presets", {})
+    migrated = {}
+    for name, value in raw.items():
+        migrated[name] = {"command": value, "models": []} if isinstance(value, str) else value
+    return migrated
 
 
 def detect_models(llama_dir=""):
-    # Scan the Models/ subfolder inside llama_dir for .gguf files.
-    models_dir = os.path.join(llama_dir, "Models") if llama_dir else MODELS_DIR
+    # Scan llama_dir directly for .gguf files.
+    models_dir = llama_dir if llama_dir else MODELS_DIR
     if not os.path.isdir(models_dir):
         return []
     return sorted(f for f in os.listdir(models_dir) if f.lower().endswith(".gguf"))
@@ -626,11 +608,12 @@ class CommandLauncherGUI:
         self.master.grid_columnconfigure(0, weight=1)
 
         # Application state
-        self.presets       = load_presets()
+        self.presets       = load_presets(self.config)
         self._uvx_expanded = False
         self.llama_cmd     = ""
         self._llama_proc   = None
         self._uvx_proc     = None
+        self._proxy_proc   = None
         self._polling      = False
         self._launch_time  = None
 
@@ -694,8 +677,9 @@ class CommandLauncherGUI:
             relief="flat", wrap="word", padx=8, pady=6,
             highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT,
         )
+        _cfg = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
         self.uvx_text.insert("1.0",
-            'uvx mcp-proxy --named-server-config config.json --allow-origin "*" --port 8001 --stateless'
+            f'uvx mcp-proxy --named-server-config "{_cfg}" --allow-origin "*" --port 8001 --stateless'
         )
 
         # ── Row 5: Launch button
@@ -735,8 +719,9 @@ class CommandLauncherGUI:
         # ── Rows 7–8: Running state (hidden until Launch is pressed)
         # Two stacked log panes separated by a draggable sash.
 
-        self._llama_label_var = tk.StringVar(value="llama-server")
-        self._uvx_label_var   = tk.StringVar(value="UVX Proxy")
+        self._llama_label_var  = tk.StringVar(value="llama-server")
+        self._uvx_label_var    = tk.StringVar(value="UVX Proxy")
+        self._proxy_label_var  = tk.StringVar(value="System Prompt Proxy")
 
         # PanedWindow lets the user drag the divider to resize each log pane.
         self.log_pane = tk.PanedWindow(
@@ -764,10 +749,12 @@ class CommandLauncherGUI:
             txt.pack(side="left", fill="both", expand=True)
             return frame, txt
 
-        llama_frame, self.llama_log = _make_log_pane(self._llama_label_var)
-        uvx_frame,   self.uvx_log   = _make_log_pane(self._uvx_label_var)
-        self.log_pane.add(llama_frame, stretch="always", minsize=80)
-        self.log_pane.add(uvx_frame,   stretch="always", minsize=80)
+        llama_frame,  self.llama_log  = _make_log_pane(self._llama_label_var)
+        uvx_frame,    self.uvx_log    = _make_log_pane(self._uvx_label_var)
+        proxy_frame,  self.proxy_log  = _make_log_pane(self._proxy_label_var)
+        self.log_pane.add(llama_frame,  stretch="always", minsize=80)
+        self.log_pane.add(uvx_frame,    stretch="always", minsize=80)
+        self.log_pane.add(proxy_frame,  stretch="always", minsize=80)
 
         # ── Exit button
         self.exit_btn = tk.Button(
@@ -849,6 +836,7 @@ class CommandLauncherGUI:
         # Reset pane labels for the next launch
         self._llama_label_var.set("llama-server")
         self._uvx_label_var.set("UVX Proxy")
+        self._proxy_label_var.set("System Prompt Proxy")
         for w in (self.model_outer, self.preset_outer,
                   self.uvx_toggle, self.run_button):
             w.grid()
@@ -919,7 +907,7 @@ class CommandLauncherGUI:
         if not name or name not in self.presets:
             return
         template   = self.presets[name]["command"]
-        models_dir = os.path.join(self.llama_dir, "Models") if self.llama_dir else "Models"
+        models_dir = self.llama_dir if self.llama_dir else "."
         model_path = f"{models_dir}/{model}.gguf" if model and not model.startswith("(") else model
         self.llama_cmd = template.replace("{model}", model_path)
         self.config["last_preset"] = name
@@ -939,7 +927,8 @@ class CommandLauncherGUI:
             self.presets[dlg.result_name] = {
                 "command": dlg.result_command, "models": dlg.result_models
             }
-            save_presets(self.presets)
+            self.config["presets"] = self.presets
+            save_config(self.config)
             self._refresh_preset_menu()
             if dlg.result_name in self._filtered_presets():
                 self.preset_var.set(dlg.result_name)
@@ -963,7 +952,8 @@ class CommandLauncherGUI:
             self.presets[dlg.result_name] = {
                 "command": dlg.result_command, "models": dlg.result_models
             }
-            save_presets(self.presets)
+            self.config["presets"] = self.presets
+            save_config(self.config)
             self._refresh_preset_menu()
             if dlg.result_name in self._filtered_presets():
                 self.preset_var.set(dlg.result_name)
@@ -1102,10 +1092,12 @@ class CommandLauncherGUI:
         self._llama_proc = None
         self._kill_proc(self._uvx_proc, getattr(self, "uvx_log", None))
         self._uvx_proc = None
+        self._kill_proc(self._proxy_proc, getattr(self, "proxy_log", None))
+        self._proxy_proc = None
 
     def _on_close(self):
         # If servers are running and tray is available, minimize to tray instead of closing.
-        if (self._llama_proc is not None or self._uvx_proc is not None) and _TRAY_AVAILABLE:
+        if (self._llama_proc is not None or self._uvx_proc is not None or self._proxy_proc is not None) and _TRAY_AVAILABLE:
             self._hide_to_tray()
         else:
             if hasattr(self, "_llama_proc"):
@@ -1151,8 +1143,8 @@ class CommandLauncherGUI:
                 "UVX command is empty. Open the UVX section above to fill it in.")
             return
 
-        # Clear both log panes before entering the running state
-        for w in (self.llama_log, self.uvx_log):
+        # Clear all log panes before entering the running state
+        for w in (self.llama_log, self.uvx_log, self.proxy_log):
             w.config(state=tk.NORMAL)
             w.delete("1.0", "end")
             w.config(state=tk.DISABLED)
@@ -1162,7 +1154,7 @@ class CommandLauncherGUI:
         cwd = self.llama_dir if self.llama_dir else None
 
         try:
-            self._free_port(self.llama_cmd, 8080, self.llama_log)
+            self._free_port(self.llama_cmd, 8081, self.llama_log)
             self._llama_proc = subprocess.Popen(
                 self.llama_cmd,
                 shell=True,
@@ -1187,6 +1179,19 @@ class CommandLauncherGUI:
             self._uvx_label_var.set(f"UVX Proxy  ·  PID {self._uvx_proc.pid}")
             self._append_log(self.uvx_log, f"Launched (PID {self._uvx_proc.pid})")
             self._stream_output(self._uvx_proc, self.uvx_log)
+
+            self._free_port("--port 8080", 8080, self.proxy_log)
+            proxy_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "proxy.py")
+            self._proxy_proc = subprocess.Popen(
+                [sys.executable, proxy_script, "8080", "8081"],
+                shell=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            self._proxy_label_var.set(f"System Prompt Proxy  ·  PID {self._proxy_proc.pid}")
+            self._append_log(self.proxy_log, f"Launched (PID {self._proxy_proc.pid})")
+            self._stream_output(self._proxy_proc, self.proxy_log)
 
             self._start_health_poll()
             self._start_elapsed()
