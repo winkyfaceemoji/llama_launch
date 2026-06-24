@@ -348,6 +348,51 @@ class _MenuProxy:
         self._items.append((label, command or (lambda: None)))
 
 
+class SlideToggle(tk.Canvas):
+    """Compact sliding pill toggle between two labeled states."""
+    _W, _H = 130, 26
+
+    def __init__(self, parent, callback, initial=True):
+        super().__init__(parent, width=self._W, height=self._H,
+                         bg=BG_PANEL, highlightthickness=0, bd=0, cursor="hand2")
+        self._state    = initial
+        self._callback = callback
+        self._draw()
+        self.bind("<Button-1>", self._click)
+
+    def _pill(self, x1, y1, x2, y2, r, **kw):
+        r = min(r, (x2 - x1) // 2, (y2 - y1) // 2)
+        self.create_polygon(
+            x1 + r, y1,  x2 - r, y1,  x2, y1,
+            x2, y1 + r,  x2, y2 - r,  x2, y2,
+            x2 - r, y2,  x1 + r, y2,  x1, y2,
+            x1, y2 - r,  x1, y1 + r,  x1, y1,
+            smooth=True, **kw,
+        )
+
+    def _draw(self):
+        self.delete("all")
+        W, H, r, mid = self._W, self._H, self._H // 2, self._W // 2
+        self._pill(0, 0, W, H, r, fill=BG_INPUT)
+        if self._state:
+            self._pill(0, 0, mid, H, r, fill=ACCENT)
+        else:
+            self._pill(mid, 0, W, H, r, fill=ACCENT)
+        self.create_text(mid // 2, H // 2, text="Search",
+                         fill=BG if self._state else TEXT_MUT, font=FONT_SMALL)
+        self.create_text(mid + mid // 2, H // 2, text="Code",
+                         fill=BG if not self._state else TEXT_MUT, font=FONT_SMALL)
+
+    def _click(self, _):
+        self._state = not self._state
+        self._draw()
+        self._callback(self._state)
+
+    @property
+    def search_mode(self):
+        return self._state
+
+
 class DropdownButton(tk.Frame):
     # A custom dropdown: a Button + arrow Label that opens a borderless popup window.
     def __init__(self, parent, var):
@@ -760,16 +805,35 @@ class CommandLauncherGUI:
         small_btn(preset_btns, "Delete", self._delete_preset,
                   color=BG_PANEL, fg=DANGER).pack(side="left")
 
-        # ── Row 3: UVX command toggle (collapsed by default)
+        # ── Row 3: Action bar — UVX toggle | mode toggle | Launch button
+        self._action_bar = tk.Frame(self.master, bg=BG_PANEL)
+        self._action_bar.grid(row=3, column=0, sticky="ew", padx=16, pady=(4, 6))
+        self._action_bar.columnconfigure(3, weight=1)
+
         self.uvx_toggle = tk.Button(
-            self.master, text="▶   UVX Proxy Command",
-            font=("Segoe UI", 10), bg=BG_PANEL, fg=TEXT_SEC,
+            self._action_bar, text="▶ UVX",
+            font=("Segoe UI", 9), bg=BG_PANEL, fg=TEXT_MUT,
             activebackground=BORDER, activeforeground=TEXT_PRI,
-            relief="flat", bd=0, anchor="w",
-            padx=20, pady=10, cursor="hand2",
+            relief="flat", bd=0, padx=12, pady=8, cursor="hand2",
             command=self._toggle_uvx,
         )
-        self.uvx_toggle.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 2))
+        self.uvx_toggle.grid(row=0, column=0, sticky="w")
+
+        tk.Frame(self._action_bar, bg=BORDER, width=1).grid(
+            row=0, column=1, sticky="ns", padx=8, pady=4)
+
+        self._mode_toggle = SlideToggle(self._action_bar, lambda _: None)
+        self._mode_toggle.grid(row=0, column=2, padx=(0, 8), pady=4)
+
+        self.run_button = tk.Button(
+            self._action_bar, text="Launch Server",
+            command=self.run_commands,
+            bg=SUCCESS, fg=BG,
+            activebackground="#7db84e", activeforeground=BG,
+            font=("Segoe UI", 10, "bold"), relief="flat", bd=0,
+            padx=16, pady=8, cursor="hand2",
+        )
+        self.run_button.grid(row=0, column=3, sticky="ew")
 
         # ── Row 4: UVX textarea (hidden until toggled)
         self.uvx_text = tk.Text(
@@ -781,17 +845,6 @@ class CommandLauncherGUI:
         self.uvx_text.insert("1.0",
             f'uvx mcp-proxy --named-server-config "{CONFIG_FILE}" --allow-origin "*" --port 8001 --stateless'
         )
-
-        # ── Row 5: Launch button
-        self.run_button = tk.Button(
-            self.master, text="Launch Server",
-            command=self.run_commands,
-            bg=SUCCESS, fg=BG,
-            activebackground="#7db84e", activeforeground=BG,
-            font=("Segoe UI", 12, "bold"), relief="flat", bd=0,
-            pady=14, cursor="hand2",
-        )
-        self.run_button.grid(row=5, column=0, sticky="ew", padx=16, pady=(10, 8))
 
         # ── Row 6: Status bar (hidden until running state)
         self.status_bar = tk.Frame(self.master, bg=BG_PANEL)
@@ -900,10 +953,10 @@ class CommandLauncherGUI:
         self._uvx_expanded = not self._uvx_expanded
         if self._uvx_expanded:
             self.uvx_text.grid(row=4, column=0, sticky="ew", padx=16, pady=(0, 6))
-            self.uvx_toggle.config(text="▼   UVX Proxy Command")
+            self.uvx_toggle.config(text="▼ UVX")
         else:
             self.uvx_text.grid_remove()
-            self.uvx_toggle.config(text="▶   UVX Proxy Command")
+            self.uvx_toggle.config(text="▶ UVX")
         self._resize_config()
 
 
@@ -911,15 +964,14 @@ class CommandLauncherGUI:
 
     def _enter_running_state(self):
         # Hide config widgets and show the status bar, two log panes + exit button.
-        for w in (self.model_outer, self.preset_outer,
-                  self.uvx_toggle, self.run_button):
+        for w in (self.model_outer, self.preset_outer, self._action_bar):
             w.grid_remove()
         if self._uvx_expanded:
             self.uvx_text.grid_remove()
-        self.status_bar.grid(row=6, column=0, sticky="ew", padx=16, pady=(10, 0))
-        self.master.grid_rowconfigure(7, weight=1)
-        self.log_pane.grid(row=7, column=0, sticky="nsew", padx=16, pady=(6, 6))
-        self.exit_btn.grid(row=8, column=0, sticky="ew", padx=16, pady=(0, 14))
+        self.status_bar.grid(row=5, column=0, sticky="ew", padx=16, pady=(10, 0))
+        self.master.grid_rowconfigure(6, weight=1)
+        self.log_pane.grid(row=6, column=0, sticky="nsew", padx=16, pady=(6, 6))
+        self.exit_btn.grid(row=7, column=0, sticky="ew", padx=16, pady=(0, 14))
         self.master.resizable(True, True)
         self.master.geometry(f"{W}x{H_RUNNING}")
 
@@ -929,7 +981,7 @@ class CommandLauncherGUI:
         self._stop_health_poll()
         self._stop_elapsed()
         self.master.resizable(False, False)
-        self.master.grid_rowconfigure(7, weight=0)
+        self.master.grid_rowconfigure(6, weight=0)
         self.status_bar.grid_remove()
         self.log_pane.grid_remove()
         self.exit_btn.grid_remove()
@@ -937,8 +989,7 @@ class CommandLauncherGUI:
         self._llama_label_var.set("llama-server")
         self._uvx_label_var.set("UVX Proxy")
         self._proxy_label_var.set("System Prompt Proxy")
-        for w in (self.model_outer, self.preset_outer,
-                  self.uvx_toggle, self.run_button):
+        for w in (self.model_outer, self.preset_outer, self._action_bar):
             w.grid()
         if self._uvx_expanded:
             self.uvx_text.grid()
@@ -1097,7 +1148,7 @@ class CommandLauncherGUI:
                     if status == "ok":
                         color = SUCCESS
                         text  = "● online"
-                        if not browser_opened:
+                        if not browser_opened and self._mode_toggle.search_mode:
                             browser_opened = True
                             self.master.after(0, lambda: webbrowser.open("http://127.0.0.1:8080/"))
                     else:
