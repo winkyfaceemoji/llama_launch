@@ -40,7 +40,7 @@ pythonw launcher.pyw
 
 ## First-time setup
 
-On the first launch, a setup screen asks you to locate your **llama.cpp folder** — the directory where `llama-server.exe` lives. This path is saved to `config.json` and used as the working directory for llama-server launches.
+On the first launch, a setup screen asks you to locate your **models folder** — the directory where your `.gguf` files live. This path is saved to `config.json`. Make sure `llama-server` is on your system `PATH` so the launcher can find it regardless of working directory.
 
 You can change this path at any time via the **⚙ Settings** button in the top-right corner of the main screen.
 
@@ -56,22 +56,23 @@ llama_launch/
 └── README.md
 ```
 
-Your `.gguf` model files are expected to live in a `Models/` subfolder inside your llama.cpp directory:
+Your `.gguf` model files should all live directly inside the folder you point `llama_dir` at — no subfolder needed:
 
 ```
-llama.cpp/
-├── llama-server.exe
-└── Models/
-    ├── gemma-4-E4B-it-Q8_0.gguf
-    └── qwen2.5-coder-14b-q8_0.gguf
+GGUF Models/
+├── gemma-4-E4B-it-Q8_0.gguf
+├── qwen2.5-coder-14b-q8_0.gguf
+└── Qwen_Qwen3-14B-Q5_K_M.gguf
 ```
+
+`llama-server` itself must be on your system `PATH` (add your llama.cpp build folder to `PATH` if needed).
 
 ---
 
 ## Using the launcher
 
 ### Selecting a model
-The **MODEL** dropdown lists all `.gguf` files found in the `Models/` subfolder of your llama.cpp directory. Use the **Refresh** button if you've added files since opening the launcher.
+The **MODEL** dropdown lists all `.gguf` files found directly in your models folder (`llama_dir`). Use the **Refresh** button if you've added files since opening the launcher.
 
 ### Selecting a preset
 The **PRESET** dropdown shows launch presets filtered to match your chosen model. Selecting a preset builds the full `llama-server` command automatically.
@@ -119,7 +120,7 @@ All settings live in a single `config.json` next to the launcher:
 
 | Key | Purpose |
 |---|---|
-| `llama_dir` | Path to your llama.cpp folder |
+| `llama_dir` | Path to the folder containing your `.gguf` model files |
 | `presets` | Saved launch presets |
 | `system_prompt` | System prompt injected into every chat request |
 | `mcpServers` | MCP tool definitions used by the UVX proxy |
