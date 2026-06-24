@@ -82,6 +82,7 @@ import os
 import json
 import webbrowser
 import re
+import threading
 
 
 # ============================================================
@@ -112,11 +113,11 @@ FONT_MONO   = ("Cascadia Code", 10)
 FONT_LOG    = ("Cascadia Code", 10)
 
 # Window dimensions — fixed size, no manual resizing
-W           = 720
+W           = 520
 H_SETUP     = 280    # height of the first-run setup screen
-H_CONFIG    = 370    # height of the main config view
+H_CONFIG    = 320    # height of the main config view
 H_UVX_OPEN  = 115    # extra height when the UVX textarea is expanded
-H_RUNNING   = 390    # height of the running/log view
+H_RUNNING   = 750    # height of the running/log view
 
 
 # ============================================================
@@ -591,7 +592,6 @@ class CommandLauncherGUI:
     def _build_home_screen(self):
         self.master.geometry(f"{W}x{H_CONFIG}")
         self.master.grid_columnconfigure(0, weight=1)
-        self.master.grid_rowconfigure(7, weight=1)
 
         # Application state
         self.presets       = load_presets()
@@ -675,11 +675,44 @@ class CommandLauncherGUI:
         )
         self.run_button.grid(row=5, column=0, sticky="ew", padx=16, pady=(10, 8))
 
-        # ── Rows 6–8: Running state widgets (hidden until Launch is pressed)
-        self.log_header = tk.Frame(self.master, bg=BG)
-        self.log_header.grid_columnconfigure(0, weight=1)
-        section_label(self.log_header, "STATUS LOG").grid(row=0, column=0, sticky="w")
+        # ── Rows 6–7: Running state (hidden until Launch is pressed)
+        # Two stacked log panes separated by a draggable sash.
 
+        self._llama_label_var = tk.StringVar(value="llama-server")
+        self._uvx_label_var   = tk.StringVar(value="UVX Proxy")
+
+        # PanedWindow lets the user drag the divider to resize each log pane.
+        self.log_pane = tk.PanedWindow(
+            self.master, orient="vertical",
+            bg=BORDER, sashwidth=5, sashpad=0,
+            sashrelief="flat", bd=0, relief="flat",
+        )
+
+        def _make_log_pane(label_var):
+            frame = tk.Frame(self.log_pane, bg=BG)
+            hdr = tk.Frame(frame, bg=BG)
+            hdr.pack(fill="x", pady=(0, 4))
+            tk.Frame(hdr, bg=ACCENT, width=3).pack(side="left", fill="y")
+            tk.Label(hdr, textvariable=label_var,
+                     font=FONT_LABEL, fg=TEXT_MUT, bg=BG).pack(
+                side="left", padx=(8, 0), pady=4)
+            border = tk.Frame(frame, bg=BORDER, padx=1, pady=1)
+            border.pack(fill="both", expand=True)
+            txt = tk.Text(border, font=FONT_LOG,
+                          bg=BG_INPUT, fg=TEXT_PRI, insertbackground=TEXT_PRI,
+                          relief="flat", state=tk.DISABLED, wrap="none")
+            sb = ttk.Scrollbar(border, orient="vertical", command=txt.yview)
+            txt.configure(yscrollcommand=sb.set)
+            sb.pack(side="right", fill="y")
+            txt.pack(side="left", fill="both", expand=True)
+            return frame, txt
+
+        llama_frame, self.llama_log = _make_log_pane(self._llama_label_var)
+        uvx_frame,   self.uvx_log   = _make_log_pane(self._uvx_label_var)
+        self.log_pane.add(llama_frame, stretch="always", minsize=80)
+        self.log_pane.add(uvx_frame,   stretch="always", minsize=80)
+
+        # ── Exit button
         self.exit_btn = tk.Button(
             self.master, text="Exit Processes",
             command=self._exit_running_state,
@@ -687,13 +720,6 @@ class CommandLauncherGUI:
             activebackground="#c45c6e", activeforeground=BG,
             font=("Segoe UI", 12, "bold"), relief="flat", bd=0,
             pady=14, cursor="hand2",
-        )
-
-        self.log_area = tk.Text(
-            self.master, height=8, font=FONT_LOG,
-            bg=BG_INPUT, fg=TEXT_PRI, insertbackground=TEXT_PRI,
-            relief="flat", state=tk.DISABLED,
-            highlightthickness=1, highlightbackground=BORDER, highlightcolor=BORDER,
         )
 
         # When the model changes, re-filter the preset list.
@@ -737,23 +763,28 @@ class CommandLauncherGUI:
     # ── Two-state view switching ──────────────────────────────
 
     def _enter_running_state(self):
-        # Hide config widgets and show the log + exit button.
+        # Hide config widgets and show the two log panes + exit button.
         for w in (self.model_outer, self.preset_outer,
                   self.uvx_toggle, self.run_button):
             w.grid_remove()
         if self._uvx_expanded:
             self.uvx_text.grid_remove()
-        self.log_header.grid(row=6, column=0, sticky="ew", padx=16, pady=(12, 2))
-        self.log_area.grid(row=7, column=0, sticky="nsew", padx=16, pady=(0, 6))
-        self.exit_btn.grid(row=8, column=0, sticky="ew", padx=16, pady=(0, 14))
+        self.master.grid_rowconfigure(6, weight=1)
+        self.log_pane.grid(row=6, column=0, sticky="nsew", padx=16, pady=(12, 6))
+        self.exit_btn.grid(row=7, column=0, sticky="ew", padx=16, pady=(0, 14))
+        self.master.resizable(True, True)
         self.master.geometry(f"{W}x{H_RUNNING}")
 
     def _exit_running_state(self):
         # Kill both processes, then restore the config view.
         self._kill_all()
-        self.log_header.grid_remove()
-        self.log_area.grid_remove()
+        self.master.resizable(False, False)
+        self.master.grid_rowconfigure(6, weight=0)
+        self.log_pane.grid_remove()
         self.exit_btn.grid_remove()
+        # Reset pane labels for the next launch
+        self._llama_label_var.set("llama-server")
+        self._uvx_label_var.set("UVX Proxy")
         for w in (self.model_outer, self.preset_outer,
                   self.uvx_toggle, self.run_button):
             w.grid()
@@ -875,9 +906,8 @@ class CommandLauncherGUI:
 
     # ── Process management ────────────────────────────────────
 
-    def _free_port(self, cmd, default_port, label):
+    def _free_port(self, cmd, default_port, widget):
         # Kill any process already listening on the port this command will use.
-        # Prevents "port already in use" errors when relaunching.
         m = re.search(r'--port\s+(\d+)', cmd)
         port = int(m.group(1)) if m else default_port
         try:
@@ -892,26 +922,27 @@ class CommandLauncherGUI:
                     if pid != "0":
                         subprocess.run(f"taskkill /F /T /PID {pid}",
                                        shell=True, capture_output=True)
-                        self.log_message(f"  [{label}]  Port {port} was in use — freed PID {pid}")
+                        self._append_log(widget, f"  Port {port} was in use — freed PID {pid}")
         except Exception:
             pass
 
-    def _kill_proc(self, proc, label):
+    def _kill_proc(self, proc, widget=None):
         # Kill a process and its full child tree (/T) — ensures GPU workers are also stopped.
         if proc is None:
-            self.log_message(f"  [{label}]  Nothing to kill.")
             return
         try:
             subprocess.run(f"taskkill /F /T /PID {proc.pid}",
                            shell=True, capture_output=True)
-            self.log_message(f"  [{label}]  Killed  (PID {proc.pid})")
+            if widget:
+                self._append_log(widget, f"─── killed (PID {proc.pid}) ───")
         except Exception as e:
-            self.log_message(f"  [{label}]  Kill failed: {e}")
+            if widget:
+                self._append_log(widget, f"─── kill failed: {e} ───")
 
     def _kill_all(self):
-        self._kill_proc(self._llama_proc, "Llama")
+        self._kill_proc(self._llama_proc, getattr(self, "llama_log", None))
         self._llama_proc = None
-        self._kill_proc(self._uvx_proc, "UVX")
+        self._kill_proc(self._uvx_proc, getattr(self, "uvx_log", None))
         self._uvx_proc = None
 
     def _on_close(self):
@@ -921,15 +952,27 @@ class CommandLauncherGUI:
         self.master.destroy()
 
 
-    # ── Status log ────────────────────────────────────────────
+    # ── Log helpers ───────────────────────────────────────────
 
-    def log_message(self, message):
-        # Append a line to the read-only status log.
-        self.log_area.config(state=tk.NORMAL)
-        self.log_area.insert("end", message + "\n")
-        self.log_area.see("end")
-        self.master.update()
-        self.log_area.config(state=tk.DISABLED)
+    def _append_log(self, widget, text):
+        # Append one line to a log pane. Safe to call from any thread via .after().
+        widget.config(state=tk.NORMAL)
+        widget.insert("end", text + "\n")
+        widget.see("end")
+        widget.config(state=tk.DISABLED)
+
+    def _stream_output(self, proc, widget):
+        # Read the process's stdout line-by-line in a background thread and
+        # schedule each line onto the main thread so tkinter stays thread-safe.
+        def reader():
+            try:
+                for line in proc.stdout:
+                    line = line.rstrip("\r\n")
+                    widget.after(0, lambda l=line: self._append_log(widget, l))
+            except Exception:
+                pass
+            widget.after(0, lambda: self._append_log(widget, "─── process ended ───"))
+        threading.Thread(target=reader, daemon=True).start()
 
 
     # ── Launch sequence ───────────────────────────────────────
@@ -946,40 +989,47 @@ class CommandLauncherGUI:
                 "UVX command is empty. Open the UVX section above to fill it in.")
             return
 
-        self.log_area.config(state=tk.NORMAL)
-        self.log_area.delete("1.0", "end")
-        self.log_area.config(state=tk.DISABLED)
+        # Clear both log panes before entering the running state
+        for w in (self.llama_log, self.uvx_log):
+            w.config(state=tk.NORMAL)
+            w.delete("1.0", "end")
+            w.config(state=tk.DISABLED)
         self._enter_running_state()
 
         model_name = self.model_var.get()
-
-        # cwd sets the working directory for both processes to the configured
-        # llama.cpp folder, so llama-server resolves correctly relative to that path.
         cwd = self.llama_dir if self.llama_dir else None
 
         try:
-            self._free_port(self.llama_cmd, 8080, "Llama")
+            self._free_port(self.llama_cmd, 8080, self.llama_log)
             self._llama_proc = subprocess.Popen(
-                f'cmd.exe /k {self.llama_cmd}',
-                creationflags=subprocess.CREATE_NEW_CONSOLE,
+                self.llama_cmd,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
                 cwd=cwd,
             )
-            self.log_message(f"  [llama-server {model_name}]  Launched  (PID {self._llama_proc.pid})")
+            self._llama_label_var.set(f"llama-server  ·  PID {self._llama_proc.pid}")
+            self._append_log(self.llama_log, f"Launched (PID {self._llama_proc.pid})")
+            self._stream_output(self._llama_proc, self.llama_log)
 
-            self._free_port(uvx_cmd, 8001, "UVX")
+            self._free_port(uvx_cmd, 8001, self.uvx_log)
             self._uvx_proc = subprocess.Popen(
-                f'cmd.exe /k {uvx_cmd}',
-                creationflags=subprocess.CREATE_NEW_CONSOLE,
+                uvx_cmd,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
                 cwd=cwd,
             )
-            self.log_message(f"  [UVX Proxy]  Launched  (PID {self._uvx_proc.pid})")
+            self._uvx_label_var.set(f"UVX Proxy  ·  PID {self._uvx_proc.pid}")
+            self._append_log(self.uvx_log, f"Launched (PID {self._uvx_proc.pid})")
+            self._stream_output(self._uvx_proc, self.uvx_log)
 
-            self.log_message("-" * 52)
-            self.log_message("  Both servers running.")
             webbrowser.open("http://127.0.0.1:8080/")
 
         except Exception as e:
-            self.log_message(f"\n  LAUNCH FAILED:  {e}")
+            self._append_log(self.llama_log, f"LAUNCH FAILED: {e}")
 
 
 # ============================================================
