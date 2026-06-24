@@ -132,9 +132,9 @@ FONT_MONO   = ("Cascadia Code", 10)
 FONT_LOG    = ("Cascadia Code", 10)
 
 # Window dimensions — fixed size, no manual resizing
-W           = 520
+W           = 640
 H_SETUP     = 280    # height of the first-run setup screen
-H_CONFIG    = 320    # height of the main config view
+H_CONFIG    = 270    # height of the main config view
 H_UVX_OPEN  = 115    # extra height when the UVX textarea is expanded
 H_RUNNING   = 750    # height of the running/log view
 
@@ -756,6 +756,7 @@ class CommandLauncherGUI:
                 "Proceeding with an empty preset list.")
             self.presets = {}
         self._uvx_expanded = False
+        self._search_mode  = True
         self.llama_cmd     = ""
         self._llama_proc   = None
         self._uvx_proc     = None
@@ -763,20 +764,23 @@ class CommandLauncherGUI:
         self._polling      = False
         self._launch_time  = None
 
+        self.master.columnconfigure(0, weight=1)
+        self.master.columnconfigure(1, weight=0)
+
         # ── Row 0: Header bar with Settings button on the right
         hdr = tk.Frame(self.master, bg="#13141f", height=54)
-        hdr.grid(row=0, column=0, sticky="ew")
+        hdr.grid(row=0, column=0, columnspan=2, sticky="ew")
         hdr.grid_propagate(False)
         hdr.columnconfigure(0, weight=1)
         tk.Label(hdr, text="Llama Launcher", font=FONT_TITLE,
                  fg=TEXT_PRI, bg="#13141f").pack(side="left", padx=24, pady=14)
         # Settings button — opens the path dialog so the user can update the llama.cpp folder
-        small_btn(hdr, "⚙ Settings", self._open_settings,
+        small_btn(hdr, "⚙ Model Folder", self._open_settings,
                   color="#13141f", fg=TEXT_MUT).pack(side="right", padx=16, pady=14)
 
         # ── Row 1: Model selector
         self.model_outer, model_card = card(self.master)
-        self.model_outer.grid(row=1, column=0, padx=16, pady=(12, 6), sticky="ew")
+        self.model_outer.grid(row=1, column=0, padx=(16, 6), pady=(12, 6), sticky="ew")
         model_card.grid_columnconfigure(1, weight=1)
 
         section_label(model_card, "MODEL").grid(row=0, column=0, sticky="w", padx=(12, 6), pady=10)
@@ -790,7 +794,7 @@ class CommandLauncherGUI:
 
         # ── Row 2: Preset selector
         self.preset_outer, preset_card = card(self.master)
-        self.preset_outer.grid(row=2, column=0, padx=16, pady=(0, 6), sticky="ew")
+        self.preset_outer.grid(row=2, column=0, padx=(16, 6), pady=(0, 6), sticky="ew")
         preset_card.grid_columnconfigure(1, weight=1)
 
         section_label(preset_card, "PRESET").grid(row=0, column=0, sticky="w", padx=(12, 6), pady=10)
@@ -805,37 +809,53 @@ class CommandLauncherGUI:
         small_btn(preset_btns, "Delete", self._delete_preset,
                   color=BG_PANEL, fg=DANGER).pack(side="left")
 
-        # ── Row 3: Action bar — UVX toggle | mode toggle | Launch button
-        self._action_bar = tk.Frame(self.master, bg=BG_PANEL)
-        self._action_bar.grid(row=3, column=0, sticky="ew", padx=16, pady=(4, 6))
-        self._action_bar.columnconfigure(3, weight=1)
+        # ── Col 1, Rows 1–2: Launch options panel (alongside model + preset)
+        self._options_panel = tk.Frame(self.master, bg=BG_PANEL, padx=10, pady=8)
+        self._options_panel.grid(row=1, column=1, rowspan=2, sticky="nsew",
+                                 padx=(0, 16), pady=(12, 6))
+
+        lbl_row = tk.Frame(self._options_panel, bg=BG_PANEL)
+        lbl_row.pack(fill="x", pady=(0, 8))
+        tk.Frame(lbl_row, bg=ACCENT, width=3).pack(side="left", fill="y")
+        tk.Label(lbl_row, text="LAUNCH OPTIONS", font=FONT_LABEL,
+                 fg=TEXT_MUT, bg=BG_PANEL).pack(side="left", padx=(8, 0), pady=2)
 
         self.uvx_toggle = tk.Button(
-            self._action_bar, text="▶ UVX",
-            font=("Segoe UI", 9), bg=BG_PANEL, fg=TEXT_MUT,
+            self._options_panel, text="▶  UVX Settings",
+            font=FONT_BTN_SM, bg=BG_INPUT, fg=TEXT_SEC,
             activebackground=BORDER, activeforeground=TEXT_PRI,
-            relief="flat", bd=0, padx=12, pady=8, cursor="hand2",
-            command=self._toggle_uvx,
+            relief="flat", bd=0, padx=10, pady=5, cursor="hand2",
+            highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT,
+            anchor="w", command=self._toggle_uvx,
         )
-        self.uvx_toggle.grid(row=0, column=0, sticky="w")
+        self.uvx_toggle.pack(fill="x")
 
-        tk.Frame(self._action_bar, bg=BORDER, width=1).grid(
-            row=0, column=1, sticky="ns", padx=8, pady=4)
+        tk.Label(self._options_panel, text="Web UI",
+                 font=FONT_BTN_SM, fg=TEXT_SEC, bg=BG_PANEL).pack(
+                     anchor="w", padx=2, pady=(10, 4))
 
-        self._mode_toggle = SlideToggle(self._action_bar, lambda _: None)
-        self._mode_toggle.grid(row=0, column=2, padx=(0, 8), pady=4)
+        mode_row = tk.Frame(self._options_panel, bg=BG_PANEL)
+        mode_row.pack(fill="x")
 
-        self.run_button = tk.Button(
-            self._action_bar, text="Launch Server",
-            command=self.run_commands,
-            bg=SUCCESS, fg=BG,
-            activebackground="#7db84e", activeforeground=BG,
-            font=("Segoe UI", 10, "bold"), relief="flat", bd=0,
-            padx=16, pady=8, cursor="hand2",
+        self._search_btn = tk.Button(
+            mode_row, text="Yes",
+            font=FONT_BTN_SM, bg=ACCENT, fg=BG,
+            activebackground=ACCENT, activeforeground=BG,
+            relief="flat", bd=0, padx=10, pady=5, cursor="hand2",
+            command=lambda: self._set_mode(True),
         )
-        self.run_button.grid(row=0, column=3, sticky="ew")
+        self._search_btn.pack(side="left", fill="x", expand=True, padx=(0, 3))
 
-        # ── Row 4: UVX textarea (hidden until toggled)
+        self._code_btn = tk.Button(
+            mode_row, text="No",
+            font=FONT_BTN_SM, bg=BG_INPUT, fg=TEXT_SEC,
+            activebackground=BORDER, activeforeground=TEXT_PRI,
+            relief="flat", bd=0, padx=10, pady=5, cursor="hand2",
+            command=lambda: self._set_mode(False),
+        )
+        self._code_btn.pack(side="left", fill="x", expand=True)
+
+        # ── Row 3: UVX textarea (hidden until toggled, spans both columns)
         self.uvx_text = tk.Text(
             self.master, height=4, font=FONT_MONO,
             bg=BG_INPUT, fg=TEXT_PRI, insertbackground=TEXT_PRI,
@@ -845,6 +865,18 @@ class CommandLauncherGUI:
         self.uvx_text.insert("1.0",
             f'uvx mcp-proxy --named-server-config "{CONFIG_FILE}" --allow-origin "*" --port 8001 --stateless'
         )
+
+        # ── Row 4: Launch Server button (full width, spans both columns)
+        self.run_button = tk.Button(
+            self.master, text="Launch Server",
+            command=self.run_commands,
+            bg=SUCCESS, fg=BG,
+            activebackground="#7db84e", activeforeground=BG,
+            font=("Segoe UI", 12, "bold"), relief="flat", bd=0,
+            pady=14, cursor="hand2",
+        )
+        self.run_button.grid(row=4, column=0, columnspan=2,
+                             sticky="ew", padx=16, pady=(6, 8))
 
         # ── Row 6: Status bar (hidden until running state)
         self.status_bar = tk.Frame(self.master, bg=BG_PANEL)
@@ -949,14 +981,24 @@ class CommandLauncherGUI:
         h = H_CONFIG + (H_UVX_OPEN if self._uvx_expanded else 0)
         self.master.geometry(f"{W}x{h}")
 
+    def _set_mode(self, search):
+        self._search_mode = search
+        if search:
+            self._search_btn.config(bg=ACCENT, fg=BG, activebackground=ACCENT, activeforeground=BG)
+            self._code_btn.config(bg=BG_INPUT, fg=TEXT_SEC, activebackground=BORDER, activeforeground=TEXT_PRI)
+        else:
+            self._search_btn.config(bg=BG_INPUT, fg=TEXT_SEC, activebackground=BORDER, activeforeground=TEXT_PRI)
+            self._code_btn.config(bg=ACCENT, fg=BG, activebackground=ACCENT, activeforeground=BG)
+
     def _toggle_uvx(self):
         self._uvx_expanded = not self._uvx_expanded
         if self._uvx_expanded:
-            self.uvx_text.grid(row=4, column=0, sticky="ew", padx=16, pady=(0, 6))
-            self.uvx_toggle.config(text="▼ UVX")
+            self.uvx_text.grid(row=3, column=0, columnspan=2,
+                               sticky="ew", padx=16, pady=(0, 6))
+            self.uvx_toggle.config(text="▼  UVX Settings")
         else:
             self.uvx_text.grid_remove()
-            self.uvx_toggle.config(text="▶ UVX")
+            self.uvx_toggle.config(text="▶  UVX Settings")
         self._resize_config()
 
 
@@ -964,14 +1006,17 @@ class CommandLauncherGUI:
 
     def _enter_running_state(self):
         # Hide config widgets and show the status bar, two log panes + exit button.
-        for w in (self.model_outer, self.preset_outer, self._action_bar):
+        for w in (self.model_outer, self.preset_outer, self._options_panel, self.run_button):
             w.grid_remove()
         if self._uvx_expanded:
             self.uvx_text.grid_remove()
-        self.status_bar.grid(row=5, column=0, sticky="ew", padx=16, pady=(10, 0))
+        self.status_bar.grid(row=5, column=0, columnspan=2,
+                             sticky="ew", padx=16, pady=(10, 0))
         self.master.grid_rowconfigure(6, weight=1)
-        self.log_pane.grid(row=6, column=0, sticky="nsew", padx=16, pady=(6, 6))
-        self.exit_btn.grid(row=7, column=0, sticky="ew", padx=16, pady=(0, 14))
+        self.log_pane.grid(row=6, column=0, columnspan=2,
+                           sticky="nsew", padx=16, pady=(6, 6))
+        self.exit_btn.grid(row=7, column=0, columnspan=2,
+                           sticky="ew", padx=16, pady=(0, 14))
         self.master.resizable(True, True)
         self.master.geometry(f"{W}x{H_RUNNING}")
 
@@ -989,7 +1034,7 @@ class CommandLauncherGUI:
         self._llama_label_var.set("llama-server")
         self._uvx_label_var.set("UVX Proxy")
         self._proxy_label_var.set("System Prompt Proxy")
-        for w in (self.model_outer, self.preset_outer, self._action_bar):
+        for w in (self.model_outer, self.preset_outer, self._options_panel, self.run_button):
             w.grid()
         if self._uvx_expanded:
             self.uvx_text.grid()
@@ -1148,7 +1193,7 @@ class CommandLauncherGUI:
                     if status == "ok":
                         color = SUCCESS
                         text  = "● online"
-                        if not browser_opened and self._mode_toggle.search_mode:
+                        if not browser_opened and self._search_mode:
                             browser_opened = True
                             self.master.after(0, lambda: webbrowser.open("http://127.0.0.1:8080/"))
                     else:
