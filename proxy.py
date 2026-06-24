@@ -1,6 +1,6 @@
 import http.client, json, os, sys
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 _SP = ""
 _UP = 8081
@@ -16,8 +16,26 @@ def _load():
 
 class Handler(BaseHTTPRequestHandler):
     def _relay(self):
-        n    = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(n) if n else None
+        cl = self.headers.get("Content-Length")
+        te = self.headers.get("Transfer-Encoding", "").lower()
+        if cl is not None:
+            body = self.rfile.read(int(cl))
+        elif "chunked" in te:
+            # decode chunked request body manually
+            chunks = []
+            while True:
+                size_line = self.rfile.readline().strip()
+                if not size_line:
+                    break
+                chunk_size = int(size_line, 16)
+                if chunk_size == 0:
+                    self.rfile.readline()  # trailing CRLF
+                    break
+                chunks.append(self.rfile.read(chunk_size))
+                self.rfile.readline()  # CRLF after chunk
+            body = b"".join(chunks) if chunks else None
+        else:
+            body = None
 
         if self.command == "POST" and "/v1/chat/completions" in self.path and _SP and body:
             try:
@@ -76,4 +94,4 @@ if __name__ == "__main__":
     print(f"system prompt: {'loaded' if _SP else 'none'}", flush=True)
     print(f"proxy :{listen} -> :{_UP}", flush=True)
 
-    HTTPServer(("0.0.0.0", listen), Handler).serve_forever()
+    ThreadingHTTPServer(("0.0.0.0", listen), Handler).serve_forever()

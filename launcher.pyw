@@ -83,7 +83,6 @@ import sys
 import json
 import webbrowser
 import re
-import shlex
 import threading
 import urllib.request
 import time
@@ -677,9 +676,8 @@ class CommandLauncherGUI:
             relief="flat", wrap="word", padx=8, pady=6,
             highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT,
         )
-        _cfg = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
         self.uvx_text.insert("1.0",
-            f'uvx mcp-proxy --named-server-config "{_cfg}" --allow-origin "*" --port 8001 --stateless'
+            f'uvx mcp-proxy --named-server-config "{CONFIG_FILE}" --allow-origin "*" --port 8001 --stateless'
         )
 
         # ── Row 5: Launch button
@@ -966,7 +964,8 @@ class CommandLauncherGUI:
         if not messagebox.askyesno("Confirm Delete", f'Delete preset "{name}"?'):
             return
         del self.presets[name]
-        save_presets(self.presets)
+        self.config["presets"] = self.presets
+        save_config(self.config)
         self._refresh_preset_menu()
 
 
@@ -1196,7 +1195,7 @@ class CommandLauncherGUI:
             self._start_health_poll()
             self._start_elapsed()
 
-            webbrowser.open("http://127.0.0.1:8080/")
+            self.master.after(1000, lambda: webbrowser.open("http://127.0.0.1:8080/"))
 
         except Exception as e:
             self._append_log(self.llama_log, f"LAUNCH FAILED: {e}")
