@@ -436,17 +436,18 @@ class DropdownButton(tk.Frame):
 # ============================================================
 
 class PresetDialog(tk.Toplevel):
-    def __init__(self, parent, title, name="", command="", model_keywords=None):
+    def __init__(self, parent, title, name="", command="", model_keywords=None, available_models=None):
         super().__init__(parent)
         self.title(title)
         self.configure(bg=BG)
         self.resizable(True, True)
-        self.geometry("720x500")
+        self.geometry("720x540")
         self.grab_set()
 
         self.result_name    = None
         self.result_command = None
         self.result_models  = None
+        self._available_models = available_models or []
 
         section_label(self, "PRESET NAME").pack(fill="x", padx=20, pady=(16, 2))
         self.name_var = tk.StringVar(value=name)
@@ -457,15 +458,39 @@ class PresetDialog(tk.Toplevel):
                  highlightcolor=ACCENT).pack(fill="x", padx=20, ipady=6)
 
         section_label(self, "APPLIES TO MODELS").pack(fill="x", padx=20, pady=(14, 2))
-        kw_str = ", ".join(model_keywords) if model_keywords else ""
-        self.models_var = tk.StringVar(value=kw_str)
-        tk.Entry(self, textvariable=self.models_var,
-                 font=FONT_MONO, bg=BG_INPUT, fg=TEXT_PRI,
-                 insertbackground=TEXT_PRI, relief="flat",
-                 highlightthickness=1, highlightbackground=BORDER,
-                 highlightcolor=ACCENT).pack(fill="x", padx=20, ipady=6)
-        tk.Label(self, text='Comma-separated keywords, e.g. "gemma"  --  blank = all models',
-                 font=FONT_SMALL, fg=TEXT_MUT, bg=BG).pack(padx=20, anchor="w")
+        tk.Label(self, text="Select models this preset applies to — leave none selected to match all",
+                 font=FONT_SMALL, fg=TEXT_MUT, bg=BG).pack(padx=20, anchor="w", pady=(0, 4))
+
+        list_frame = tk.Frame(self, bg=BORDER)
+        list_frame.pack(fill="x", padx=20)
+        scrollbar = tk.Scrollbar(list_frame, orient="vertical", bg=BG_PANEL,
+                                 troughcolor=BG_INPUT, relief="flat")
+        self.models_listbox = tk.Listbox(
+            list_frame, selectmode=tk.MULTIPLE,
+            bg=BG_INPUT, fg=TEXT_PRI,
+            selectbackground=ACCENT, selectforeground=BG,
+            font=FONT_MONO, relief="flat", bd=0,
+            highlightthickness=0,
+            activestyle="none",
+            yscrollcommand=scrollbar.set,
+            height=min(max(len(self._available_models), 1), 5),
+        )
+        scrollbar.config(command=self.models_listbox.yview)
+        self.models_listbox.pack(side="left", fill="x", expand=True)
+        if self._available_models:
+            scrollbar.pack(side="right", fill="y")
+
+        for i, model in enumerate(self._available_models):
+            self.models_listbox.insert(tk.END, model)
+            # Pre-select models that match any existing keyword (migration aid)
+            if model_keywords:
+                lower = model.lower()
+                if any(kw.lower() in lower for kw in model_keywords):
+                    self.models_listbox.selection_set(i)
+
+        if not self._available_models:
+            self.models_listbox.insert(tk.END, "(no models found — will match all)")
+            self.models_listbox.config(fg=TEXT_MUT)
 
         section_label(self, "COMMAND TEMPLATE  --  use {model} as the model path placeholder").pack(
             fill="x", padx=20, pady=(14, 2)
@@ -493,10 +518,10 @@ class PresetDialog(tk.Toplevel):
         if not cmd:
             messagebox.showerror("Error", "Command template cannot be empty.", parent=self)
             return
-            
-        raw_kw = self.models_var.get().strip()
-        self.result_models = [k.strip() for k in raw_kw.split(",") if k.strip()] if raw_kw else []
-            
+
+        selected = self.models_listbox.curselection()
+        self.result_models = [self._available_models[i] for i in selected] if self._available_models else []
+
         self.result_name    = name
         self.result_command = cmd
         self.destroy()
@@ -1002,7 +1027,8 @@ class CommandLauncherGUI:
     # ── Preset CRUD ───────────────────────────────────────────
 
     def _add_preset(self):
-        dlg = PresetDialog(self.master, "Add Preset")
+        models = [m[:-5] if m.lower().endswith(".gguf") else m for m in detect_models(self.llama_dir)]
+        dlg = PresetDialog(self.master, "Add Preset", available_models=models)
         self.master.wait_window(dlg)
         if dlg.result_name:
             if dlg.result_name in self.presets:
@@ -1023,10 +1049,12 @@ class CommandLauncherGUI:
         if not name or name not in self.presets:
             messagebox.showwarning("No Preset", "Please select a preset to edit.")
             return
-        data = self.presets[name]
-        dlg  = PresetDialog(self.master, "Edit Preset", name=name,
-                            command=data["command"],
-                            model_keywords=data.get("models", []))
+        data   = self.presets[name]
+        models = [m[:-5] if m.lower().endswith(".gguf") else m for m in detect_models(self.llama_dir)]
+        dlg    = PresetDialog(self.master, "Edit Preset", name=name,
+                              command=data["command"],
+                              model_keywords=data.get("models", []),
+                              available_models=models)
         self.master.wait_window(dlg)
         if dlg.result_name:
             if dlg.result_name != name and dlg.result_name in self.presets:
