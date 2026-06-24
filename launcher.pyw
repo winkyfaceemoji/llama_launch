@@ -340,6 +340,9 @@ class _MenuProxy:
     # Stores the dropdown options in memory, mimicking the tk.Menu API.
     def __init__(self):
         self._items = []
+        self.model_dropdown_label = tk.Label(self.frame, text="Models:")
+        self.model_dropdown_label.pack(side="top")
+        self._populate_model_dropdown()
 
     def delete(self, first, last):
         self._items.clear()
@@ -1058,6 +1061,7 @@ class CommandLauncherGUI:
     def _start_health_poll(self):
         self._polling = True
         def poll_loop():
+            browser_opened = False
             while self._polling:
                 try:
                     with urllib.request.urlopen(
@@ -1068,6 +1072,9 @@ class CommandLauncherGUI:
                     if status == "ok":
                         color = SUCCESS
                         text  = "● online"
+                        if not browser_opened:
+                            browser_opened = True
+                            self.master.after(0, lambda: webbrowser.open("http://127.0.0.1:8080/"))
                     else:
                         color = "#f7c948"
                         text  = f"● {status}"
@@ -1281,7 +1288,6 @@ class CommandLauncherGUI:
             self._start_health_poll()
             self._start_elapsed()
 
-            self.master.after(1000, lambda: webbrowser.open("http://127.0.0.1:8080/"))
 
         except Exception as e:
             self._append_log(self.llama_log, f"LAUNCH FAILED: {e}")
