@@ -42,7 +42,7 @@ pythonw launcher.pyw
 
 On the first launch, a setup screen asks you to locate your **models folder** — the directory where your `.gguf` files live. This path is saved to `config.json`. Make sure `llama-server` is on your system `PATH` so the launcher can find it regardless of working directory.
 
-You can change this path at any time via the **⚙ Settings** button in the top-right corner of the main screen.
+Click **⚙ Settings** in the top-right corner at any time to update the models folder path, toggle the Web UI option, or edit the UVX proxy command.
 
 ---
 
@@ -72,25 +72,36 @@ GGUF Models/
 ## Using the launcher
 
 ### Selecting a model
-The **MODEL** dropdown lists all `.gguf` files found directly in your models folder (`llama_dir`). Use the **Refresh** button if you've added files since opening the launcher.
+The **MODEL** dropdown lists all `.gguf` files found in your models folder. Use the **Refresh** button if you've added files since opening the launcher.
 
 ### Selecting a preset
-The **PRESET** dropdown shows launch presets filtered to match your chosen model. Selecting a preset builds the full `llama-server` command automatically.
-
-### UVX Proxy command
-Click **▶ UVX Proxy Command** to expand and edit the proxy command if needed.
+The **PRESET** dropdown shows presets associated with your chosen model. Selecting one builds the full `llama-server` command automatically.
 
 ### Launching
 Click **Launch Server**. The window switches to the running view, which shows:
 
-- **Three log panes** — live output from `llama-server` (top), the UVX proxy (middle), and the system prompt proxy (bottom). Drag the dividers to resize. Headers show the process PID.
+- **Three log panes** — live output from `llama-server` (top), the UVX proxy (middle), and the system prompt proxy (bottom). Drag the dividers to resize. The top pane header shows the active model name and PID.
 - **Status bar** — shows server health (`● online` / `● offline`), uptime counter, and an **Auto-scroll** toggle.
 
 ### Stopping
-Click **Exit Processes** to kill all three servers and return to the config screen.
+Click **Exit Processes** to kill all three servers and return to the launcher screen.
 
 ### System tray
 Closing the window while servers are running minimizes to the system tray. Right-click the tray icon to **Show** the window or **Exit**.
+
+---
+
+## Settings
+
+Click **⚙ Settings** to open the settings dialog, which has two sections:
+
+### Llama.cpp folder
+The directory scanned for `.gguf` model files and used as the working directory when launching `llama-server`. Use **Browse** to pick a folder.
+
+### Launch options
+
+- **Web UI** — set to **Yes** to automatically open `http://127.0.0.1:8080/` in the browser once the server comes online. Set to **No** to skip this (useful when connecting via API only).
+- **UVX Settings** — click **▶ Show command** to expand and edit the `uvx mcp-proxy` command. Changes are saved when you click **Save**.
 
 ---
 
@@ -100,7 +111,7 @@ Presets are stored in `config.json` under the `"presets"` key. Each preset has:
 
 - **Name** — displayed in the dropdown
 - **Command template** — the full `llama-server` command, using `{model}` as a placeholder for the model file path
-- **Model keywords** — filters which models the preset appears for (e.g. `gemma`, `qwen`). Leave blank to show for all models.
+- **Models** — the specific `.gguf` files this preset applies to, selected from a listbox of files in your models folder. A preset only appears in the dropdown when the selected model is one of its associated files.
 
 Use the **+ Add**, **Edit**, and **Delete** buttons next to the preset dropdown to manage presets.
 
@@ -124,6 +135,7 @@ All settings live in a single `config.json` next to the launcher:
 | `presets` | Saved launch presets |
 | `system_prompt` | System prompt injected into every chat request |
 | `mcpServers` | MCP tool definitions used by the UVX proxy |
+| `uvx_command` | The `uvx mcp-proxy` command run at launch (editable in Settings) |
 | `last_model` / `last_preset` | Remembered selections between sessions |
 
 ---
