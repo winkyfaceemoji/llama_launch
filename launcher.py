@@ -1,0 +1,985 @@
+# ============================================================
+# launcher.py  —  Llama Server Launcher
+# ============================================================
+#
+# WHAT THIS DOES
+# --------------
+# This is a desktop GUI that lets you launch two servers with one click:
+#
+#   1. llama-server  — runs a local AI model (a .gguf file) and exposes it
+#                      as an API on port 8080. The model and launch options
+#                      are controlled by the "preset" you select.
+#
+#   2. UVX MCP Proxy — a middleware server on port 8001 that bridges the
+#                      AI model's API to tools that speak the MCP protocol
+#                      (e.g. Claude Desktop, Cursor).
+#
+# HOW IT'S STRUCTURED
+# --------------------
+# The file is divided into four layers:
+#
+#   1. CONFIGURATION  (top of file)
+#      Colors, fonts, window sizes, file paths, and the default presets
+#      that ship with the launcher. These are the only values you'd need
+#      to change to restyle the app or add new default presets.
+#
+#   2. HELPER FUNCTIONS  (load_presets, detect_models, etc.)
+#      Small standalone utilities that handle file I/O, model detection,
+#      and building the shared visual components (buttons, cards, labels).
+#      They don't depend on each other and have no side effects.
+#
+#   3. UI COMPONENT CLASSES  (_MenuProxy, DropdownButton, PresetDialog)
+#      Self-contained widgets used by the main window:
+#        - DropdownButton  : a fully-themed dropdown (the model/preset selectors)
+#        - PresetDialog    : the pop-up form for adding or editing a preset
+#        - _MenuProxy      : an internal helper that lets DropdownButton behave
+#                            like a standard menu without using the OS menu widget
+#
+#   4. MAIN APPLICATION CLASS  (CommandLauncherGUI)
+#      Builds the window, wires up all the widgets, and owns the two-state
+#      UI flow:
+#        - Setup state    : first-run screen to configure the llama.cpp folder
+#        - Config state   : model picker, preset picker, UVX command, Launch button
+#        - Running state  : status log + Exit Processes button
+#      It also owns the launched processes and handles starting/killing them.
+#
+# TWO-STATE WINDOW FLOW
+# ---------------------
+# The window has two distinct views that swap on Launch / Exit:
+#
+#   [ Setup view ]   →  shown on first run, asks for the llama.cpp folder path.
+#                        Required before the home screen is accessible.
+#                        Can be reopened at any time via the Settings button.
+#
+#   [ Config view ]  →  user picks model + preset, optionally edits UVX command,
+#                        then clicks "Launch Server"
+#
+#   [ Running view ] →  config widgets are hidden, the status log appears showing
+#                        which processes launched and their PIDs. "Exit Processes"
+#                        kills both servers and returns to config view.
+#
+# PRESET SYSTEM
+# -------------
+# Presets are stored in presets.json next to this file. Each preset has:
+#   - A name
+#   - A command template  (uses {model} as a placeholder for the model path)
+#   - A list of model keywords  (e.g. ["gemma"] — only shown when the selected
+#     model filename contains that word)
+#
+# When the user picks a model, the preset dropdown automatically filters to
+# only show presets that are tagged for that model family. Selecting a preset
+# instantly builds the final launch command by substituting {model} with the
+# actual file path.
+#
+# ============================================================
+
+
+# ── Standard library imports
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
+import subprocess
+import os
+import json
+import webbrowser
+import re
+
+
+# ============================================================
+# SECTION 1 — VISUAL CONFIGURATION
+# All colors, fonts, and window dimensions live here so they're
+# easy to find and change without touching any logic.
+# ============================================================
+
+# Tokyo Night color palette — a dark blue-grey theme
+BG        = "#1a1b26"
+BG_PANEL  = "#24283b"
+BG_INPUT  = "#1f2335"
+ACCENT    = "#7aa2f7"
+SUCCESS   = "#9ece6a"
+DANGER    = "#f7768e"
+TEXT_PRI  = "#c0caf5"
+TEXT_SEC  = "#a9b1d6"
+TEXT_MUT  = "#565f89"
+BORDER    = "#292e42"
+
+# Fonts
+FONT_TITLE  = ("Segoe UI", 13, "bold")
+FONT_LABEL  = ("Segoe UI", 9, "bold")
+FONT_SMALL  = ("Segoe UI", 9)
+FONT_BTN    = ("Segoe UI", 10, "bold")
+FONT_BTN_SM = ("Segoe UI", 9)
+FONT_MONO   = ("Cascadia Code", 10)
+FONT_LOG    = ("Cascadia Code", 10)
+
+# Window dimensions — fixed size, no manual resizing
+W           = 720
+H_SETUP     = 280    # height of the first-run setup screen
+H_CONFIG    = 370    # height of the main config view
+H_UVX_OPEN  = 115    # extra height when the UVX textarea is expanded
+H_RUNNING   = 390    # height of the running/log view
+
+
+# ============================================================
+# SECTION 2 — FILE PATHS & DEFAULT PRESETS
+# All paths are resolved relative to this script's location.
+# ============================================================
+
+PRESETS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "presets.json")
+MODELS_DIR   = "Models"  # resolved at runtime relative to llama_dir
+CONFIG_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+
+DEFAULT_PRESETS = {
+    "Default Gemma (Q8_0, ctx 131072)": {
+        "command": r'llama-server -m "{model}" -c 131072 --jinja --webui-mcp-proxy --keep -1 --context-shift --swa-full --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 -ngl 999 --tools all',
+        "models": ["gemma"],
+    },
+    "Default Qwen (Q8_0, ctx 32768)": {
+        "command": r'llama-server -m "{model}" -c 32768 --jinja --webui-mcp-proxy --keep -1 --context-shift --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 -ngl 999 --tools all',
+        "models": ["qwen"],
+    },
+}
+
+
+# ============================================================
+# SECTION 3 — CONFIG, PRESET & MODEL FILE HELPERS
+# ============================================================
+
+def load_config():
+    # Load config.json if it exists, otherwise return an empty dict.
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+
+def save_config(config):
+    # Write the config dict to config.json.
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=2)
+
+
+def load_presets():
+    # Load presets.json, migrating any old flat-string entries to the new dict format.
+    if os.path.exists(PRESETS_FILE):
+        with open(PRESETS_FILE, "r") as f:
+            raw = json.load(f)
+        migrated = {}
+        for name, value in raw.items():
+            migrated[name] = {"command": value, "models": []} if isinstance(value, str) else value
+        return migrated
+    return {k: dict(v) for k, v in DEFAULT_PRESETS.items()}
+
+
+def save_presets(presets):
+    with open(PRESETS_FILE, "w") as f:
+        json.dump(presets, f, indent=2)
+
+
+def detect_models(llama_dir=""):
+    # Scan the Models/ subfolder inside llama_dir for .gguf files.
+    models_dir = os.path.join(llama_dir, "Models") if llama_dir else MODELS_DIR
+    if not os.path.isdir(models_dir):
+        return []
+    return sorted(f for f in os.listdir(models_dir) if f.lower().endswith(".gguf"))
+
+
+def preset_matches_model(preset, model_filename):
+    # A preset matches if any of its keywords appear in the model filename.
+    # A preset with no keywords matches all models.
+    keywords = preset.get("models", [])
+    if not keywords:
+        return True
+    lower = model_filename.lower()
+    return any(kw.lower() in lower for kw in keywords)
+
+
+# ============================================================
+# SECTION 4 — THEME & SHARED UI HELPERS
+# ============================================================
+
+def apply_ttk_style():
+    # Style the ttk scrollbar to match the dark theme.
+    style = ttk.Style()
+    style.theme_use("clam")
+    style.configure("Vertical.TScrollbar",
+        background=BG_PANEL, troughcolor=BG_INPUT,
+        arrowcolor=TEXT_MUT, bordercolor=BORDER,
+        darkcolor=BG_PANEL, lightcolor=BG_PANEL,
+    )
+    style.map("Vertical.TScrollbar", background=[("active", BORDER)])
+
+
+def flat_btn(parent, text, command, color=ACCENT, fg=BG, **kw):
+    # Full-size flat button for primary actions.
+    return tk.Button(
+        parent, text=text, command=command,
+        bg=color, fg=fg, activebackground=color, activeforeground=fg,
+        font=FONT_BTN, relief="flat", bd=0,
+        padx=14, pady=7, cursor="hand2", **kw
+    )
+
+
+def small_btn(parent, text, command, color=BG_PANEL, fg=TEXT_SEC, **kw):
+    # Compact flat button for secondary actions.
+    return tk.Button(
+        parent, text=text, command=command,
+        bg=color, fg=fg, activebackground=BORDER, activeforeground=TEXT_PRI,
+        font=FONT_BTN_SM, relief="flat", bd=0,
+        padx=10, pady=5, cursor="hand2", **kw
+    )
+
+
+def section_label(parent, text):
+    # A label with a coloured left accent bar — used as a section heading.
+    frame = tk.Frame(parent, bg=BG)
+    tk.Frame(frame, bg=ACCENT, width=3).pack(side="left", fill="y")
+    tk.Label(frame, text=text, font=FONT_LABEL,
+             fg=TEXT_MUT, bg=BG).pack(side="left", padx=(8, 0), pady=4)
+    return frame
+
+
+def card(parent, **kw):
+    # A 1px bordered panel. Returns the outer border frame and inner content frame.
+    outer = tk.Frame(parent, bg=BORDER, padx=1, pady=1)
+    inner = tk.Frame(outer, bg=BG_PANEL, **kw)
+    inner.pack(fill="both", expand=True)
+    return outer, inner
+
+
+# ============================================================
+# SECTION 5 — DROPDOWN WIDGET
+# A fully-themed dropdown that avoids Windows native rendering.
+# See the header comment for a full explanation of why this
+# exists instead of using ttk.Combobox.
+# ============================================================
+
+class _MenuProxy:
+    # Stores the dropdown options in memory, mimicking the tk.Menu API.
+    def __init__(self):
+        self._items = []
+
+    def delete(self, first, last):
+        self._items.clear()
+
+    def add_command(self, label="", command=None):
+        self._items.append((label, command or (lambda: None)))
+
+
+class DropdownButton(tk.Frame):
+    # A custom dropdown: a Button + arrow Label that opens a borderless popup window.
+    def __init__(self, parent, var):
+        super().__init__(parent, bg=BG, padx=1, pady=1)
+        self._var   = var
+        self._popup = None
+        self.menu   = _MenuProxy()
+
+        self._arrow = tk.Label(self, text="▾", bg=BG_INPUT, fg=TEXT_MUT,
+                               font=FONT_SMALL, padx=6)
+        self._arrow.pack(side="right", fill="y")
+
+        self._btn = tk.Button(
+            self, textvariable=var,
+            bg=BG_INPUT, fg=TEXT_PRI,
+            activebackground=BG_PANEL, activeforeground=TEXT_PRI,
+            font=FONT_SMALL, relief="flat", bd=0,
+            highlightthickness=0, anchor="w", padx=8,
+            cursor="hand2", command=self._toggle_popup,
+        )
+        self._btn.pack(side="left", fill="both", expand=True)
+        self._arrow.bind("<Button-1>", lambda e: self._toggle_popup())
+
+    def _toggle_popup(self):
+        if self._popup and self._popup.winfo_exists():
+            self._popup.destroy()
+            self._popup = None
+            return
+        self._show_popup()
+
+    def _show_popup(self):
+        self.update_idletasks()
+        x = self.winfo_rootx()
+        y = self.winfo_rooty() + self.winfo_height()
+        w = self.winfo_width()
+
+        # overrideredirect strips all OS window chrome so we control the border fully
+        popup = tk.Toplevel(self)
+        popup.overrideredirect(True)
+        popup.configure(bg=BG)
+
+        inner = tk.Frame(popup, bg=BG_INPUT)
+        inner.pack(fill="both", expand=True, padx=1, pady=1)
+
+        for label, cmd in self.menu._items:
+            def on_select(c=cmd, p=popup):
+                c()
+                p.destroy()
+                self._popup = None
+
+            tk.Button(
+                inner, text=label, anchor="w",
+                bg=BG_INPUT, fg=TEXT_PRI,
+                activebackground=ACCENT, activeforeground=BG,
+                font=FONT_SMALL, relief="flat", bd=0,
+                highlightthickness=0, padx=8, pady=4,
+                cursor="hand2", command=on_select,
+            ).pack(fill="x")
+
+        popup.update_idletasks()
+        h = inner.winfo_reqheight() + 2
+        popup.geometry(f"{w}x{h}+{x}+{y}")
+
+        # 50ms delay lets the click handler fire before the popup is destroyed on focus loss
+        def on_focus_out(event):
+            def check():
+                if not popup.winfo_exists():
+                    return
+                focused = popup.focus_get()
+                if focused is None or not str(focused).startswith(str(popup)):
+                    popup.destroy()
+                    self._popup = None
+            popup.after(50, check)
+
+        popup.bind("<FocusOut>", on_focus_out)
+        popup.focus_set()
+        self._popup = popup
+
+
+# ============================================================
+# SECTION 6 — PRESET EDITOR DIALOG
+# A modal form for adding or editing a preset.
+# ============================================================
+
+class PresetDialog(tk.Toplevel):
+    def __init__(self, parent, title, name="", command="", model_keywords=None):
+        super().__init__(parent)
+        self.title(title)
+        self.configure(bg=BG)
+        self.resizable(True, True)
+        self.geometry("720x500")
+        self.grab_set()
+
+        self.result_name    = None
+        self.result_command = None
+        self.result_models  = None
+
+        section_label(self, "PRESET NAME").pack(fill="x", padx=20, pady=(16, 2))
+        self.name_var = tk.StringVar(value=name)
+        tk.Entry(self, textvariable=self.name_var,
+                 font=FONT_MONO, bg=BG_INPUT, fg=TEXT_PRI,
+                 insertbackground=TEXT_PRI, relief="flat",
+                 highlightthickness=1, highlightbackground=BORDER,
+                 highlightcolor=ACCENT).pack(fill="x", padx=20, ipady=6)
+
+        section_label(self, "APPLIES TO MODELS").pack(fill="x", padx=20, pady=(14, 2))
+        kw_str = ", ".join(model_keywords) if model_keywords else ""
+        self.models_var = tk.StringVar(value=kw_str)
+        tk.Entry(self, textvariable=self.models_var,
+                 font=FONT_MONO, bg=BG_INPUT, fg=TEXT_PRI,
+                 insertbackground=TEXT_PRI, relief="flat",
+                 highlightthickness=1, highlightbackground=BORDER,
+                 highlightcolor=ACCENT).pack(fill="x", padx=20, ipady=6)
+        tk.Label(self, text='Comma-separated keywords, e.g. "gemma"  --  blank = all models',
+                 font=FONT_SMALL, fg=TEXT_MUT, bg=BG).pack(padx=20, anchor="w")
+
+        section_label(self, "COMMAND TEMPLATE  --  use {model} as the model path placeholder").pack(
+            fill="x", padx=20, pady=(14, 2)
+        )
+        self.cmd_text = tk.Text(
+            self, height=6, font=FONT_MONO,
+            bg=BG_INPUT, fg=TEXT_PRI, insertbackground=TEXT_PRI,
+            relief="flat", wrap="word",
+            highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT,
+        )
+        self.cmd_text.pack(padx=20, fill="both", expand=True)
+        self.cmd_text.insert("1.0", command)
+
+        btn_row = tk.Frame(self, bg=BG)
+        btn_row.pack(padx=20, pady=14, fill="x")
+        flat_btn(btn_row, "Save", self._save, color=ACCENT, fg=BG).pack(side="left", padx=(0, 8))
+        small_btn(btn_row, "Cancel", self.destroy).pack(side="left")
+
+    def _save(self):
+        name = self.name_var.get().strip()
+        cmd  = self.cmd_text.get("1.0", "end").strip()
+        if not name:
+            messagebox.showerror("Error", "Preset name cannot be empty.", parent=self)
+            return
+        if not cmd:
+            messagebox.showerror("Error", "Command template cannot be empty.", parent=self)
+            return
+        raw_kw = self.models_var.get().strip()
+        self.result_name    = name
+        self.result_command = cmd
+        self.result_models  = [k.strip() for k in raw_kw.split(",") if k.strip()] if raw_kw else []
+        self.destroy()
+
+
+# ============================================================
+# SECTION 7 — SETTINGS DIALOG
+# A small modal that lets the user change the llama.cpp folder
+# path after initial setup. Accessible via the Settings button
+# in the header of the home screen.
+# ============================================================
+
+class SettingsDialog(tk.Toplevel):
+    def __init__(self, parent, current_path, on_save):
+        super().__init__(parent)
+        self.title("Settings")
+        self.configure(bg=BG)
+        self.resizable(False, False)
+        self.geometry("600x200")
+        self.grab_set()
+
+        # on_save is a callback the dialog calls with the new path when the user saves
+        self._on_save = on_save
+
+        section_label(self, "LLAMA.CPP FOLDER").pack(fill="x", padx=20, pady=(20, 6))
+        tk.Label(self, text="The working directory used when launching llama-server.",
+                 font=FONT_SMALL, fg=TEXT_MUT, bg=BG).pack(padx=20, anchor="w", pady=(0, 10))
+
+        path_row = tk.Frame(self, bg=BG)
+        path_row.pack(fill="x", padx=20)
+        path_row.columnconfigure(0, weight=1)
+
+        self._path_var = tk.StringVar(value=current_path)
+        tk.Entry(path_row, textvariable=self._path_var,
+                 font=FONT_MONO, bg=BG_INPUT, fg=TEXT_PRI,
+                 insertbackground=TEXT_PRI, relief="flat",
+                 highlightthickness=1, highlightbackground=BORDER,
+                 highlightcolor=ACCENT).grid(row=0, column=0, sticky="ew", ipady=6)
+        small_btn(path_row, "Browse", self._browse).grid(row=0, column=1, padx=(8, 0))
+
+        btn_row = tk.Frame(self, bg=BG)
+        btn_row.pack(padx=20, pady=20, fill="x")
+        flat_btn(btn_row, "Save", self._save, color=ACCENT, fg=BG).pack(side="left", padx=(0, 8))
+        small_btn(btn_row, "Cancel", self.destroy).pack(side="left")
+
+    def _browse(self):
+        path = filedialog.askdirectory(title="Select llama.cpp folder")
+        if path:
+            self._path_var.set(path)
+
+    def _save(self):
+        path = self._path_var.get().strip()
+        if not path:
+            messagebox.showerror("Required", "Please enter a path.", parent=self)
+            return
+        if not os.path.isdir(path):
+            messagebox.showerror("Invalid Path",
+                "That folder doesn't exist. Please choose a valid directory.", parent=self)
+            return
+        self._on_save(path)
+        self.destroy()
+
+
+# ============================================================
+# SECTION 8 — MAIN APPLICATION WINDOW
+# CommandLauncherGUI manages the full window lifecycle:
+#
+#   _build_setup_screen()  — first-run path configuration
+#   _confirm_setup()       — validates path, saves config, transitions to home
+#   _build_home_screen()   — the main launcher UI
+#
+# On startup, the app checks config.json. If no llama.cpp path
+# is saved, the setup screen is shown. Otherwise the home screen
+# loads directly.
+# ============================================================
+
+class CommandLauncherGUI:
+    def __init__(self, master):
+        self.master = master
+        master.title("Llama Launcher")
+        master.configure(bg=BG)
+        master.resizable(False, False)
+
+        apply_ttk_style()
+
+        # Load persisted config — contains the llama.cpp folder path
+        self.config    = load_config()
+        self.llama_dir = self.config.get("llama_dir", "")
+
+        # Route to setup or home based on whether a path is already configured
+        if not self.llama_dir:
+            self._build_setup_screen()
+        else:
+            self._build_home_screen()
+
+
+    # ── Setup screen ─────────────────────────────────────────
+    # Shown on first launch. Requires the user to provide the
+    # llama.cpp folder path before proceeding to the home screen.
+
+    def _build_setup_screen(self):
+        self.master.geometry(f"{W}x{H_SETUP}")
+        self.master.grid_columnconfigure(0, weight=1)
+        self.master.grid_rowconfigure(1, weight=1)
+
+        # Header bar
+        hdr = tk.Frame(self.master, bg="#13141f", height=54)
+        hdr.grid(row=0, column=0, sticky="ew")
+        hdr.grid_propagate(False)
+        tk.Label(hdr, text="Llama Launcher", font=FONT_TITLE,
+                 fg=TEXT_PRI, bg="#13141f").pack(side="left", padx=24, pady=14)
+
+        # Body — holds all setup content in a single frame for easy cleanup
+        self._setup_frame = tk.Frame(self.master, bg=BG)
+        self._setup_frame.grid(row=1, column=0, sticky="nsew", padx=32, pady=20)
+        self._setup_frame.columnconfigure(0, weight=1)
+
+        tk.Label(self._setup_frame,
+                 text="Where is your llama.cpp folder?",
+                 font=FONT_BTN, fg=TEXT_PRI, bg=BG).grid(
+            row=0, column=0, sticky="w", pady=(0, 4))
+
+        tk.Label(self._setup_frame,
+                 text="This folder is used as the working directory when launching servers.",
+                 font=FONT_SMALL, fg=TEXT_MUT, bg=BG).grid(
+            row=1, column=0, sticky="w", pady=(0, 14))
+
+        # Path entry row — text field + browse button side by side
+        path_row = tk.Frame(self._setup_frame, bg=BG)
+        path_row.grid(row=2, column=0, sticky="ew")
+        path_row.columnconfigure(0, weight=1)
+
+        self._setup_path_var = tk.StringVar()
+        tk.Entry(path_row, textvariable=self._setup_path_var,
+                 font=FONT_MONO, bg=BG_INPUT, fg=TEXT_PRI,
+                 insertbackground=TEXT_PRI, relief="flat",
+                 highlightthickness=1, highlightbackground=BORDER,
+                 highlightcolor=ACCENT).grid(row=0, column=0, sticky="ew", ipady=6)
+        small_btn(path_row, "Browse", self._browse_setup).grid(
+            row=0, column=1, padx=(8, 0))
+
+        flat_btn(self._setup_frame, "Confirm", self._confirm_setup,
+                 color=ACCENT, fg=BG).grid(row=3, column=0, sticky="ew", pady=(16, 0))
+
+    def _browse_setup(self):
+        # Open a folder picker and put the chosen path into the setup entry field.
+        path = filedialog.askdirectory(title="Select llama.cpp folder")
+        if path:
+            self._setup_path_var.set(path)
+
+    def _confirm_setup(self):
+        # Validate the entered path, save it to config.json, and transition to home.
+        path = self._setup_path_var.get().strip()
+        if not path:
+            messagebox.showerror("Required",
+                "Please enter the path to your llama.cpp folder.")
+            return
+        if not os.path.isdir(path):
+            messagebox.showerror("Invalid Path",
+                "That folder doesn't exist. Please choose a valid directory.")
+            return
+
+        self.llama_dir = path
+        self.config["llama_dir"] = path
+        save_config(self.config)
+
+        # Clear the setup screen and build the home screen in its place
+        for widget in self.master.winfo_children():
+            widget.destroy()
+        self._build_home_screen()
+
+
+    # ── Home screen ──────────────────────────────────────────
+    # The main launcher UI — model/preset selection, UVX command,
+    # launch button, and running state (log + exit button).
+
+    def _build_home_screen(self):
+        self.master.geometry(f"{W}x{H_CONFIG}")
+        self.master.grid_columnconfigure(0, weight=1)
+        self.master.grid_rowconfigure(7, weight=1)
+
+        # Application state
+        self.presets       = load_presets()
+        self._uvx_expanded = False
+        self.llama_cmd     = ""
+        self._llama_proc   = None
+        self._uvx_proc     = None
+
+        # ── Row 0: Header bar with Settings button on the right
+        hdr = tk.Frame(self.master, bg="#13141f", height=54)
+        hdr.grid(row=0, column=0, sticky="ew")
+        hdr.grid_propagate(False)
+        hdr.columnconfigure(0, weight=1)
+        tk.Label(hdr, text="Llama Launcher", font=FONT_TITLE,
+                 fg=TEXT_PRI, bg="#13141f").pack(side="left", padx=24, pady=14)
+        # Settings button — opens the path dialog so the user can update the llama.cpp folder
+        small_btn(hdr, "⚙ Settings", self._open_settings,
+                  color="#13141f", fg=TEXT_MUT).pack(side="right", padx=16, pady=14)
+
+        # ── Row 1: Model selector
+        self.model_outer, model_card = card(self.master)
+        self.model_outer.grid(row=1, column=0, padx=16, pady=(12, 6), sticky="ew")
+        model_card.grid_columnconfigure(1, weight=1)
+
+        section_label(model_card, "MODEL").grid(row=0, column=0, sticky="w", padx=(12, 6), pady=10)
+        self.model_var  = tk.StringVar()
+        self.model_menu = DropdownButton(model_card, self.model_var)
+        self.model_menu.grid(row=0, column=1, sticky="ew", pady=10)
+        small_btn(model_card, "Refresh", self._refresh_models,
+                  color=BG_PANEL, fg=TEXT_SEC).grid(row=0, column=2, padx=(6, 12), pady=10)
+
+        self._refresh_models(init=True)
+
+        # ── Row 2: Preset selector
+        self.preset_outer, preset_card = card(self.master)
+        self.preset_outer.grid(row=2, column=0, padx=16, pady=(0, 6), sticky="ew")
+        preset_card.grid_columnconfigure(1, weight=1)
+
+        section_label(preset_card, "PRESET").grid(row=0, column=0, sticky="w", padx=(12, 6), pady=10)
+        self.preset_var  = tk.StringVar()
+        self.preset_menu = DropdownButton(preset_card, self.preset_var)
+        self.preset_menu.grid(row=0, column=1, sticky="ew", pady=10)
+
+        preset_btns = tk.Frame(preset_card, bg=BG_PANEL)
+        preset_btns.grid(row=0, column=2, padx=(6, 12), pady=10)
+        small_btn(preset_btns, "+ Add",  self._add_preset).pack(side="left", padx=(0, 6))
+        small_btn(preset_btns, "Edit",   self._edit_preset).pack(side="left", padx=(0, 6))
+        small_btn(preset_btns, "Delete", self._delete_preset,
+                  color=BG_PANEL, fg=DANGER).pack(side="left")
+
+        # ── Row 3: UVX command toggle (collapsed by default)
+        self.uvx_toggle = tk.Button(
+            self.master, text="▶   UVX Proxy Command",
+            font=("Segoe UI", 10), bg=BG_PANEL, fg=TEXT_SEC,
+            activebackground=BORDER, activeforeground=TEXT_PRI,
+            relief="flat", bd=0, anchor="w",
+            padx=20, pady=10, cursor="hand2",
+            command=self._toggle_uvx,
+        )
+        self.uvx_toggle.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 2))
+
+        # ── Row 4: UVX textarea (hidden until toggled)
+        self.uvx_text = tk.Text(
+            self.master, height=4, font=FONT_MONO,
+            bg=BG_INPUT, fg=TEXT_PRI, insertbackground=TEXT_PRI,
+            relief="flat", wrap="word", padx=8, pady=6,
+            highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT,
+        )
+        self.uvx_text.insert("1.0",
+            'uvx mcp-proxy --named-server-config config.json --allow-origin "*" --port 8001 --stateless'
+        )
+
+        # ── Row 5: Launch button
+        self.run_button = tk.Button(
+            self.master, text="Launch Server",
+            command=self.run_commands,
+            bg=SUCCESS, fg=BG,
+            activebackground="#7db84e", activeforeground=BG,
+            font=("Segoe UI", 12, "bold"), relief="flat", bd=0,
+            pady=14, cursor="hand2",
+        )
+        self.run_button.grid(row=5, column=0, sticky="ew", padx=16, pady=(10, 8))
+
+        # ── Rows 6–8: Running state widgets (hidden until Launch is pressed)
+        self.log_header = tk.Frame(self.master, bg=BG)
+        self.log_header.grid_columnconfigure(0, weight=1)
+        section_label(self.log_header, "STATUS LOG").grid(row=0, column=0, sticky="w")
+
+        self.exit_btn = tk.Button(
+            self.master, text="Exit Processes",
+            command=self._exit_running_state,
+            bg=DANGER, fg=BG,
+            activebackground="#c45c6e", activeforeground=BG,
+            font=("Segoe UI", 12, "bold"), relief="flat", bd=0,
+            pady=14, cursor="hand2",
+        )
+
+        self.log_area = tk.Text(
+            self.master, height=8, font=FONT_LOG,
+            bg=BG_INPUT, fg=TEXT_PRI, insertbackground=TEXT_PRI,
+            relief="flat", state=tk.DISABLED,
+            highlightthickness=1, highlightbackground=BORDER, highlightcolor=BORDER,
+        )
+
+        # When the model changes, re-filter the preset list.
+        # When the preset changes, rebuild the launch command.
+        self.model_var.trace_add("write",  lambda *_: self._on_model_changed())
+        self.preset_var.trace_add("write", lambda *_: self._load_preset())
+
+        self._refresh_preset_menu(init=True)
+
+
+    # ── Settings ─────────────────────────────────────────────
+
+    def _open_settings(self):
+        # Open the settings dialog. When the user saves a new path,
+        # update self.llama_dir and persist it to config.json.
+        def on_save(new_path):
+            self.llama_dir = new_path
+            self.config["llama_dir"] = new_path
+            save_config(self.config)
+
+        SettingsDialog(self.master, self.llama_dir, on_save)
+
+
+    # ── Window sizing ─────────────────────────────────────────
+
+    def _resize_config(self):
+        h = H_CONFIG + (H_UVX_OPEN if self._uvx_expanded else 0)
+        self.master.geometry(f"{W}x{h}")
+
+    def _toggle_uvx(self):
+        self._uvx_expanded = not self._uvx_expanded
+        if self._uvx_expanded:
+            self.uvx_text.grid(row=4, column=0, sticky="ew", padx=16, pady=(0, 6))
+            self.uvx_toggle.config(text="▼   UVX Proxy Command")
+        else:
+            self.uvx_text.grid_remove()
+            self.uvx_toggle.config(text="▶   UVX Proxy Command")
+        self._resize_config()
+
+
+    # ── Two-state view switching ──────────────────────────────
+
+    def _enter_running_state(self):
+        # Hide config widgets and show the log + exit button.
+        for w in (self.model_outer, self.preset_outer,
+                  self.uvx_toggle, self.run_button):
+            w.grid_remove()
+        if self._uvx_expanded:
+            self.uvx_text.grid_remove()
+        self.log_header.grid(row=6, column=0, sticky="ew", padx=16, pady=(12, 2))
+        self.log_area.grid(row=7, column=0, sticky="nsew", padx=16, pady=(0, 6))
+        self.exit_btn.grid(row=8, column=0, sticky="ew", padx=16, pady=(0, 14))
+        self.master.geometry(f"{W}x{H_RUNNING}")
+
+    def _exit_running_state(self):
+        # Kill both processes, then restore the config view.
+        self._kill_all()
+        self.log_header.grid_remove()
+        self.log_area.grid_remove()
+        self.exit_btn.grid_remove()
+        for w in (self.model_outer, self.preset_outer,
+                  self.uvx_toggle, self.run_button):
+            w.grid()
+        if self._uvx_expanded:
+            self.uvx_text.grid()
+        self._resize_config()
+
+
+    # ── Model & preset list management ───────────────────────
+
+    def _refresh_models(self, init=False):
+        models = detect_models(self.llama_dir)
+        menu = self.model_menu.menu
+        menu.delete(0, "end")
+        if models:
+            display = [m[:-5] if m.lower().endswith(".gguf") else m for m in models]
+            for d in display:
+                menu.add_command(label=d, command=lambda v=d: self.model_var.set(v))
+            current = self.model_var.get()
+            if init or not current or current not in display:
+                self.model_var.set(display[0])
+        else:
+            menu.add_command(label="(no .gguf models found)",
+                             command=lambda: self.model_var.set("(no .gguf models found)"))
+            self.model_var.set("(no .gguf models found)")
+
+    def _on_model_changed(self):
+        self._refresh_preset_menu()
+
+    def _filtered_presets(self):
+        model = self.model_var.get()
+        if not model or model.startswith("("):
+            return {}
+        return {n: d for n, d in self.presets.items() if preset_matches_model(d, model)}
+
+    def _refresh_preset_menu(self, init=False):
+        filtered = self._filtered_presets()
+        menu = self.preset_menu.menu
+        menu.delete(0, "end")
+        if filtered:
+            for name in filtered:
+                menu.add_command(label=name, command=lambda v=name: self.preset_var.set(v))
+            current = self.preset_var.get()
+            if init or not current or current not in filtered:
+                self.preset_var.set(next(iter(filtered)))
+            else:
+                self._load_preset()
+        else:
+            menu.add_command(label="(no matching presets)",
+                             command=lambda: self.preset_var.set("(no matching presets)"))
+            self.preset_var.set("(no matching presets)")
+            self.llama_cmd = ""
+
+    def _load_preset(self):
+        # Build the launch command by substituting {model} with the actual file path.
+        name  = self.preset_var.get()
+        model = self.model_var.get()
+        if not name or name not in self.presets:
+            return
+        template   = self.presets[name]["command"]
+        models_dir = os.path.join(self.llama_dir, "Models") if self.llama_dir else "Models"
+        model_path = f"{models_dir}/{model}.gguf" if model and not model.startswith("(") else model
+        self.llama_cmd = template.replace("{model}", model_path)
+
+
+    # ── Preset CRUD ───────────────────────────────────────────
+
+    def _add_preset(self):
+        dlg = PresetDialog(self.master, "Add Preset")
+        self.master.wait_window(dlg)
+        if dlg.result_name:
+            if dlg.result_name in self.presets:
+                messagebox.showerror("Duplicate",
+                    f'A preset named "{dlg.result_name}" already exists.')
+                return
+            self.presets[dlg.result_name] = {
+                "command": dlg.result_command, "models": dlg.result_models
+            }
+            save_presets(self.presets)
+            self._refresh_preset_menu()
+            if dlg.result_name in self._filtered_presets():
+                self.preset_var.set(dlg.result_name)
+
+    def _edit_preset(self):
+        name = self.preset_var.get()
+        if not name or name not in self.presets:
+            messagebox.showwarning("No Preset", "Please select a preset to edit.")
+            return
+        data = self.presets[name]
+        dlg  = PresetDialog(self.master, "Edit Preset", name=name,
+                            command=data["command"],
+                            model_keywords=data.get("models", []))
+        self.master.wait_window(dlg)
+        if dlg.result_name:
+            if dlg.result_name != name and dlg.result_name in self.presets:
+                messagebox.showerror("Duplicate",
+                    f'A preset named "{dlg.result_name}" already exists.')
+                return
+            del self.presets[name]
+            self.presets[dlg.result_name] = {
+                "command": dlg.result_command, "models": dlg.result_models
+            }
+            save_presets(self.presets)
+            self._refresh_preset_menu()
+            if dlg.result_name in self._filtered_presets():
+                self.preset_var.set(dlg.result_name)
+
+    def _delete_preset(self):
+        name = self.preset_var.get()
+        if not name or name not in self.presets:
+            messagebox.showwarning("No Preset", "Please select a preset to delete.")
+            return
+        if not messagebox.askyesno("Confirm Delete", f'Delete preset "{name}"?'):
+            return
+        del self.presets[name]
+        save_presets(self.presets)
+        self._refresh_preset_menu()
+
+
+    # ── Process management ────────────────────────────────────
+
+    def _free_port(self, cmd, default_port, label):
+        # Kill any process already listening on the port this command will use.
+        # Prevents "port already in use" errors when relaunching.
+        m = re.search(r'--port\s+(\d+)', cmd)
+        port = int(m.group(1)) if m else default_port
+        try:
+            result = subprocess.run(
+                f'netstat -ano | findstr ":{port} "',
+                shell=True, capture_output=True, text=True,
+            )
+            for line in result.stdout.splitlines():
+                parts = line.split()
+                if "LISTENING" in line and len(parts) >= 5 and parts[-1].isdigit():
+                    pid = parts[-1]
+                    if pid != "0":
+                        subprocess.run(f"taskkill /F /T /PID {pid}",
+                                       shell=True, capture_output=True)
+                        self.log_message(f"  [{label}]  Port {port} was in use — freed PID {pid}")
+        except Exception:
+            pass
+
+    def _kill_proc(self, proc, label):
+        # Kill a process and its full child tree (/T) — ensures GPU workers are also stopped.
+        if proc is None:
+            self.log_message(f"  [{label}]  Nothing to kill.")
+            return
+        try:
+            subprocess.run(f"taskkill /F /T /PID {proc.pid}",
+                           shell=True, capture_output=True)
+            self.log_message(f"  [{label}]  Killed  (PID {proc.pid})")
+        except Exception as e:
+            self.log_message(f"  [{label}]  Kill failed: {e}")
+
+    def _kill_all(self):
+        self._kill_proc(self._llama_proc, "Llama")
+        self._llama_proc = None
+        self._kill_proc(self._uvx_proc, "UVX")
+        self._uvx_proc = None
+
+
+    # ── Status log ────────────────────────────────────────────
+
+    def log_message(self, message):
+        # Append a line to the read-only status log.
+        self.log_area.config(state=tk.NORMAL)
+        self.log_area.insert("end", message + "\n")
+        self.log_area.see("end")
+        self.master.update()
+        self.log_area.config(state=tk.DISABLED)
+
+
+    # ── Launch sequence ───────────────────────────────────────
+
+    def run_commands(self):
+        uvx_cmd = self.uvx_text.get("1.0", "end").strip()
+
+        if not self.llama_cmd:
+            messagebox.showerror("No Command",
+                "No Llama command available. Please select a model and preset.")
+            return
+        if not uvx_cmd:
+            messagebox.showerror("No Command",
+                "UVX command is empty. Open the UVX section above to fill it in.")
+            return
+
+        self.log_area.config(state=tk.NORMAL)
+        self.log_area.delete("1.0", "end")
+        self.log_area.config(state=tk.DISABLED)
+        self._enter_running_state()
+
+        model_name = self.model_var.get()
+
+        # cwd sets the working directory for both processes to the configured
+        # llama.cpp folder, so llama-server resolves correctly relative to that path.
+        cwd = self.llama_dir if self.llama_dir else None
+
+        try:
+            self._free_port(self.llama_cmd, 8080, "Llama")
+            self._llama_proc = subprocess.Popen(
+                f'cmd.exe /k {self.llama_cmd}',
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
+                cwd=cwd,
+            )
+            self.log_message(f"  [llama-server {model_name}]  Launched  (PID {self._llama_proc.pid})")
+
+            self._free_port(uvx_cmd, 8001, "UVX")
+            self._uvx_proc = subprocess.Popen(
+                f'cmd.exe /k {uvx_cmd}',
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
+                cwd=cwd,
+            )
+            self.log_message(f"  [UVX Proxy]  Launched  (PID {self._uvx_proc.pid})")
+
+            self.log_message("-" * 52)
+            self.log_message("  Both servers running.")
+            webbrowser.open("http://127.0.0.1:8080/")
+
+        except Exception as e:
+            self.log_message(f"\n  LAUNCH FAILED:  {e}")
+
+
+# ============================================================
+# ENTRY POINT
+# Creates the root window, hands it to CommandLauncherGUI,
+# and starts the tkinter event loop.
+# ============================================================
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app  = CommandLauncherGUI(root)
+    root.mainloop()
