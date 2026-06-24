@@ -340,9 +340,6 @@ class _MenuProxy:
     # Stores the dropdown options in memory, mimicking the tk.Menu API.
     def __init__(self):
         self._items = []
-        self.model_dropdown_label = tk.Label(self.frame, text="Models:")
-        self.model_dropdown_label.pack(side="top")
-        self._populate_model_dropdown()
 
     def delete(self, first, last):
         self._items.clear()
