@@ -1278,7 +1278,7 @@ class CommandLauncherGUI:
                 text=True,
                 cwd=cwd,
             )
-            self._llama_label_var.set(f"llama-server  ·  PID {self._llama_proc.pid}")
+            self._llama_label_var.set(f"llama-server  ·  {self.model_var.get()}  ·  PID {self._llama_proc.pid}")
             self._append_log(self.llama_log, f"Launched (PID {self._llama_proc.pid})")
             self._stream_output(self._llama_proc, self.llama_log)
 
