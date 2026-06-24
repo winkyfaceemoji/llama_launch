@@ -83,6 +83,26 @@ import json
 import webbrowser
 import re
 import threading
+import urllib.request
+import time
+
+
+# ── System tray bootstrap (pystray + Pillow)
+def _bootstrap():
+    import importlib.util, subprocess, sys
+    for mod, pkg in [("pystray", "pystray"), ("PIL", "Pillow")]:
+        if importlib.util.find_spec(mod) is None:
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "install", pkg],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+try:
+    _bootstrap()
+    import pystray
+    from PIL import Image, ImageDraw
+    _TRAY_AVAILABLE = True
+except Exception:
+    _TRAY_AVAILABLE = False
 
 
 # ============================================================
@@ -245,6 +265,18 @@ def card(parent, **kw):
     inner = tk.Frame(outer, bg=BG_PANEL, **kw)
     inner.pack(fill="both", expand=True)
     return outer, inner
+
+
+# ============================================================
+# SECTION 4b — TRAY IMAGE HELPER
+# ============================================================
+
+def _make_tray_image():
+    # Create a 64x64 RGBA icon: dark background with an accent-colored circle.
+    img = Image.new("RGBA", (64, 64), (26, 27, 38, 255))
+    draw = ImageDraw.Draw(img)
+    draw.ellipse([8, 8, 56, 56], fill=(122, 162, 247, 255))
+    return img
 
 
 # ============================================================
@@ -599,6 +631,8 @@ class CommandLauncherGUI:
         self.llama_cmd     = ""
         self._llama_proc   = None
         self._uvx_proc     = None
+        self._polling      = False
+        self._launch_time  = None
 
         # ── Row 0: Header bar with Settings button on the right
         hdr = tk.Frame(self.master, bg="#13141f", height=54)
@@ -675,7 +709,30 @@ class CommandLauncherGUI:
         )
         self.run_button.grid(row=5, column=0, sticky="ew", padx=16, pady=(10, 8))
 
-        # ── Rows 6–7: Running state (hidden until Launch is pressed)
+        # ── Row 6: Status bar (hidden until running state)
+        self.status_bar = tk.Frame(self.master, bg=BG_PANEL)
+
+        # Left: health dot
+        self._health_label = tk.Label(self.status_bar, text="● waiting",
+            font=FONT_SMALL, fg=TEXT_MUT, bg=BG_PANEL)
+        self._health_label.pack(side="left", padx=(16, 0), pady=8)
+
+        # Middle: uptime label + elapsed counter
+        tk.Label(self.status_bar, text="uptime",
+            font=FONT_SMALL, fg=TEXT_MUT, bg=BG_PANEL).pack(side="left", padx=(20, 6), pady=8)
+        self._elapsed_var = tk.StringVar(value="00:00:00")
+        tk.Label(self.status_bar, textvariable=self._elapsed_var,
+            font=FONT_MONO, fg=TEXT_SEC, bg=BG_PANEL).pack(side="left", pady=8)
+
+        # Right: auto-scroll checkbox
+        self._autoscroll_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(self.status_bar, text="Auto-scroll",
+            variable=self._autoscroll_var,
+            font=FONT_SMALL, fg=TEXT_MUT, bg=BG_PANEL,
+            activebackground=BG_PANEL, activeforeground=TEXT_SEC,
+            selectcolor=BG_INPUT, cursor="hand2").pack(side="right", padx=16, pady=8)
+
+        # ── Rows 7–8: Running state (hidden until Launch is pressed)
         # Two stacked log panes separated by a draggable sash.
 
         self._llama_label_var = tk.StringVar(value="llama-server")
@@ -729,6 +786,9 @@ class CommandLauncherGUI:
 
         self._refresh_preset_menu(init=True)
 
+        # Set up system tray icon if available
+        self._setup_tray()
+
 
     # ── Settings ─────────────────────────────────────────────
 
@@ -763,23 +823,27 @@ class CommandLauncherGUI:
     # ── Two-state view switching ──────────────────────────────
 
     def _enter_running_state(self):
-        # Hide config widgets and show the two log panes + exit button.
+        # Hide config widgets and show the status bar, two log panes + exit button.
         for w in (self.model_outer, self.preset_outer,
                   self.uvx_toggle, self.run_button):
             w.grid_remove()
         if self._uvx_expanded:
             self.uvx_text.grid_remove()
-        self.master.grid_rowconfigure(6, weight=1)
-        self.log_pane.grid(row=6, column=0, sticky="nsew", padx=16, pady=(12, 6))
-        self.exit_btn.grid(row=7, column=0, sticky="ew", padx=16, pady=(0, 14))
+        self.status_bar.grid(row=6, column=0, sticky="ew", padx=16, pady=(10, 0))
+        self.master.grid_rowconfigure(7, weight=1)
+        self.log_pane.grid(row=7, column=0, sticky="nsew", padx=16, pady=(6, 6))
+        self.exit_btn.grid(row=8, column=0, sticky="ew", padx=16, pady=(0, 14))
         self.master.resizable(True, True)
         self.master.geometry(f"{W}x{H_RUNNING}")
 
     def _exit_running_state(self):
         # Kill both processes, then restore the config view.
         self._kill_all()
+        self._stop_health_poll()
+        self._stop_elapsed()
         self.master.resizable(False, False)
-        self.master.grid_rowconfigure(6, weight=0)
+        self.master.grid_rowconfigure(7, weight=0)
+        self.status_bar.grid_remove()
         self.log_pane.grid_remove()
         self.exit_btn.grid_remove()
         # Reset pane labels for the next launch
@@ -805,13 +869,19 @@ class CommandLauncherGUI:
                 menu.add_command(label=d, command=lambda v=d: self.model_var.set(v))
             current = self.model_var.get()
             if init or not current or current not in display:
-                self.model_var.set(display[0])
+                last = self.config.get("last_model")
+                if init and last and last in display:
+                    self.model_var.set(last)
+                else:
+                    self.model_var.set(display[0])
         else:
             menu.add_command(label="(no .gguf models found)",
                              command=lambda: self.model_var.set("(no .gguf models found)"))
             self.model_var.set("(no .gguf models found)")
 
     def _on_model_changed(self):
+        self.config["last_model"] = self.model_var.get()
+        save_config(self.config)
         self._refresh_preset_menu()
 
     def _filtered_presets(self):
@@ -829,7 +899,11 @@ class CommandLauncherGUI:
                 menu.add_command(label=name, command=lambda v=name: self.preset_var.set(v))
             current = self.preset_var.get()
             if init or not current or current not in filtered:
-                self.preset_var.set(next(iter(filtered)))
+                last = self.config.get("last_preset")
+                if init and last and last in filtered:
+                    self.preset_var.set(last)
+                else:
+                    self.preset_var.set(next(iter(filtered)))
             else:
                 self._load_preset()
         else:
@@ -848,6 +922,8 @@ class CommandLauncherGUI:
         models_dir = os.path.join(self.llama_dir, "Models") if self.llama_dir else "Models"
         model_path = f"{models_dir}/{model}.gguf" if model and not model.startswith("(") else model
         self.llama_cmd = template.replace("{model}", model_path)
+        self.config["last_preset"] = name
+        save_config(self.config)
 
 
     # ── Preset CRUD ───────────────────────────────────────────
@@ -904,6 +980,88 @@ class CommandLauncherGUI:
         self._refresh_preset_menu()
 
 
+    # ── Server health polling ─────────────────────────────────
+
+    def _start_health_poll(self):
+        self._polling = True
+        def poll_loop():
+            while self._polling:
+                try:
+                    with urllib.request.urlopen(
+                        "http://127.0.0.1:8080/health", timeout=2
+                    ) as resp:
+                        data = json.loads(resp.read().decode())
+                        status = data.get("status", "unknown")
+                    if status == "ok":
+                        color = SUCCESS
+                        text  = "● online"
+                    else:
+                        color = "#f7c948"
+                        text  = f"● {status}"
+                except Exception:
+                    color = TEXT_MUT
+                    text  = "● offline"
+                self.master.after(0, lambda c=color, t=text: self._health_label.config(fg=c, text=t))
+                time.sleep(3)
+        threading.Thread(target=poll_loop, daemon=True).start()
+
+    def _stop_health_poll(self):
+        self._polling = False
+        self._health_label.config(text="● waiting", fg=TEXT_MUT)
+
+
+    # ── Elapsed time ──────────────────────────────────────────
+
+    def _start_elapsed(self):
+        self._launch_time = time.time()
+        self._tick_elapsed()
+
+    def _tick_elapsed(self):
+        if self._launch_time is None:
+            return
+        elapsed = int(time.time() - self._launch_time)
+        hours, remainder = divmod(elapsed, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        self._elapsed_var.set(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+        self._elapsed_after_id = self.master.after(1000, self._tick_elapsed)
+
+    def _stop_elapsed(self):
+        self._launch_time = None
+        if hasattr(self, "_elapsed_after_id"):
+            self.master.after_cancel(self._elapsed_after_id)
+        self._elapsed_var.set("00:00:00")
+
+
+    # ── System tray ───────────────────────────────────────────
+
+    def _setup_tray(self):
+        if not _TRAY_AVAILABLE:
+            return
+        menu = pystray.Menu(
+            pystray.MenuItem("Show", self._show_from_tray, default=True),
+            pystray.MenuItem("Exit", self._tray_exit),
+        )
+        self._tray_icon = pystray.Icon(
+            "Llama Launcher", _make_tray_image(), "Llama Launcher", menu
+        )
+        threading.Thread(target=self._tray_icon.run, daemon=True).start()
+
+    def _show_from_tray(self, icon=None, item=None):
+        self.master.after(0, self.master.deiconify)
+
+    def _hide_to_tray(self):
+        self.master.withdraw()
+
+    def _tray_exit(self, icon=None, item=None):
+        self._tray_icon.stop()
+        self.master.after(0, self._force_exit)
+
+    def _force_exit(self):
+        if hasattr(self, "_llama_proc"):
+            self._kill_all()
+        self.master.destroy()
+
+
     # ── Process management ────────────────────────────────────
 
     def _free_port(self, cmd, default_port, widget):
@@ -946,10 +1104,13 @@ class CommandLauncherGUI:
         self._uvx_proc = None
 
     def _on_close(self):
-        # Kill any running processes before the window closes.
-        if hasattr(self, "_llama_proc"):
-            self._kill_all()
-        self.master.destroy()
+        # If servers are running and tray is available, minimize to tray instead of closing.
+        if (self._llama_proc is not None or self._uvx_proc is not None) and _TRAY_AVAILABLE:
+            self._hide_to_tray()
+        else:
+            if hasattr(self, "_llama_proc"):
+                self._kill_all()
+            self.master.destroy()
 
 
     # ── Log helpers ───────────────────────────────────────────
@@ -958,7 +1119,8 @@ class CommandLauncherGUI:
         # Append one line to a log pane. Safe to call from any thread via .after().
         widget.config(state=tk.NORMAL)
         widget.insert("end", text + "\n")
-        widget.see("end")
+        if self._autoscroll_var.get():
+            widget.see("end")
         widget.config(state=tk.DISABLED)
 
     def _stream_output(self, proc, widget):
@@ -1025,6 +1187,9 @@ class CommandLauncherGUI:
             self._uvx_label_var.set(f"UVX Proxy  ·  PID {self._uvx_proc.pid}")
             self._append_log(self.uvx_log, f"Launched (PID {self._uvx_proc.pid})")
             self._stream_output(self._uvx_proc, self.uvx_log)
+
+            self._start_health_poll()
+            self._start_elapsed()
 
             webbrowser.open("http://127.0.0.1:8080/")
 

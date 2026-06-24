@@ -20,5 +20,7 @@
       ]
     }
   },
-  "llama_dir": "C:/Users/choua/Documents/llama.cpp"
+  "llama_dir": "C:/Users/choua/Documents/llama.cpp",
+  "last_preset": "Default Gemma (Q8_0, ctx 131072)",
+  "last_model": "gemma-4-E4B-it-Q8_0"
 }
