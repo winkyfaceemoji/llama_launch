@@ -72,8 +72,6 @@
 # actual file path.
 #
 # ============================================================
-
-
 # ── Standard library imports
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -154,18 +152,57 @@ CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.j
 # SECTION 3 — CONFIG, PRESET & MODEL FILE HELPERS
 # ============================================================
 
+_DEFAULT_CONFIG = {
+    "mcpServers": {
+        "time":       {"command": "uvx", "args": ["mcp-server-time", "--local-timezone=America/Chicago"]},
+        "fetch":      {"command": "uvx", "args": ["mcp-server-fetch"]},
+        "ddg-search": {"command": "uvx", "args": ["duckduckgo-mcp-server"]},
+    },
+    "system_prompt": (
+        "The current date and time is provided at the top of every message. "
+        "Treat it as ground truth — do not estimate or assume the date from training memory.\n\n"
+        "You have real-time web access via three MCP tools: ddg-search, mcp-fetch, and mcp-time.\n\n"
+        "TOOL USAGE RULES:\n"
+        "1. For any question involving facts, current events, people, software versions, prices, "
+        "or anything that may have changed — use ddg-search BEFORE generating a response. "
+        "Do not answer from training memory alone.\n"
+        "2. Your training data is outdated. If search results conflict with your training knowledge, "
+        "always trust the search results. Never override web results with what you think you know.\n"
+        "3. If a search result requires more detail, use mcp-fetch to read the full page content.\n"
+        "4. Use mcp-time only if you need precision timezone-aware time beyond what is already provided.\n"
+        "5. Do not explain your tool usage to the user. Execute tools silently and respond based on what you find."
+    ),
+    "llama_dir": "",
+    "last_preset": "",
+    "last_model": "",
+    "presets": {
+        "Default Qwen (Q8_0, ctx 32768)": {
+            "command": 'llama-server -m "{model}" -c 32768 --jinja --webui-mcp-proxy --keep -1 --context-shift --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 -ngl 999 --tools all --port 8081',
+            "models": ["qwen"],
+        },
+        "Default Gemma (Q8_0, ctx 131072)": {
+            "command": 'llama-server -m "{model}" -c 131072 --jinja --webui-mcp-proxy --keep -1 --context-shift --swa-full --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 -ngl 999 --tools all --port 8081',
+            "models": ["gemma"],
+        },
+    },
+}
+
+
 def load_config():
-    # Load config.json if it exists, otherwise return an empty dict.
     if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r") as f:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    return {}
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(_DEFAULT_CONFIG, f, indent=2, ensure_ascii=False)
+    except OSError:
+        pass
+    return dict(_DEFAULT_CONFIG)
 
 
 def save_config(config):
-    # Write the config dict to config.json.
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config, f, indent=2)
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
 
 
 def load_presets(config):
@@ -866,8 +903,10 @@ class CommandLauncherGUI:
             self.model_var.set("(no .gguf models found)")
 
     def _on_model_changed(self):
-        self.config["last_model"] = self.model_var.get()
-        save_config(self.config)
+        m = self.model_var.get()
+        if m and not m.startswith("("):
+            self.config["last_model"] = m
+            save_config(self.config)
         self._refresh_preset_menu()
 
     def _filtered_presets(self):
@@ -886,16 +925,20 @@ class CommandLauncherGUI:
             current = self.preset_var.get()
             if init or not current or current not in filtered:
                 last = self.config.get("last_preset")
+                self._auto_preset_update = True
                 if init and last and last in filtered:
                     self.preset_var.set(last)
                 else:
                     self.preset_var.set(next(iter(filtered)))
+                self._auto_preset_update = False
             else:
                 self._load_preset()
         else:
             menu.add_command(label="(no matching presets)",
                              command=lambda: self.preset_var.set("(no matching presets)"))
+            self._auto_preset_update = True
             self.preset_var.set("(no matching presets)")
+            self._auto_preset_update = False
             self.llama_cmd = ""
 
     def _load_preset(self):
@@ -906,10 +949,11 @@ class CommandLauncherGUI:
             return
         template   = self.presets[name]["command"]
         models_dir = self.llama_dir if self.llama_dir else "."
-        model_path = f"{models_dir}/{model}.gguf" if model and not model.startswith("(") else model
+        model_path = os.path.join(models_dir, model + ".gguf") if model and not model.startswith("(") else model
         self.llama_cmd = template.replace("{model}", model_path)
-        self.config["last_preset"] = name
-        save_config(self.config)
+        if not getattr(self, "_auto_preset_update", False):
+            self.config["last_preset"] = name
+            save_config(self.config)
 
 
     # ── Preset CRUD ───────────────────────────────────────────
@@ -1181,6 +1225,8 @@ class CommandLauncherGUI:
 
             self._free_port("--port 8080", 8080, self.proxy_log)
             proxy_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "proxy.py")
+            if not os.path.isfile(proxy_script):
+                raise FileNotFoundError(f"proxy.py not found at {proxy_script}")
             self._proxy_proc = subprocess.Popen(
                 [sys.executable, proxy_script, "8080", "8081"],
                 shell=False,
@@ -1199,6 +1245,8 @@ class CommandLauncherGUI:
 
         except Exception as e:
             self._append_log(self.llama_log, f"LAUNCH FAILED: {e}")
+            self._kill_all()
+            self._exit_running_state()
 
 
 # ============================================================

@@ -20,10 +20,10 @@
       ]
     }
   },
-  "system_prompt": "The current date and time is provided at the top of every message. Treat it as ground truth \u00e2\u20ac\u201d do not estimate or assume the date from training memory.\n\nYou have real-time web access via three MCP tools: ddg-search, mcp-fetch, and mcp-time.\n\nTOOL USAGE RULES:\n1. For any question involving facts, current events, people, software versions, prices, or anything that may have changed \u00e2\u20ac\u201d use ddg-search BEFORE generating a response. Do not answer from training memory alone.\n2. Your training data is outdated. If search results conflict with your training knowledge, always trust the search results. Never override web results with what you think you know.\n3. If a search result requires more detail, use mcp-fetch to read the full page content.\n4. Use mcp-time only if you need precision timezone-aware time beyond what is already provided.\n5. Do not explain your tool usage to the user. Execute tools silently and respond based on what you find.",
+  "system_prompt": "The current date and time is provided at the top of every message. Treat it as ground truth — do not estimate or assume the date from training memory.\n\nYou have real-time web access via three MCP tools: ddg-search, mcp-fetch, and mcp-time.\n\nTOOL USAGE RULES:\n1. For any question involving facts, current events, people, software versions, prices, or anything that may have changed — use ddg-search BEFORE generating a response. Do not answer from training memory alone.\n2. Your training data is outdated. If search results conflict with your training knowledge, always trust the search results. Never override web results with what you think you know.\n3. If a search result requires more detail, use mcp-fetch to read the full page content.\n4. Use mcp-time only if you need precision timezone-aware time beyond what is already provided.\n5. Do not explain your tool usage to the user. Execute tools silently and respond based on what you find.",
   "llama_dir": "C:/Users/choua/Documents/GGUF Models",
   "last_preset": "Default Qwen (Q8_0, ctx 32768)",
-  "last_model": "Qwen_Qwen3-14B-Q5_K_M",
+  "last_model": "Qwen_Qwen3-8B-Q8_0",
   "presets": {
     "Default Qwen (Q8_0, ctx 32768)": {
       "command": "llama-server -m \"{model}\" -c 32768 --jinja --webui-mcp-proxy --keep -1 --context-shift --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 -ngl 999 --tools all --port 8081",
