@@ -494,6 +494,9 @@ class CommandLauncherGUI:
 
         apply_ttk_style()
 
+        # Kill all child processes when the window is closed
+        master.protocol("WM_DELETE_WINDOW", self._on_close)
+
         # Load persisted config — contains the llama.cpp folder path
         self.config    = load_config()
         self.llama_dir = self.config.get("llama_dir", "")
@@ -910,6 +913,12 @@ class CommandLauncherGUI:
         self._llama_proc = None
         self._kill_proc(self._uvx_proc, "UVX")
         self._uvx_proc = None
+
+    def _on_close(self):
+        # Kill any running processes before the window closes.
+        if hasattr(self, "_llama_proc"):
+            self._kill_all()
+        self.master.destroy()
 
 
     # ── Status log ────────────────────────────────────────────
