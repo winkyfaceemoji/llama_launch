@@ -6,11 +6,13 @@ _SP = ""
 _UP = 8081
 
 
-def _load():
+def _load(mode="search"):
     cfg = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
     if os.path.isfile(cfg):
         with open(cfg, encoding="utf-8") as f:
-            return json.load(f).get("system_prompt", "")
+            data = json.load(f)
+            key = "code_system_prompt" if mode == "code" else "system_prompt"
+            return data.get(key, "")
     return ""
 
 
@@ -89,8 +91,9 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     listen = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
     _UP    = int(sys.argv[2]) if len(sys.argv) > 2 else 8081
+    _mode  = sys.argv[3] if len(sys.argv) > 3 else "search"
 
-    _SP = _load()
+    _SP = _load(_mode)
     print(f"system prompt: {'loaded' if _SP else 'none'}", flush=True)
     print(f"proxy :{listen} -> :{_UP}", flush=True)
 
