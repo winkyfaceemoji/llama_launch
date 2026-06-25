@@ -248,7 +248,12 @@ def load_presets(config: dict) -> dict:
                 "command": value["command"],
                 "models": models
             }
-    
+
+    # Ensure a catch-all preset always exists
+    _CATCHALL = "Default (any model, ctx 8192)"
+    if not any(not p.get("models") for p in migrated.values()):
+        migrated = {_CATCHALL: _DEFAULT_CONFIG["presets"][_CATCHALL], **migrated}
+
     return migrated
 
 
