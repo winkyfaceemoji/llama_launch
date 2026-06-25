@@ -1097,35 +1097,41 @@ class CommandLauncherGUI:
             save_config(self.config)
         self._refresh_preset_menu()
 
-    def _filtered_presets(self):
-        model = self.model_var.get()
+    def _best_preset_for_model(self, model):
+        """Return the name of the most relevant preset for the given model."""
         if not model or model.startswith("("):
-            return {}
-        return {n: d for n, d in self.presets.items() if preset_matches_model(d, model)}
+            return None
+        # Prefer a preset explicitly tagged for this model
+        for name, data in self.presets.items():
+            if data.get("models") and preset_matches_model(data, model):
+                return name
+        # Fall back to any catch-all (empty models list)
+        for name, data in self.presets.items():
+            if not data.get("models"):
+                return name
+        return None
 
     def _refresh_preset_menu(self, init=False):
-        filtered = self._filtered_presets()
         menu = self.preset_menu.menu
         menu.delete(0, "end")
-        if filtered:
-            for name in filtered:
+        if self.presets:
+            for name in self.presets:
                 menu.add_command(label=name, command=lambda v=name: self.preset_var.set(v))
-            current = self.preset_var.get()
-            if init or not current or current not in filtered:
-                last = self.config.get("last_preset")
-                self._auto_preset_update = True
-                if init and last and last in filtered:
-                    self.preset_var.set(last)
-                else:
-                    self.preset_var.set(next(iter(filtered)))
-                self._auto_preset_update = False
-            else:
-                self._load_preset()
-        else:
-            menu.add_command(label="(no matching presets)",
-                             command=lambda: self.preset_var.set("(no matching presets)"))
+            best = self._best_preset_for_model(self.model_var.get())
+            last = self.config.get("last_preset")
             self._auto_preset_update = True
-            self.preset_var.set("(no matching presets)")
+            if init and last and last in self.presets:
+                self.preset_var.set(last)
+            elif best:
+                self.preset_var.set(best)
+            else:
+                self.preset_var.set(next(iter(self.presets)))
+            self._auto_preset_update = False
+        else:
+            menu.add_command(label="(no presets)",
+                             command=lambda: self.preset_var.set("(no presets)"))
+            self._auto_preset_update = True
+            self.preset_var.set("(no presets)")
             self._auto_preset_update = False
             self.llama_cmd = ""
 
@@ -1161,8 +1167,7 @@ class CommandLauncherGUI:
             self.config["presets"] = self.presets
             save_config(self.config)
             self._refresh_preset_menu()
-            if dlg.result_name in self._filtered_presets():
-                self.preset_var.set(dlg.result_name)
+            self.preset_var.set(dlg.result_name)
 
     def _edit_preset(self):
         name = self.preset_var.get()
@@ -1188,8 +1193,7 @@ class CommandLauncherGUI:
             self.config["presets"] = self.presets
             save_config(self.config)
             self._refresh_preset_menu()
-            if dlg.result_name in self._filtered_presets():
-                self.preset_var.set(dlg.result_name)
+            self.preset_var.set(dlg.result_name)
 
     def _delete_preset(self):
         name = self.preset_var.get()
