@@ -178,6 +178,10 @@ _DEFAULT_CONFIG = {
     "last_preset": "",
     "last_model": "",
     "presets": {
+        "Default (any model, ctx 8192)": {
+            "command": 'llama-server -m "{model}" -c 8192 --jinja --webui-mcp-proxy --keep -1 --context-shift -ngl 999 --tools all --port 8081',
+            "models": [],
+        },
         "Default Qwen (Q8_0, ctx 32768)": {
             "command": 'llama-server -m "{model}" -c 32768 --jinja --webui-mcp-proxy --keep -1 --context-shift --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 -ngl 999 --tools all --port 8081',
             "models": ["qwen"],
@@ -1413,8 +1417,9 @@ class CommandLauncherGUI:
             proxy_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "proxy.py")
             if not os.path.isfile(proxy_script):
                 raise FileNotFoundError(f"proxy.py not found at {proxy_script}")
+            mode = "search" if self._search_mode else "code"
             self._proxy_proc = subprocess.Popen(
-                [sys.executable, proxy_script, "8080", "8081"],
+                [sys.executable, proxy_script, "8080", "8081", mode],
                 shell=False,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
