@@ -9,4 +9,5 @@ paths: proxy.py
 - **No upstream timeout.** A long first prompt can take minutes before the first byte; a timeout returns a 502 and throws the work away.
 - **The response body is delimited by connection close.** The upstream `Transfer-Encoding` header is dropped and `read1` returns de-chunked bytes, which only works because `BaseHTTPRequestHandler` speaks HTTP/1.0. Don't set `protocol_version = "HTTP/1.1"` without re-adding chunking.
 - Only `POST /v1/chat/completions` is rewritten, and it *replaces* any system message the client sent. Agents must use `:8081` directly to keep their own system prompt.
+- **Forward the `Authorization` header untouched.** The Web UI's API key travels through this proxy to llama-server (ADR 0005); stripping it makes every chat return 401.
 - `config.json` is read once at startup; edits to `system_prompt` need a relaunch.

@@ -82,6 +82,7 @@ import sys
 import json
 import webbrowser
 import re
+import secrets
 import threading
 import urllib.request
 import time
@@ -149,6 +150,9 @@ H_RUNNING   = 750    # height of the running/log view
 
 MODELS_DIR  = "Models"  # resolved at runtime relative to llama_dir
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+# llama-server's API key. Without one, any web page open in the browser can
+# call the server on localhost (it allows every origin). Gitignored.
+API_KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "api_key.txt")
 
 # llama-server's own OpenAI-compatible API. Agents connect here directly,
 # bypassing the system prompt proxy on 8080.
@@ -257,6 +261,32 @@ def load_presets(config: dict) -> dict:
         migrated = {AUTO_PRESET: {"command": AUTO_COMMAND, "models": []}, **migrated}
 
     return migrated
+
+
+def load_api_key(path):
+    # Returns the saved API key, creating a random one on first run.
+    try:
+        with open(path, encoding="utf-8") as f:
+            key = f.read().strip()
+        if key:
+            return key
+    except FileNotFoundError:
+        pass
+    key = secrets.token_urlsafe(32)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(key + "\n")
+    return key
+
+
+def build_launch_command(template, model_path, mmproj, api_key_file):
+    # Substitute the model path, attach the vision projector when there is one,
+    # and require the API key unless the preset already sets its own.
+    cmd = template.replace("{model}", model_path)
+    if mmproj and "--mmproj" not in cmd and not re.search(r"(^|\s)-mm\s", cmd):
+        cmd += f' --mmproj "{mmproj}"'
+    if "--api-key" not in cmd:
+        cmd += f' --api-key-file "{api_key_file}"'
+    return cmd
 
 
 def _is_extra_shard(filename):
@@ -836,8 +866,9 @@ class CommandLauncherGUI:
         self._models       = {}
         self.uvx_command   = self.config.get(
             "uvx_command",
-            f'uvx mcp-proxy --named-server-config "{CONFIG_FILE}" --allow-origin "*" --port 8001 --stateless'
+            f'uvx mcp-proxy --named-server-config "{CONFIG_FILE}" --port 8001 --stateless'
         )
+        self.api_key       = load_api_key(API_KEY_FILE)
         self.llama_cmd     = ""
         self._llama_proc   = None
         self._uvx_proc     = None
@@ -932,6 +963,13 @@ class CommandLauncherGUI:
                                    fg=ACCENT, bg=BG, cursor="hand2")
         self._api_label.pack(side="left", padx=(8, 0))
         self._api_label.bind("<Button-1>", lambda e: self._copy_api_url())
+        # The key itself is never shown, only copied.
+        tk.Label(self.api_bar, text="API key", font=FONT_SMALL,
+                 fg=TEXT_MUT, bg=BG).pack(side="left", padx=(24, 0))
+        self._key_label = tk.Label(self.api_bar, text="click to copy", font=FONT_MONO,
+                                   fg=ACCENT, bg=BG, cursor="hand2")
+        self._key_label.pack(side="left", padx=(8, 0))
+        self._key_label.bind("<Button-1>", lambda e: self._copy_api_key())
 
         # ── Rows 7–8: Running state (hidden until Launch is pressed)
         # Two stacked log panes separated by a draggable sash.
@@ -1031,6 +1069,12 @@ class CommandLauncherGUI:
         self.master.clipboard_append(AGENT_API_URL)
         self._api_label.config(text="copied")
         self.master.after(1200, lambda: self._api_label.config(text=AGENT_API_URL))
+
+    def _copy_api_key(self):
+        self.master.clipboard_clear()
+        self.master.clipboard_append(self.api_key)
+        self._key_label.config(text="copied")
+        self.master.after(1200, lambda: self._key_label.config(text="click to copy"))
 
 
     # ── Two-state view switching ──────────────────────────────
@@ -1136,10 +1180,8 @@ class CommandLauncherGUI:
             self.llama_cmd = ""
             return
         model_path, mmproj = entry
-        cmd = self.presets[name]["command"].replace("{model}", model_path)
-        if mmproj and "--mmproj" not in cmd and not re.search(r"(^|\s)-mm\s", cmd):
-            cmd += f' --mmproj "{mmproj}"'
-        self.llama_cmd = cmd
+        self.llama_cmd = build_launch_command(self.presets[name]["command"],
+                                              model_path, mmproj, API_KEY_FILE)
 
 
     # ── Preset CRUD ───────────────────────────────────────────

@@ -14,7 +14,7 @@ The launcher starts and manages three processes:
 
 Once launched, the app shows live output from all three processes in separate log panes, monitors server health, and tracks uptime. Closing the window while servers are running minimizes to the system tray rather than killing them.
 
-All three servers listen on `127.0.0.1` only, so other devices on your network can't reach them.
+All three servers listen on `127.0.0.1` only, so other devices on your network can't reach them. Web pages open in your browser still can, so llama-server also requires an API key (see [API key](#api-key)).
 
 ---
 
@@ -55,6 +55,7 @@ llama_launch/
 ├── launcher.pyw      # the application
 ├── proxy.py          # system prompt injection proxy (port 8080 → 8081)
 ├── config.json       # all settings: models folder, presets, system prompt, MCP servers
+├── api_key.txt       # llama-server API key, created on first run (keep private)
 └── README.md
 ```
 
@@ -86,6 +87,7 @@ Click **Launch Server**. The window switches to the running view, which shows:
 
 - **Status bar** — server health (`● online` / `● offline`), uptime counter, and an **Auto-scroll** toggle.
 - **Agent API** — the direct llama-server address for agents (`http://127.0.0.1:8081/v1`). Click it to copy.
+- **API key** — click **click to copy** to put the key on the clipboard. The key itself is never shown.
 - **Three log panes** — live output from `llama-server` (top), the UVX proxy (middle), and the system prompt proxy (bottom). Drag the dividers to resize. The top pane header shows the active model name and PID.
 
 ### Stopping
@@ -130,6 +132,10 @@ Avoid adding `-c` or `-ngl` to a preset unless you mean to: setting either turns
 
 `--context-shift` and `--swa-full` are left off: when a chat fills the context, start a new chat. `--tools get_datetime` gives the model the exact time from your PC's clock without granting it file or shell access.
 
+Never use `--tools all` (or `--agent`): it includes `exec_shell_command` and `write_file`, which any web page could then call.
+
+The launcher adds `--api-key-file` to every preset's command, so you don't need to put it in your own presets.
+
 Use the **+ Add**, **Edit**, and **Delete** buttons next to the preset dropdown to manage your own presets.
 
 ---
@@ -152,6 +158,22 @@ http://127.0.0.1:8081/v1
 
 This bypasses the system prompt proxy, so the agent's own system prompt and tools reach the model untouched. Only the Web UI uses port `8080`.
 
+Agents must send the [API key](#api-key) as `Authorization: Bearer <key>`. In most OpenAI-compatible clients that's the "API key" setting.
+
+---
+
+## API key
+
+llama-server allows requests from every web origin, so without a key any web page open in your browser could chat with your model or use its `/cors-proxy` to read pages on your home network. The launcher therefore starts llama-server with an API key.
+
+- **Where it comes from:** on first run the launcher generates a random key and saves it to `api_key.txt` next to `config.json`. It's gitignored.
+- **Getting it:** click **click to copy** next to **API key** in the running view.
+- **Web UI:** paste it once into the Web UI under **Settings → General → API Key**. The Web UI saves it in your browser.
+- **Agents:** send it as a Bearer token (see [Agents](#agents)).
+- **Replacing it:** delete `api_key.txt` and relaunch. A new key is generated; paste it into the Web UI and your agents again.
+
+`/health` and `/v1/models` stay open without a key; everything else returns `401`.
+
 ---
 
 ## Config file
@@ -168,6 +190,8 @@ All settings live in a single `config.json` next to the launcher:
 | `open_browser` | Whether to open the Web UI when the server comes online |
 | `last_model` | Remembered model selection between sessions |
 
+The API key lives in its own file, `api_key.txt`, not in `config.json`.
+
 ---
 
 ## Ports
@@ -182,9 +206,9 @@ All settings live in a single `config.json` next to the launcher:
 
 ## MCP web UI setup
 
-When using the llama-server web UI at `http://127.0.0.1:8080/`, the MCP server URLs will appear in the MCP settings. Replace the address in each with `MCP` to ensure they connect correctly.
+The UVX proxy serves each MCP server from `config.json` at `http://127.0.0.1:8001/servers/<name>/mcp` (for example `.../servers/ddg-search/mcp`). Add each one in the Web UI's MCP servers page and switch on **use proxy** for it.
 
-*Source: [How I got MCP working in the llama-server web UI](https://www.reddit.com/r/LocalLLaMA/comments/1rnyz75/how_i_got_mcp_working_in_the_llamaserver_web_ui_a/)*
+The UVX proxy deliberately sends no CORS headers, so web pages can't call it directly. With **use proxy** on, the Web UI reaches it through llama-server's `/cors-proxy`, which needs the API key. With **use proxy** off, the browser blocks the connection.
 
 ---
 

@@ -1,4 +1,5 @@
 .claude/*
 !.claude/rules/
 config.json
+api_key.txt
 __pycache__/
