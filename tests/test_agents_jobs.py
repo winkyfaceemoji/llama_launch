@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import tempfile
@@ -23,7 +24,13 @@ class JobStoreTests(unittest.TestCase):
         self.assertEqual(self.store.get(job["id"])["state"], "queued")
 
     def test_bad_job_id_is_unknown(self):
-        for bad in (r"..\..\secret", "20261014-000000-zzzz", "", "a/b"):
+        # A real job file sits outside jobs\; a traversal ID must not reach it.
+        secret = os.path.join(self.tmp.name, "secret")
+        os.makedirs(secret)
+        with open(os.path.join(secret, "job.json"), "w", encoding="utf-8") as f:
+            json.dump({"id": "secret", "kind": "research", "args": {}, "state": "done",
+                       "created": 0, "updated": 0, "note": ""}, f)
+        for bad in (r"..\..\secret", r"..\secret", "../secret", "20261014-000000-zzzz", "", "a/b"):
             with self.assertRaises(KeyError):
                 self.store.get(bad)
 
@@ -55,6 +62,33 @@ class JobStoreTests(unittest.TestCase):
         self.assertEqual(self.store.read_text(job["id"], "result.md"), "hello")
         self.assertEqual(self.store.read_json(job["id"], "steps.json"), [{"kind": "research"}])
         self.assertFalse(self.store.has(job["id"], "plan.json"))
+
+    def test_update_survives_reader_holding_job_file(self):
+        # Windows refuses os.replace while another handle has job.json open.
+        job = self.store.create("research", {})
+        path = self.store.path(job["id"], "job.json")
+        held = threading.Event()
+
+        def hold():
+            with open(path, encoding="utf-8"):
+                held.set()
+                time.sleep(0.3)
+
+        reader = threading.Thread(target=hold)
+        reader.start()
+        held.wait()
+        try:
+            self.store.update(job["id"], state="running")
+        finally:
+            reader.join()
+        self.assertEqual(self.store.get(job["id"])["state"], "running")
+
+    def test_list_tolerates_record_without_created(self):
+        job = self.store.create("research", {})
+        os.makedirs(self.store.path("20261014-000000-abcd"))
+        self.store.write_json("20261014-000000-abcd", "job.json",
+                              {"id": "20261014-000000-abcd", "state": "done"})
+        self.assertIn(job["id"], [j["id"] for j in self.store.list()])
 
 
 class WorkerTests(unittest.TestCase):
@@ -106,6 +140,49 @@ class WorkerTests(unittest.TestCase):
         worker.submit(job["id"])
         worker.queue.join()
         self.assertEqual(ran, [])
+
+    def _drain(self, worker):
+        # Bounded join: a worker that dies leaves queue.join() blocked forever.
+        t = threading.Thread(target=worker.queue.join, daemon=True)
+        t.start()
+        t.join(5)
+        self.assertFalse(t.is_alive(), "worker did not drain the queue")
+
+    def test_run_failure_does_not_stop_later_jobs(self):
+        done = []
+
+        def run(job):
+            if job["args"].get("fail"):
+                raise RuntimeError("boom")
+            done.append(job["id"])
+            self.store.update(job["id"], state="done")
+
+        worker = jobs.Worker(self.store, run)
+        bad = self.store.create("research", {"fail": True})["id"]
+        good = self.store.create("research", {})["id"]
+        worker.submit(bad)
+        worker.submit(good)
+        self._drain(worker)
+        self.assertEqual(self.store.get(bad)["state"], "failed")
+        self.assertEqual(done, [good])
+
+    def test_store_error_does_not_stop_later_jobs(self):
+        done = []
+        real_transition = self.store.transition
+        bad = self.store.create("research", {})["id"]
+        good = self.store.create("research", {})["id"]
+
+        def flaky(job_id, expected, new_state, **fields):
+            if job_id == bad:
+                raise OSError("disk gone")
+            return real_transition(job_id, expected, new_state, **fields)
+
+        self.store.transition = flaky
+        worker = jobs.Worker(self.store, lambda job: done.append(job["id"]))
+        worker.submit(bad)
+        worker.submit(good)
+        self._drain(worker)
+        self.assertEqual(done, [good])
 
 
 if __name__ == "__main__":

@@ -9,6 +9,24 @@ import time
 
 _ID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}")
 UNFINISHED = ("queued", "running")
+_TRIES, _DELAY = 40, 0.05
+
+
+def _retry(fn):
+    # Windows refuses to replace or open a file another handle holds open;
+    # that handle lets go within milliseconds, so wait it out.
+    for attempt in range(_TRIES):
+        try:
+            return fn()
+        except PermissionError:
+            if attempt == _TRIES - 1:
+                raise
+            time.sleep(_DELAY)
+
+
+def _read_text(path):
+    with open(path, encoding="utf-8") as f:
+        return f.read()
 
 
 class JobStore:
@@ -33,10 +51,10 @@ class JobStore:
         return job
 
     def get(self, job_id):
+        path = self.path(job_id, "job.json")
         try:
-            with open(self.path(job_id, "job.json"), encoding="utf-8") as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
+            return json.loads(_retry(lambda: _read_text(path)))
+        except (FileNotFoundError, PermissionError, json.JSONDecodeError):
             raise KeyError(job_id)
 
     def update(self, job_id, **fields):
@@ -63,7 +81,7 @@ class JobStore:
                 found.append(self.get(name))
             except KeyError:
                 pass
-        return sorted(found, key=lambda j: j["created"], reverse=True)
+        return sorted(found, key=lambda j: j.get("created", 0), reverse=True)
 
     def cancel_unfinished(self):
         for job in self.list():
@@ -74,14 +92,15 @@ class JobStore:
         return os.path.exists(self.path(job_id, name))
 
     def write_text(self, job_id, name, text):
-        tmp = self.path(job_id, name + ".tmp")
+        # Unique temp name per writer, so two threads never share one tmp file.
+        dest = self.path(job_id, name)
+        tmp = self.path(job_id, f"{name}.{os.getpid()}.{threading.get_ident()}.tmp")
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(text)
-        os.replace(tmp, self.path(job_id, name))
+        _retry(lambda: os.replace(tmp, dest))
 
     def read_text(self, job_id, name):
-        with open(self.path(job_id, name), encoding="utf-8") as f:
-            return f.read()
+        return _read_text(self.path(job_id, name))
 
     def write_json(self, job_id, name, data):
         self.write_text(job_id, name, json.dumps(data, indent=2))
@@ -106,13 +125,21 @@ class Worker:
         while True:
             job_id = self.queue.get()
             try:
-                job = self.store.transition(job_id, ("queued",), "running")
-            except (KeyError, ValueError):
-                self.queue.task_done()  # cancelled or gone
-                continue
-            try:
-                self.run(job)
-            except Exception as e:
-                self.store.update(job_id, state="failed", note=f"{type(e).__name__}: {e}")
+                self._run_one(job_id)
+            except Exception:
+                pass  # never let one job kill the worker
             finally:
                 self.queue.task_done()
+
+    def _run_one(self, job_id):
+        try:
+            job = self.store.transition(job_id, ("queued",), "running")
+        except Exception:
+            return  # cancelled, gone, or the store failed: skip it
+        try:
+            self.run(job)
+        except Exception as e:
+            try:
+                self.store.update(job_id, state="failed", note=f"{type(e).__name__}: {e}")
+            except Exception:
+                pass
