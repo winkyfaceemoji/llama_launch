@@ -51,5 +51,60 @@ class BuildLaunchCommandTests(unittest.TestCase):
         self.assertIn('--mmproj "mmproj.gguf"', cmd)
 
 
+class LoadPresetsTests(unittest.TestCase):
+    def test_auto_preset_command_always_comes_from_code(self):
+        config = {"presets": {"Mine": {"command": "x", "models": []},
+                              launcher.AUTO_PRESET: {"command": "old auto -c 8192", "models": ["q"]}}}
+        presets = launcher.load_presets(config)
+        self.assertEqual(presets[launcher.AUTO_PRESET], {"command": launcher.AUTO_COMMAND, "models": []})
+        self.assertEqual(next(iter(presets)), launcher.AUTO_PRESET)
+
+
+class ResolveUvxCommandTests(unittest.TestCase):
+    def test_substitutes_config_path(self):
+        cmd = launcher.resolve_uvx_command('uvx mcp-proxy --named-server-config "{config}" --port 8001', r"D:\app\config.json")
+        self.assertEqual(cmd, r'uvx mcp-proxy --named-server-config "D:\app\config.json" --port 8001')
+
+
+class HealthStatusTests(unittest.TestCase):
+    RUNNING = {"llama-server": None, "UVX proxy": None, "prompt proxy": None}
+
+    def test_online_when_healthy(self):
+        self.assertEqual(launcher.health_status(self.RUNNING, "ok"), ("● online", "ok"))
+
+    def test_loading_is_not_offline(self):
+        self.assertEqual(launcher.health_status(self.RUNNING, "loading"), ("● loading model", "warn"))
+
+    def test_exited_process_is_reported_by_name(self):
+        codes = dict(self.RUNNING, **{"UVX proxy": 1})
+        self.assertEqual(launcher.health_status(codes, "ok"), ("● UVX proxy exited (code 1)", "error"))
+
+    def test_offline_when_unreachable(self):
+        self.assertEqual(launcher.health_status(self.RUNNING, "offline"), ("● offline", "idle"))
+
+
+class PortOwnershipTests(unittest.TestCase):
+    NETSTAT = (
+        "  TCP    127.0.0.1:8001         0.0.0.0:0              LISTENING       18516\n"
+        "  TCP    127.0.0.1:8001         127.0.0.1:64164        ESTABLISHED     18516\n"
+        "  TCP    127.0.0.1:64164        127.0.0.1:8001         ESTABLISHED     11088\n"
+        "  TCP    127.0.0.1:18001        0.0.0.0:0              LISTENING       999\n"
+    )
+
+    def test_finds_only_the_listener_on_that_exact_port(self):
+        self.assertEqual(launcher.listening_pids(self.NETSTAT, 8001), {"18516"})
+
+    def test_llama_server_is_ours(self):
+        self.assertTrue(launcher.is_own_process("llama-server.exe", "llama-server -m x.gguf", r"C:\app"))
+
+    def test_process_started_from_app_folder_is_ours(self):
+        cmd = r'python.exe mcp-proxy.exe --named-server-config C:/App/config.json --port 8001'
+        self.assertTrue(launcher.is_own_process("python.exe", cmd, r"C:\app"))
+
+    def test_other_programs_are_not_ours(self):
+        self.assertFalse(launcher.is_own_process("python.exe", r"python.exe C:\other\server.py", r"C:\app"))
+        self.assertFalse(launcher.is_own_process("node.exe", "", r"C:\app"))
+
+
 if __name__ == "__main__":
     unittest.main()

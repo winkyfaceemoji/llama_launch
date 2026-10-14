@@ -7,7 +7,7 @@
 # This is a desktop GUI that lets you launch two servers with one click:
 #
 #   1. llama-server  — runs a local AI model (a .gguf file) and exposes it
-#                      as an API on port 8080. The model and launch options
+#                      as an API on port 8081. The model and launch options
 #                      are controlled by the "preset" you select.
 #
 #   2. UVX MCP Proxy — a middleware server on port 8001 that bridges the
@@ -256,11 +256,48 @@ def load_presets(config: dict) -> dict:
                 "models": models
             }
 
-    # The Auto preset always exists, so every model has a working default
-    if AUTO_PRESET not in migrated:
-        migrated = {AUTO_PRESET: {"command": AUTO_COMMAND, "models": []}, **migrated}
+    # The Auto preset always exists, so every model has a working default. Its
+    # command always comes from code: a copy saved in config.json would
+    # otherwise keep an outdated command forever.
+    migrated.pop(AUTO_PRESET, None)
+    return {AUTO_PRESET: {"command": AUTO_COMMAND, "models": []}, **migrated}
 
-    return migrated
+
+def resolve_uvx_command(cmd, config_file):
+    # {config} lets the saved UVX command survive moving the launcher folder.
+    return cmd.replace("{config}", config_file)
+
+
+def health_status(exit_codes, health):
+    # exit_codes: {process name: return code, or None while running}.
+    # health: "ok", "loading" or "offline", from llama-server's /health.
+    # Returns (status text, level) where level is ok / warn / error / idle.
+    for name, code in exit_codes.items():
+        if code is not None:
+            return f"● {name} exited (code {code})", "error"
+    if health == "ok":
+        return "● online", "ok"
+    if health == "loading":
+        return "● loading model", "warn"
+    return "● offline", "idle"
+
+
+def listening_pids(netstat_output, port):
+    # PIDs listening on exactly this port in `netstat -ano` output.
+    pids = set()
+    for line in netstat_output.splitlines():
+        parts = line.split()
+        if len(parts) >= 5 and parts[3] == "LISTENING" and parts[1].endswith(f":{port}"):
+            pids.add(parts[4])
+    return pids
+
+
+def is_own_process(image_name, command_line, app_dir):
+    # Ours: any llama-server, or anything started with a path in this folder
+    # (proxy.py, and mcp-proxy via the config path).
+    norm = lambda s: s.lower().replace("/", "\\")
+    return (image_name.lower() == "llama-server.exe"
+            or norm(app_dir) in norm(command_line))
 
 
 def load_api_key(path):
@@ -866,7 +903,7 @@ class CommandLauncherGUI:
         self._models       = {}
         self.uvx_command   = self.config.get(
             "uvx_command",
-            f'uvx mcp-proxy --named-server-config "{CONFIG_FILE}" --port 8001 --stateless'
+            'uvx mcp-proxy --named-server-config "{config}" --port 8001 --stateless'
         )
         self.api_key       = load_api_key(API_KEY_FILE)
         self.llama_cmd     = ""
@@ -1254,26 +1291,26 @@ class CommandLauncherGUI:
         self._polling = True
         def poll_loop():
             browser_opened = False
+            colors = {"ok": SUCCESS, "warn": "#f7c948", "error": DANGER, "idle": TEXT_MUT}
             while self._polling:
                 try:
                     with urllib.request.urlopen(
                         "http://127.0.0.1:8080/health", timeout=2
                     ) as resp:
-                        data = json.loads(resp.read().decode())
-                        status = data.get("status", "unknown")
-                    if status == "ok":
-                        color = SUCCESS
-                        text  = "● online"
-                        if not browser_opened and self._open_browser:
-                            browser_opened = True
-                            self.master.after(0, lambda: webbrowser.open("http://127.0.0.1:8080/"))
-                    else:
-                        color = "#f7c948"
-                        text  = f"● {status}"
+                        health = "ok" if json.loads(resp.read().decode()).get("status") == "ok" else "loading"
+                except urllib.error.HTTPError as e:
+                    # llama-server answers 503 while the model is still loading
+                    health = "loading" if e.code == 503 else "offline"
                 except Exception:
-                    color = TEXT_MUT
-                    text  = "● offline"
-                self.master.after(0, lambda c=color, t=text: self._health_label.config(fg=c, text=t))
+                    health = "offline"
+                procs = {"llama-server": self._llama_proc, "UVX proxy": self._uvx_proc,
+                         "prompt proxy": self._proxy_proc}
+                codes = {n: p.poll() for n, p in procs.items() if p is not None}
+                text, level = health_status(codes, health)
+                if level == "ok" and not browser_opened and self._open_browser:
+                    browser_opened = True
+                    self.master.after(0, lambda: webbrowser.open("http://127.0.0.1:8080/"))
+                self.master.after(0, lambda c=colors[level], t=text: self._health_label.config(fg=c, text=t))
                 time.sleep(3)
         threading.Thread(target=poll_loop, daemon=True).start()
 
@@ -1337,24 +1374,24 @@ class CommandLauncherGUI:
     # ── Process management ────────────────────────────────────
 
     def _free_port(self, cmd, default_port, widget):
-        # Kill any process already listening on the port this command will use.
+        # Free the port this command will use, but only from a leftover of our
+        # own (see is_own_process). Anything else aborts the launch.
         m = re.search(r'--port\s+(\d+)', cmd)
         port = int(m.group(1)) if m else default_port
-        try:
-            result = subprocess.run(
-                f'netstat -ano | findstr ":{port} "',
-                shell=True, capture_output=True, text=True,
-            )
-            for line in result.stdout.splitlines():
-                parts = line.split()
-                if "LISTENING" in line and len(parts) >= 5 and parts[-1].isdigit():
-                    pid = parts[-1]
-                    if pid != "0":
-                        subprocess.run(f"taskkill /F /T /PID {pid}",
-                                       shell=True, capture_output=True)
-                        self._append_log(widget, f"  Port {port} was in use — freed PID {pid}")
-        except Exception:
-            pass
+        netstat = subprocess.run("netstat -ano", shell=True, capture_output=True, text=True).stdout
+        app_dir = os.path.dirname(os.path.abspath(__file__))
+        for pid in listening_pids(netstat, port) - {"0"}:
+            info = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 f"$p = Get-CimInstance Win32_Process -Filter 'ProcessId={pid}'; $p.Name; $p.CommandLine"],
+                capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW,
+            ).stdout.splitlines()
+            name = info[0] if info else "unknown"
+            if not is_own_process(name, " ".join(info[1:]), app_dir):
+                raise RuntimeError(f"port {port} is in use by {name} (PID {pid}), "
+                                   "which the launcher didn't start. Close it and launch again.")
+            subprocess.run(f"taskkill /F /T /PID {pid}", shell=True, capture_output=True)
+            self._append_log(widget, f"  Port {port} was in use — freed PID {pid} ({name})")
 
     def _kill_proc(self, proc, widget=None):
         # Kill a process and its full child tree (/T) — ensures GPU workers are also stopped.
@@ -1417,7 +1454,7 @@ class CommandLauncherGUI:
     # ── Launch sequence ───────────────────────────────────────
 
     def run_commands(self):
-        uvx_cmd = self.uvx_command.strip()
+        uvx_cmd = resolve_uvx_command(self.uvx_command.strip(), CONFIG_FILE)
 
         if not self.llama_cmd:
             messagebox.showerror("No Command",

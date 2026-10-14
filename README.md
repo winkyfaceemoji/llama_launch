@@ -85,10 +85,12 @@ The **PRESET** dropdown is set to **Auto** whenever you pick a model. Auto lets 
 ### Launching
 Click **Launch Server**. The window switches to the running view, which shows:
 
-- **Status bar** — server health (`● online` / `● offline`), uptime counter, and an **Auto-scroll** toggle.
+- **Status bar** — server health (`● online`, `● loading model`, `● offline`, or `● <process> exited (code N)` if one of the three crashed), uptime counter, and an **Auto-scroll** toggle.
 - **Agent API** — the direct llama-server address for agents (`http://127.0.0.1:8081/v1`). Click it to copy.
 - **API key** — click **click to copy** to put the key on the clipboard. The key itself is never shown.
 - **Three log panes** — live output from `llama-server` (top), the UVX proxy (middle), and the system prompt proxy (bottom). Drag the dividers to resize. The top pane header shows the active model name and PID.
+
+If a port the launcher needs (8080, 8081 or 8001) is still held by a leftover llama-server or proxy from an earlier run, the launcher stops it first. If any other program holds it, the launch is cancelled and the llama-server log pane names that program and its PID.
 
 ### Stopping
 Click **Exit Processes** to kill all three servers and return to the launcher screen.
@@ -186,7 +188,7 @@ All settings live in a single `config.json` next to the launcher:
 | `presets` | Saved launch presets |
 | `system_prompt` | System prompt injected into every Web UI chat request |
 | `mcpServers` | MCP tool definitions used by the UVX proxy |
-| `uvx_command` | The `uvx mcp-proxy` command run at launch (editable in Settings) |
+| `uvx_command` | The `uvx mcp-proxy` command run at launch (editable in Settings). `{config}` stands for the path to `config.json` |
 | `open_browser` | Whether to open the Web UI when the server comes online |
 | `last_model` | Remembered model selection between sessions |
 
