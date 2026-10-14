@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agents import paths, plans
@@ -264,7 +265,7 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(sorted(os.listdir(self.p("D"))), ["a", "b", "c"])
 
     # S3: empty_trash never follows links.
-    def test_s3_empty_trash_leaves_junction_targets_alone(self):
+    def _junction_in_trash_check(self):
         outside = os.path.join(self.tmp.name, "outside")
         outside_file = os.path.join(outside, "user_ro.txt")
         touch(outside_file, "keep")
@@ -282,6 +283,35 @@ class PlanTests(unittest.TestCase):
             self.assertFalse(os.stat(outside_file).st_mode & stat.S_IWRITE)
         finally:
             os.chmod(outside_file, stat.S_IWRITE | stat.S_IREAD)
+
+    def test_s3_empty_trash_leaves_junction_targets_alone(self):
+        self._junction_in_trash_check()
+
+    # T1: the link test must not depend on os.path.isjunction (missing before Python 3.12).
+    def test_t1_empty_trash_leaves_junction_targets_alone_without_isjunction(self):
+        with mock.patch.object(os.path, "isjunction", lambda p: False, create=True):
+            self._junction_in_trash_check()
+
+    # T2/T3: reserved device names and control characters are not plain paths.
+    def test_t2_reserved_device_names_are_rejected(self):
+        for name in ["CON", "aux.pdf", "Com1.log", "nul.txt", "LPT9", "prn", "CONIN$", "conout$", "COM9.tar.gz"]:
+            for path in (self.p(name), self.p(name, "x.txt")):
+                op = {"op": "move", "src": self.p("a.pdf"), "dst": path}
+                errors = plans.validate_plan([op], self.policy)
+                self.assertEqual(len(errors), 1, (path, errors))
+                self.assertIn("reserved", errors[0])
+        ok = {"op": "move", "src": self.p("a.pdf"), "dst": self.p("console.pdf")}
+        self.assertEqual(plans.validate_plan([ok], self.policy), [])
+
+    def test_t3_control_characters_are_rejected(self):
+        for name in ["a	b.txt", "x.txt", "y"]:
+            op = {"op": "move", "src": self.p("a.pdf"), "dst": self.p(name)}
+            errors = plans.validate_plan([op], self.policy)
+            self.assertEqual(len(errors), 1, (name, errors))
+            self.assertIn("control", errors[0])
+            log, error = plans.apply_plan([op], "20261014-000000-abcd", self.policy)
+            self.assertEqual(log, [])
+            self.assertIn("nothing changed", error)
 
     # R8: empty_trash copes with a missing folder, stray files and read-only files.
     def test_r8_empty_trash_edge_cases(self):

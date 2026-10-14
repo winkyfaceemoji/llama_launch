@@ -28,6 +28,8 @@ def _shape_error(op):
 
 
 _BAD_CHARS = set('*?"<>|')
+_DEVICE_NAMES = ({"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+                 | {f"COM{n}" for n in range(1, 10)} | {f"LPT{n}" for n in range(1, 10)})
 
 
 def _drive(path):
@@ -41,10 +43,15 @@ def _path_problem(op, policy):
         if not re.match(r"[A-Za-z]:[\\/]", path):
             return f"not a plain drive path (start with a drive letter, as in C:\\folder\\file): {path}"
         rest = path[2:]
+        if any(ord(c) < 32 for c in rest):
+            return f"not a plain path (control characters are not allowed): {path}"
         if ":" in rest or _BAD_CHARS & set(rest):
             return f"not a plain path (no : * ? \" < > | after the drive letter): {path}"
-        if any(part.endswith((".", " ")) for part in re.split(r"[\\/]", rest) if part):
+        parts = [part for part in re.split(r"[\\/]", rest) if part]
+        if any(part.endswith((".", " ")) for part in parts):
             return f"not a plain path (a name ends in a dot or space): {path}"
+        if any(part.split(".")[0].upper() in _DEVICE_NAMES for part in parts):
+            return f"not a plain path (reserved Windows device name): {path}"
     if op["op"] == "move" and _drive(op["src"]) != _drive(op["dst"]):
         return "moves across drives aren't supported"
     if op["op"] == "remove" and _drive(op["path"]) != _drive(policy.trash_dir):
@@ -192,7 +199,10 @@ def restore(log):
 
 
 def _is_link(path):
-    return os.path.islink(path) or getattr(os.path, "isjunction", lambda p: False)(path)
+    # Any reparse point (junction, symlink, mount point), on every Python version:
+    # os.path.isjunction only exists from 3.12 and islink is False for junctions.
+    attrs = getattr(os.lstat(path), "st_file_attributes", 0)
+    return os.path.islink(path) or bool(attrs & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
 
 
 def _retry_writable(func, path):
