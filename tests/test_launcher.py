@@ -3,6 +3,8 @@ import importlib.util
 import os
 import tempfile
 import unittest
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 _PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "launcher.pyw")
 _loader = importlib.machinery.SourceFileLoader("launcher", _PATH)
@@ -104,6 +106,21 @@ class PortOwnershipTests(unittest.TestCase):
     def test_other_programs_are_not_ours(self):
         self.assertFalse(launcher.is_own_process("python.exe", r"python.exe C:\other\server.py", r"C:\app"))
         self.assertFalse(launcher.is_own_process("node.exe", "", r"C:\app"))
+
+
+class EnsureAgentsServerTests(unittest.TestCase):
+    def test_adds_entry_once(self):
+        config = {"mcpServers": {"fetch": {"command": "uvx", "args": ["mcp-server-fetch"]}}}
+        self.assertTrue(launcher.ensure_agents_server(config, r"C:\app\agents\server.py"))
+        self.assertEqual(config["mcpServers"]["agents"],
+                         {"command": "uv", "args": ["run", "--script", r"C:\app\agents\server.py"]})
+        self.assertFalse(launcher.ensure_agents_server(config, r"C:\app\agents\server.py"))
+        self.assertIn("fetch", config["mcpServers"])
+
+    def test_updates_moved_path(self):
+        config = {"mcpServers": {"agents": {"command": "uv", "args": ["run", "--script", r"D:\old\server.py"]}}}
+        self.assertTrue(launcher.ensure_agents_server(config, r"C:\new\server.py"))
+        self.assertEqual(config["mcpServers"]["agents"]["args"][-1], r"C:\new\server.py")
 
 
 if __name__ == "__main__":

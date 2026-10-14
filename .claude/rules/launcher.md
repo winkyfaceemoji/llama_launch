@@ -15,6 +15,8 @@ paths: launcher.pyw
 - **`_free_port` only kills our own leftovers** (`is_own_process`: any `llama-server.exe`, or a command line containing this folder's path). Anything else on 8080/8081/8001 aborts the launch with its name and PID. It runs `netstat` and a PowerShell CIM query on the UI thread, so the window stalls briefly when a port is taken.
 - **mcp-proxy runs as `python.exe … mcp-proxy.exe --named-server-config <this folder>\config.json`**, so `is_own_process` recognises it by the config path.
 - **`uvx_command` uses a `{config}` placeholder** for the config path, resolved at launch by `resolve_uvx_command`, so moving the folder doesn't break MCP.
+- **The `agents` entry in `config.json`'s `mcpServers` is rewritten by `ensure_agents_server` on every launch** (absolute path to `agents\server.py`). mcp-proxy reads `mcpServers` itself, so the `{config}` placeholder trick can't apply; the entry is what makes the agents server follow the folder when it moves.
+- **`_kill_all` cancels unfinished agent jobs last, after the three processes are dead.** The agents server lives inside the UVX proxy process; only once it's gone is the launcher the sole writer of job files. The call is wrapped so a failure there (unreadable sandbox) can't stop the exit.
 - **Health:** `health_status` reports a crashed child by name before anything else; llama-server's `503` while loading shows as "loading model", not "offline".
 - `_kill_proc` uses `taskkill /T` because with `shell=True` the Popen PID is `cmd.exe`; `proc.kill()` would kill only the shell and leave llama-server running and holding VRAM.
 - Log panes are never trimmed; a very long session makes the UI slower (not the model).

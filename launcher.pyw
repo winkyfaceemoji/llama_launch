@@ -86,6 +86,7 @@ import secrets
 import threading
 import urllib.request
 import time
+from agents import jobs as agent_jobs, paths as agent_paths, plans as agent_plans, llm as agent_llm
 
 
 # ── System tray bootstrap (pystray + Pillow)
@@ -137,8 +138,8 @@ FONT_LOG    = ("Cascadia Code", 10)
 W           = 480
 H_SETUP     = 280    # height of the first-run setup screen
 H_CONFIG    = 270    # height of the main config view
-H_SETTINGS      = 375   # settings dialog, UVX collapsed
-H_SETTINGS_UVX  = 465   # settings dialog, UVX expanded
+H_SETTINGS      = 415   # settings dialog, UVX collapsed
+H_SETTINGS_UVX  = 505  # settings dialog, UVX expanded
 W_SETTINGS      = 460   # settings dialog width
 H_RUNNING   = 750    # height of the running/log view
 
@@ -153,6 +154,9 @@ CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.j
 # llama-server's API key. Without one, any web page open in the browser can
 # call the server on localhost (it allows every origin). Gitignored.
 API_KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "api_key.txt")
+
+# The agents MCP server (ADR 0006); mcp-proxy starts it from config.json.
+AGENTS_SERVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agents", "server.py")
 
 # llama-server's own OpenAI-compatible API. Agents connect here directly,
 # bypassing the system prompt proxy on 8080.
@@ -266,6 +270,17 @@ def load_presets(config: dict) -> dict:
 def resolve_uvx_command(cmd, config_file):
     # {config} lets the saved UVX command survive moving the launcher folder.
     return cmd.replace("{config}", config_file)
+
+
+def ensure_agents_server(config, server_path):
+    # Keep config.json's agents entry pointing at this folder's server.py.
+    # mcp-proxy reads mcpServers itself, so a {config}-style placeholder can't work here.
+    entry = {"command": "uv", "args": ["run", "--script", server_path]}
+    servers = config.setdefault("mcpServers", {})
+    if servers.get("agents") == entry:
+        return False
+    servers["agents"] = entry
+    return True
 
 
 def health_status(exit_codes, health):
@@ -644,7 +659,8 @@ class PresetDialog(tk.Toplevel):
 class SettingsDialog(tk.Toplevel):
     def __init__(self, parent, current_path, on_save,
                  uvx_command="", on_save_uvx=None,
-                 open_browser=True, on_set_open_browser=None):
+                 open_browser=True, on_set_open_browser=None,
+                 on_open_folders=None):
         super().__init__(parent)
         self.title("Settings")
         self.configure(bg=BG)
@@ -702,6 +718,12 @@ class SettingsDialog(tk.Toplevel):
 
         tk.Label(self, text="Open the browser automatically when the server comes online.",
                  font=FONT_SMALL, fg=TEXT_MUT, bg=BG).pack(padx=20, anchor="w", pady=(0, 14))
+
+        if on_open_folders:
+            agents_row = tk.Frame(self, bg=BG)
+            agents_row.pack(fill="x", padx=20, pady=(0, 14))
+            tk.Label(agents_row, text="Agent folders", font=FONT_SMALL, fg=TEXT_PRI, bg=BG).pack(side="left")
+            small_btn(agents_row, "Manage…", on_open_folders).pack(side="right")
 
         # UVX Settings: label + description + accordion toggle
         uvx_hdr = tk.Frame(self, bg=BG)
@@ -768,6 +790,51 @@ class SettingsDialog(tk.Toplevel):
         if self._on_save_uvx:
             self._on_save_uvx(self._uvx_text.get("1.0", "end").strip())
         self.destroy()
+
+
+class FoldersDialog(tk.Toplevel):
+    # Folders agents may read (and organise through approved plans).
+    def __init__(self, parent, policy):
+        super().__init__(parent)
+        self.title("Agent folders")
+        self.configure(bg=BG)
+        self.geometry(f"{W_SETTINGS}x320")
+        self.grab_set()
+        self._policy = policy
+        section_label(self, "FOLDERS AGENTS CAN READ").pack(fill="x", padx=20, pady=(20, 6))
+        tk.Label(self, text=f"Agents always write only to {policy.sandbox}. Local drives only.",
+                 font=FONT_SMALL, fg=TEXT_MUT, bg=BG, wraplength=W_SETTINGS - 40,
+                 justify="left").pack(padx=20, anchor="w")
+        self._list = tk.Listbox(self, font=FONT_MONO, bg=BG_INPUT, fg=TEXT_PRI, relief="flat",
+                                highlightthickness=1, highlightbackground=BORDER, height=8)
+        self._list.pack(fill="both", expand=True, padx=20, pady=10)
+        row = tk.Frame(self, bg=BG)
+        row.pack(fill="x", padx=20, pady=(0, 20))
+        flat_btn(row, "Add folder…", self._add).pack(side="left", padx=(0, 8))
+        small_btn(row, "Remove", self._remove).pack(side="left")
+        small_btn(row, "Close", self.destroy).pack(side="right")
+        self._refresh()
+
+    def _refresh(self):
+        self._list.delete(0, "end")
+        for f in self._policy.read_folders():
+            self._list.insert("end", f)
+
+    def _add(self):
+        path = filedialog.askdirectory(title="Let agents read this folder", parent=self)
+        if not path:
+            return
+        try:
+            self._policy.add_folder(path)
+        except ValueError as e:
+            messagebox.showerror("Not added", str(e), parent=self)
+        self._refresh()
+
+    def _remove(self):
+        sel = self._list.curselection()
+        if sel:
+            self._policy.remove_folder(self._list.get(sel[0]))
+            self._refresh()
 
 
 # ============================================================
@@ -906,6 +973,8 @@ class CommandLauncherGUI:
             'uvx mcp-proxy --named-server-config "{config}" --port 8001 --stateless'
         )
         self.api_key       = load_api_key(API_KEY_FILE)
+        self.agent_policy  = agent_paths.Policy(agent_paths.default_sandbox())
+        self.agent_policy.ensure_dirs()
         self.llama_cmd     = ""
         self._llama_proc   = None
         self._uvx_proc     = None
@@ -1088,6 +1157,7 @@ class CommandLauncherGUI:
             on_save_uvx=on_save_uvx,
             open_browser=self._open_browser,
             on_set_open_browser=self._set_open_browser,
+            on_open_folders=lambda: FoldersDialog(self.master, self.agent_policy),
         )
 
 
@@ -1413,6 +1483,12 @@ class CommandLauncherGUI:
         self._uvx_proc = None
         self._kill_proc(self._proxy_proc, getattr(self, "proxy_log", None))
         self._proxy_proc = None
+        # Jobs ran inside the UVX proxy's agents server, which is gone now.
+        # A failure here (e.g. unreadable sandbox) must never stop the exit.
+        try:
+            agent_jobs.JobStore(self.agent_policy.jobs_dir).cancel_unfinished()
+        except Exception:
+            pass
 
     def _on_close(self):
         # If servers are running and tray is available, minimize to tray instead of closing.
@@ -1476,6 +1552,8 @@ class CommandLauncherGUI:
         cwd = self.llama_dir if self.llama_dir else None
 
         try:
+            if ensure_agents_server(self.config, AGENTS_SERVER):
+                save_config(self.config)
             self._free_port(self.llama_cmd, 8081, self.llama_log)
             self._llama_proc = subprocess.Popen(
                 self.llama_cmd,
