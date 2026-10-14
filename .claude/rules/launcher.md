@@ -13,7 +13,7 @@ paths: launcher.pyw
 - **Preset `models` are case-insensitive substring keywords**, not exact filenames, even though the dialog stores full names. A short keyword like `"qwen"` matches every Qwen file.
 - **Vision models:** an `mmproj*.gguf` is only paired with models in the same *subfolder*; one sitting in the root models folder is ignored. Display names come from the file name, and the first one found wins (root before subfolders, then alphabetical).
 - **`_free_port` only kills our own leftovers** (`is_own_process`: any `llama-server.exe`, or a command line containing this folder's path). Anything else on 8080/8081/8001 aborts the launch with its name and PID. It runs `netstat` and a PowerShell CIM query on the UI thread, so the window stalls briefly when a port is taken.
-- **uvx leaves mcp-proxy running on its own:** `uvx` hands off to `mcp-proxy.exe`, which runs as a separate `python.exe`, so killing the `uvx` process tree can miss it. That's why the port check above treats a process whose command line contains this folder's `config.json` path as ours.
+- **mcp-proxy runs as `python.exe … mcp-proxy.exe --named-server-config <this folder>\config.json`**, so `is_own_process` recognises it by the config path.
 - **`uvx_command` uses a `{config}` placeholder** for the config path, resolved at launch by `resolve_uvx_command`, so moving the folder doesn't break MCP.
 - **Health:** `health_status` reports a crashed child by name before anything else; llama-server's `503` while loading shows as "loading model", not "offline".
 - `_kill_proc` uses `taskkill /T` because with `shell=True` the Popen PID is `cmd.exe`; `proc.kill()` would kill only the shell and leave llama-server running and holding VRAM.
