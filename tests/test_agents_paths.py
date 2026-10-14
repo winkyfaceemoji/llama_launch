@@ -62,6 +62,27 @@ class PolicyTests(unittest.TestCase):
         self.assertFalse(policy.can_change(os.path.join(paths.APP_DIR, "config.json")))
         self.assertFalse(policy.can_change(os.path.join(self.sandbox, "a.txt")))
 
+    def test_plans_may_not_change_a_listed_folder_itself(self):
+        self.assertFalse(self.policy.can_change(self.allowed))
+        self.assertTrue(self.policy.can_change(os.path.join(self.allowed, "sub")))
+
+    def test_plans_may_not_change_ancestors_of_launcher_folder(self):
+        grandparent = os.path.dirname(os.path.dirname(paths.APP_DIR))
+        policy = paths.Policy(self.sandbox, folders_file=os.path.join(self.tmp.name, "anc.json"))
+        policy.ensure_dirs()
+        policy.add_folder(grandparent)
+        self.assertFalse(policy.can_change(os.path.dirname(paths.APP_DIR)))
+        self.assertTrue(policy.can_change(os.path.join(grandparent, "unrelated-folder-for-test", "a.txt")))
+
+    def test_plans_may_not_change_ancestors_of_sandbox(self):
+        root = os.path.join(self.tmp.name, "listed")
+        sandbox = os.path.join(root, "mid", "sandbox")
+        policy = paths.Policy(sandbox, folders_file=os.path.join(self.tmp.name, "anc2.json"))
+        policy.ensure_dirs()
+        policy.add_folder(root)
+        self.assertFalse(policy.can_change(os.path.join(root, "mid")))
+        self.assertTrue(policy.can_change(os.path.join(root, "other", "a.txt")))
+
     def test_reads_skip_launcher_folder_under_listed_ancestor(self):
         root = self.tmp.name
         policy = paths.Policy(self.sandbox, folders_file=os.path.join(root, "app.json"))

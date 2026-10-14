@@ -1,7 +1,10 @@
 import os
+import shutil
+import stat
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agents import paths, plans
@@ -59,7 +62,7 @@ class PlanTests(unittest.TestCase):
         self.assertIsNone(error)
         self.assertTrue(os.path.exists(self.p("Docs", "a.pdf")))
         self.assertFalse(os.path.exists(self.p("b.tmp")))
-        self.assertTrue(log[2]["to"].startswith(os.path.join(self.policy.trash_dir, "20261014-000000-abcd")))
+        self.assertTrue(log[2]["to"].startswith(os.path.join(self.policy.trash_dir, "20261014-000000-abcd", "3")))
         self.assertEqual(plans.restore(log), [])
         self.assertTrue(os.path.exists(self.p("a.pdf")))
         self.assertTrue(os.path.exists(self.p("b.tmp")))
@@ -86,6 +89,150 @@ class PlanTests(unittest.TestCase):
     def test_empty_trash(self):
         plans.apply_plan([{"op": "remove", "path": self.p("a.pdf")}], "20261014-000000-abcd", self.policy)
         self.assertEqual(plans.empty_trash(self.policy), 1)
+        self.assertEqual(os.listdir(self.policy.trash_dir), [])
+
+    # R1: no operation may depend on another, except through mkdir parents.
+    def test_r1_overlapping_operations_are_rejected(self):
+        touch(self.p("D", "f"), "f")
+        touch(self.p("D", "g"), "g")
+        cases = [
+            [{"op": "move", "src": self.p("a.pdf"), "dst": self.p("x")},
+             {"op": "move", "src": self.p("b.tmp"), "dst": self.p("x")}],
+            [{"op": "remove", "path": self.p("D", "f")}, {"op": "remove", "path": self.p("D")}],
+            [{"op": "remove", "path": self.p("D")}, {"op": "remove", "path": self.p("D", "f")}],
+            [{"op": "mkdir", "path": self.p("Docs")},
+             {"op": "move", "src": self.p("a.pdf"), "dst": self.p("Docs")}],
+            [{"op": "mkdir", "path": self.p("Docs")}, {"op": "mkdir", "path": self.p("Docs")}],
+            [{"op": "mkdir", "path": self.p("Docs")},
+             {"op": "move", "src": self.p("Docs"), "dst": self.p("Docs2")}],
+        ]
+        for ops in cases:
+            errors = plans.validate_plan(ops, self.policy)
+            self.assertTrue(any("overlaps operation" in e for e in errors), (ops, errors))
+        errors = plans.validate_plan(cases[0], self.policy)
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("2:") and "operation 1" in errors[0], errors)
+
+    def test_r1_mkdir_parents_are_allowed(self):
+        ops = [{"op": "mkdir", "path": self.p("Docs")},
+               {"op": "move", "src": self.p("a.pdf"), "dst": self.p("Docs", "a.pdf")},
+               {"op": "move", "src": self.p("b.tmp"), "dst": self.p("Docs", "b.pdf")}]
+        self.assertEqual(plans.validate_plan(ops, self.policy), [])
+        nested = [{"op": "mkdir", "path": self.p("A")}, {"op": "mkdir", "path": self.p("A", "B")}]
+        self.assertEqual(plans.validate_plan(nested, self.policy), [])
+
+    # R2: apply re-checks every operation immediately before running it.
+    def test_r2_apply_does_not_overwrite_file_created_after_validation(self):
+        ops = [{"op": "move", "src": self.p("a.pdf"), "dst": self.p("y.pdf")}]
+        self.assertEqual(plans.validate_plan(ops, self.policy), [])
+        touch(self.p("y.pdf"), "USER NEW")
+        log, error = plans.apply_plan(ops, "20261014-000000-abcd", self.policy)
+        self.assertIn("step 1", error)
+        self.assertEqual(log, [])
+        with open(self.p("y.pdf")) as f:
+            self.assertEqual(f.read(), "USER NEW")
+        self.assertTrue(os.path.exists(self.p("a.pdf")))
+
+    def test_r2_apply_does_not_move_into_directory_created_after_validation(self):
+        ops = [{"op": "move", "src": self.p("a.pdf"), "dst": self.p("Q")}]
+        self.assertEqual(plans.validate_plan(ops, self.policy), [])
+        os.makedirs(self.p("Q"))
+        log, error = plans.apply_plan(ops, "20261014-000000-abcd", self.policy)
+        self.assertIsNotNone(error)
+        self.assertEqual(os.listdir(self.p("Q")), [])
+        self.assertTrue(os.path.exists(self.p("a.pdf")))
+
+    def test_r2_apply_stops_on_other_late_changes(self):
+        job = "20261014-000000-abcd"
+        os.makedirs(self.p("Docs"))
+        log, error = plans.apply_plan([{"op": "mkdir", "path": self.p("Docs")}], job, self.policy)
+        self.assertIsNotNone(error)
+        log, error = plans.apply_plan([{"op": "remove", "path": self.p("gone")}], job, self.policy)
+        self.assertIsNotNone(error)
+        log, error = plans.apply_plan([{"op": "move", "src": self.p("gone"), "dst": self.p("x")}], job, self.policy)
+        self.assertIsNotNone(error)
+        self.policy.remove_folder(self.dl)
+        log, error = plans.apply_plan([{"op": "remove", "path": self.p("a.pdf")}], job, self.policy)
+        self.assertIn("not allowed", error)
+        self.assertEqual(log, [])
+        self.assertTrue(os.path.exists(self.p("a.pdf")))
+
+    # R3: trash target is unique per operation.
+    def test_r3_removing_folder_after_its_child_does_not_nest_in_trash(self):
+        touch(self.p("D", "f"), "f")
+        touch(self.p("D", "g"), "g")
+        job = "20261014-000000-abcd"
+        ops = [{"op": "remove", "path": self.p("D", "f")}, {"op": "remove", "path": self.p("D")}]
+        log, error = plans.apply_plan(ops, job, self.policy)
+        self.assertIsNone(error)
+        self.assertTrue(log[0]["to"].startswith(os.path.join(self.policy.trash_dir, job, "1")))
+        self.assertTrue(log[1]["to"].startswith(os.path.join(self.policy.trash_dir, job, "2")))
+        self.assertFalse(log[1]["to"].startswith(log[0]["to"]))
+        self.assertEqual(plans.restore(log), [])
+        self.assertTrue(os.path.exists(self.p("D", "f")))
+        self.assertTrue(os.path.exists(self.p("D", "g")))
+        self.assertFalse(os.path.exists(self.p("D", "D")))
+
+    # R5: job ids that are not the job store's format are refused.
+    def test_r5_trash_path_rejects_bad_job_ids(self):
+        for bad in ["..\\x", "C:\\x", "", "20261014-000000-abcd\n", "20261014-000000-ABCD", "../../x", None]:
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                plans.trash_path(self.policy, bad, self.p("a.pdf"))
+        self.assertTrue(plans.trash_path(self.policy, "20261014-000000-abcd", self.p("a.pdf")).endswith("a.pdf"))
+        log, error = plans.apply_plan([{"op": "remove", "path": self.p("a.pdf")}], "..\\evil", self.policy)
+        self.assertIsNotNone(error)
+        self.assertTrue(os.path.exists(self.p("a.pdf")))
+
+    # R6: restore carries on past an entry that fails.
+    def test_r6_restore_continues_after_an_entry_fails(self):
+        touch(self.p("sub", "x.txt"), "x")
+        ops = [{"op": "remove", "path": self.p("a.pdf")}, {"op": "remove", "path": self.p("sub", "x.txt")}]
+        log, error = plans.apply_plan(ops, "20261014-000000-abcd", self.policy)
+        self.assertIsNone(error)
+        os.rmdir(self.p("sub"))
+        touch(self.p("sub"), "a file where the folder used to be")
+        skipped = plans.restore(log)
+        self.assertEqual(len(skipped), 1)
+        self.assertIn("could not restore " + self.p("sub", "x.txt"), skipped[0])
+        self.assertTrue(os.path.exists(self.p("a.pdf")))
+
+    # R7: a partly failed move reports the copy it left behind and deletes nothing.
+    def test_r7_partial_move_reports_the_copy(self):
+        def copy_then_fail(src, dst):
+            shutil.copy2(src, dst)
+            raise OSError("file is locked")
+
+        for op, dst in [({"op": "move", "src": self.p("a.pdf"), "dst": self.p("b.pdf")}, self.p("b.pdf")),
+                        ({"op": "remove", "path": self.p("a.pdf")}, None)]:
+            with mock.patch.object(plans.shutil, "move", side_effect=copy_then_fail):
+                log, error = plans.apply_plan([op], "20261014-000000-abcd", self.policy)
+            self.assertEqual(log, [])
+            target = dst or plans.trash_path(self.policy, "20261014-000000-abcd", self.p("a.pdf"), 1)
+            self.assertIn(f"A copy was left at {target}", error)
+            self.assertIn(f"the original is still at {self.p('a.pdf')}", error)
+            self.assertTrue(os.path.exists(target) and os.path.exists(self.p("a.pdf")))
+            os.unlink(target)
+
+    def test_r7_plain_failure_has_no_copy_note(self):
+        with mock.patch.object(plans.shutil, "move", side_effect=OSError("boom")):
+            log, error = plans.apply_plan([{"op": "remove", "path": self.p("a.pdf")}],
+                                          "20261014-000000-abcd", self.policy)
+        self.assertIn("step 1 failed", error)
+        self.assertNotIn("copy was left", error)
+
+    # R8: empty_trash copes with a missing folder, stray files and read-only files.
+    def test_r8_empty_trash_edge_cases(self):
+        shutil.rmtree(self.policy.trash_dir)
+        self.assertEqual(plans.empty_trash(self.policy), 0)
+        os.makedirs(self.policy.trash_dir)
+        touch(os.path.join(self.policy.trash_dir, "stray.txt"))
+        stray_ro = os.path.join(self.policy.trash_dir, "stray_ro.txt")
+        touch(stray_ro)
+        os.chmod(stray_ro, stat.S_IREAD)
+        plans.apply_plan([{"op": "remove", "path": self.p("a.pdf")}], "20261014-000000-abcd", self.policy)
+        trashed = plans.trash_path(self.policy, "20261014-000000-abcd", self.p("a.pdf"), 1)
+        os.chmod(trashed, stat.S_IREAD)
+        self.assertEqual(plans.empty_trash(self.policy), 3)
         self.assertEqual(os.listdir(self.policy.trash_dir), [])
 
 

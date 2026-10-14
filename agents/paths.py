@@ -89,9 +89,12 @@ class Policy:
         return is_inside(path, self.sandbox) and not self._system(path)
 
     def can_change(self, path):
-        # What an approved plan may touch: listed folders, never the sandbox
-        # or the launcher's own folder (config, key, folder list).
+        # What an approved plan may touch: strictly inside a listed folder (not
+        # the folder itself), never the sandbox or the launcher's own folder
+        # (config, key, folder list), and never a folder that contains either.
         return (is_local(path)
-                and any(is_inside(path, f) for f in self.read_folders())
+                and any(is_inside(path, f) and _real(path) != _real(f) for f in self.read_folders())
                 and not is_inside(path, self.sandbox)
-                and not is_inside(path, APP_DIR))
+                and not is_inside(path, APP_DIR)
+                and not is_inside(APP_DIR, path)
+                and not is_inside(self.sandbox, path))
