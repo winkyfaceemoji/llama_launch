@@ -60,16 +60,17 @@
 #
 # PRESET SYSTEM
 # -------------
-# Presets are stored in presets.json next to this file. Each preset has:
+# Presets are stored in config.json next to this file. Each preset has:
 #   - A name
 #   - A command template  (uses {model} as a placeholder for the model path)
-#   - A list of model keywords  (e.g. ["gemma"] — only shown when the selected
-#     model filename contains that word)
+#   - A list of model names  (only shown when the selected model matches one;
+#     an empty list matches every model)
 #
-# When the user picks a model, the preset dropdown automatically filters to
-# only show presets that are tagged for that model family. Selecting a preset
-# instantly builds the final launch command by substituting {model} with the
-# actual file path.
+# The "Auto" preset always exists and is pre-selected whenever a model is
+# picked. It leaves context size and GPU layers unset so llama-server's --fit
+# sizes them to the free VRAM. Other presets are optional manual overrides.
+# Selecting a preset builds the final launch command by substituting {model}
+# with the actual file path (and adding --mmproj for vision models).
 #
 # ============================================================
 # ── Standard library imports
@@ -149,47 +150,49 @@ H_RUNNING   = 750    # height of the running/log view
 MODELS_DIR  = "Models"  # resolved at runtime relative to llama_dir
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
+# llama-server's own OpenAI-compatible API. Agents connect here directly,
+# bypassing the system prompt proxy on 8080.
+AGENT_API_URL = "http://127.0.0.1:8081/v1"
+
 
 # ============================================================
 # SECTION 3 — CONFIG, PRESET & MODEL FILE HELPERS
 # ============================================================
 
+# Leaves -c and -ngl unset so llama-server's --fit picks the largest context
+# that fits in free VRAM. --context-shift and --swa-full stay off (both are
+# off by default): a full chat stops instead of silently dropping messages.
+AUTO_PRESET = "Auto (fit to VRAM)"
+AUTO_COMMAND = (
+    'llama-server -m "{model}" --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 '
+    '--webui-mcp-proxy --tools get_datetime --port 8081'
+)
+
 _DEFAULT_CONFIG = {
     "mcpServers": {
-        "time":       {"command": "uvx", "args": ["mcp-server-time", "--local-timezone=America/Chicago"]},
         "fetch":      {"command": "uvx", "args": ["mcp-server-fetch"]},
         "ddg-search": {"command": "uvx", "args": ["duckduckgo-mcp-server"]},
     },
     "system_prompt": (
-        "The current date and time is provided at the top of every message. "
+        "The current date is provided at the top of every message. "
         "Treat it as ground truth — do not estimate or assume the date from training memory.\n\n"
-        "You have real-time web access via three MCP tools: ddg-search, mcp-fetch, and mcp-time.\n\n"
+        "You have real-time web access via two MCP tools: ddg-search and fetch, "
+        "plus a built-in get_datetime tool.\n\n"
         "TOOL USAGE RULES:\n"
         "1. For any question involving facts, current events, people, software versions, prices, "
         "or anything that may have changed — use ddg-search BEFORE generating a response. "
         "Do not answer from training memory alone.\n"
         "2. Your training data is outdated. If search results conflict with your training knowledge, "
         "always trust the search results. Never override web results with what you think you know.\n"
-        "3. If a search result requires more detail, use mcp-fetch to read the full page content.\n"
-        "4. Use mcp-time only if you need precision timezone-aware time beyond what is already provided.\n"
+        "3. If a search result requires more detail, use fetch to read the full page content.\n"
+        "4. Use get_datetime only when you need the exact current time.\n"
         "5. Do not explain your tool usage to the user. Execute tools silently and respond based on what you find."
     ),
     "llama_dir": "",
-    "last_preset": "",
     "last_model": "",
+    "open_browser": True,
     "presets": {
-        "Default (any model, ctx 8192)": {
-            "command": 'llama-server -m "{model}" -c 8192 --jinja --webui-mcp-proxy --keep -1 --context-shift -ngl 999 --tools all --port 8081',
-            "models": [],
-        },
-        "Default Qwen (Q8_0, ctx 32768)": {
-            "command": 'llama-server -m "{model}" -c 32768 --jinja --webui-mcp-proxy --keep -1 --context-shift --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 -ngl 999 --tools all --port 8081',
-            "models": ["qwen"],
-        },
-        "Default Gemma (Q8_0, ctx 131072)": {
-            "command": 'llama-server -m "{model}" -c 131072 --jinja --webui-mcp-proxy --keep -1 --context-shift --swa-full --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 -ngl 999 --tools all --port 8081',
-            "models": ["gemma"],
-        },
+        AUTO_PRESET: {"command": AUTO_COMMAND, "models": []},
     },
 }
 
@@ -249,20 +252,49 @@ def load_presets(config: dict) -> dict:
                 "models": models
             }
 
-    # Ensure a catch-all preset always exists
-    _CATCHALL = "Default (any model, ctx 8192)"
-    if not any(not p.get("models") for p in migrated.values()):
-        migrated = {_CATCHALL: _DEFAULT_CONFIG["presets"][_CATCHALL], **migrated}
+    # The Auto preset always exists, so every model has a working default
+    if AUTO_PRESET not in migrated:
+        migrated = {AUTO_PRESET: {"command": AUTO_COMMAND, "models": []}, **migrated}
 
     return migrated
 
 
+def _is_extra_shard(filename):
+    # Split models load from their first shard; hide -00002-of-0000N and later.
+    m = re.search(r"-(\d{5})-of-\d{5}\.gguf$", filename, re.IGNORECASE)
+    return bool(m) and m.group(1) != "00001"
+
+
 def detect_models(llama_dir=""):
-    # Scan llama_dir directly for .gguf files.
+    # Returns {display name: (model path, mmproj path or None)}.
+    # Models live directly in the folder, or in a subfolder next to an
+    # mmproj*.gguf projector (llama-server's router layout), which enables
+    # image input. Projector files are never listed as models.
     models_dir = llama_dir if llama_dir else MODELS_DIR
+    found = {}
+
+    def scan(folder, with_mmproj):
+        try:
+            files = sorted(f for f in os.listdir(folder) if f.lower().endswith(".gguf"))
+        except OSError:
+            return
+        mmproj = None
+        if with_mmproj:
+            mmproj = next((os.path.join(folder, f) for f in files
+                           if f.lower().startswith("mmproj")), None)
+        for f in files:
+            if f.lower().startswith("mmproj") or _is_extra_shard(f):
+                continue
+            found.setdefault(f[:-5], (os.path.join(folder, f), mmproj))
+
     if not os.path.isdir(models_dir):
-        return []
-    return sorted(f for f in os.listdir(models_dir) if f.lower().endswith(".gguf"))
+        return found
+    scan(models_dir, with_mmproj=False)
+    for d in sorted(os.listdir(models_dir)):
+        sub = os.path.join(models_dir, d)
+        if os.path.isdir(sub):
+            scan(sub, with_mmproj=True)
+    return found
 
 
 def preset_matches_model(preset, model_filename):
@@ -357,51 +389,6 @@ class _MenuProxy:
 
     def add_command(self, label="", command=None):
         self._items.append((label, command or (lambda: None)))
-
-
-class SlideToggle(tk.Canvas):
-    """Compact sliding pill toggle between two labeled states."""
-    _W, _H = 130, 26
-
-    def __init__(self, parent, callback, initial=True):
-        super().__init__(parent, width=self._W, height=self._H,
-                         bg=BG_PANEL, highlightthickness=0, bd=0, cursor="hand2")
-        self._state    = initial
-        self._callback = callback
-        self._draw()
-        self.bind("<Button-1>", self._click)
-
-    def _pill(self, x1, y1, x2, y2, r, **kw):
-        r = min(r, (x2 - x1) // 2, (y2 - y1) // 2)
-        self.create_polygon(
-            x1 + r, y1,  x2 - r, y1,  x2, y1,
-            x2, y1 + r,  x2, y2 - r,  x2, y2,
-            x2 - r, y2,  x1 + r, y2,  x1, y2,
-            x1, y2 - r,  x1, y1 + r,  x1, y1,
-            smooth=True, **kw,
-        )
-
-    def _draw(self):
-        self.delete("all")
-        W, H, r, mid = self._W, self._H, self._H // 2, self._W // 2
-        self._pill(0, 0, W, H, r, fill=BG_INPUT)
-        if self._state:
-            self._pill(0, 0, mid, H, r, fill=ACCENT)
-        else:
-            self._pill(mid, 0, W, H, r, fill=ACCENT)
-        self.create_text(mid // 2, H // 2, text="Search",
-                         fill=BG if self._state else TEXT_MUT, font=FONT_SMALL)
-        self.create_text(mid + mid // 2, H // 2, text="Code",
-                         fill=BG if not self._state else TEXT_MUT, font=FONT_SMALL)
-
-    def _click(self, _):
-        self._state = not self._state
-        self._draw()
-        self._callback(self._state)
-
-    @property
-    def search_mode(self):
-        return self._state
 
 
 class DropdownButton(tk.Frame):
@@ -590,7 +577,7 @@ class PresetDialog(tk.Toplevel):
 class SettingsDialog(tk.Toplevel):
     def __init__(self, parent, current_path, on_save,
                  uvx_command="", on_save_uvx=None,
-                 search_mode=True, on_set_mode=None):
+                 open_browser=True, on_set_open_browser=None):
         super().__init__(parent)
         self.title("Settings")
         self.configure(bg=BG)
@@ -600,7 +587,7 @@ class SettingsDialog(tk.Toplevel):
 
         self._on_save        = on_save
         self._on_save_uvx    = on_save_uvx
-        self._on_set_mode    = on_set_mode
+        self._on_set_open_browser = on_set_open_browser
         self._uvx_expanded   = False
 
         # ── Llama.cpp folder ─────────────────────────────────────
@@ -630,21 +617,21 @@ class SettingsDialog(tk.Toplevel):
 
         btn_grp = tk.Frame(web_row, bg=BG)
         btn_grp.pack(side="right")
-        self._search_btn_dlg = tk.Button(
+        self._yes_btn_dlg = tk.Button(
             btn_grp, text="Yes", width=5,
             font=FONT_BTN_SM, relief="flat", bd=0, padx=6, pady=5, cursor="hand2",
-            command=lambda: self._set_mode_dlg(True),
+            command=lambda: self._set_open_browser_dlg(True),
         )
-        self._search_btn_dlg.pack(side="left", padx=(0, 3))
-        self._code_btn_dlg = tk.Button(
+        self._yes_btn_dlg.pack(side="left", padx=(0, 3))
+        self._no_btn_dlg = tk.Button(
             btn_grp, text="No", width=5,
             font=FONT_BTN_SM, relief="flat", bd=0, padx=6, pady=5, cursor="hand2",
-            command=lambda: self._set_mode_dlg(False),
+            command=lambda: self._set_open_browser_dlg(False),
         )
-        self._code_btn_dlg.pack(side="left")
+        self._no_btn_dlg.pack(side="left")
 
-        self._search_mode_dlg = search_mode
-        self._apply_mode_style()
+        self._open_browser_dlg = open_browser
+        self._apply_open_browser_style()
 
         tk.Label(self, text="Open the browser automatically when the server comes online.",
                  font=FONT_SMALL, fg=TEXT_MUT, bg=BG).pack(padx=20, anchor="w", pady=(0, 14))
@@ -673,23 +660,17 @@ class SettingsDialog(tk.Toplevel):
         flat_btn(self._btn_row, "Save", self._save, color=ACCENT, fg=BG).pack(side="left", padx=(0, 8))
         small_btn(self._btn_row, "Cancel", self.destroy).pack(side="left")
 
-    def _set_mode_dlg(self, search):
-        self._search_mode_dlg = search
-        self._apply_mode_style()
-        if self._on_set_mode:
-            self._on_set_mode(search)
+    def _set_open_browser_dlg(self, open_browser):
+        self._open_browser_dlg = open_browser
+        self._apply_open_browser_style()
+        if self._on_set_open_browser:
+            self._on_set_open_browser(open_browser)
 
-    def _apply_mode_style(self):
-        if self._search_mode_dlg:
-            self._search_btn_dlg.config(bg=ACCENT, fg=BG,
-                                        activebackground=ACCENT, activeforeground=BG)
-            self._code_btn_dlg.config(bg=BG_INPUT, fg=TEXT_SEC,
-                                      activebackground=BORDER, activeforeground=TEXT_PRI)
-        else:
-            self._search_btn_dlg.config(bg=BG_INPUT, fg=TEXT_SEC,
-                                        activebackground=BORDER, activeforeground=TEXT_PRI)
-            self._code_btn_dlg.config(bg=ACCENT, fg=BG,
-                                      activebackground=ACCENT, activeforeground=BG)
+    def _apply_open_browser_style(self):
+        on, off = (self._yes_btn_dlg, self._no_btn_dlg) if self._open_browser_dlg \
+            else (self._no_btn_dlg, self._yes_btn_dlg)
+        on.config(bg=ACCENT, fg=BG, activebackground=ACCENT, activeforeground=BG)
+        off.config(bg=BG_INPUT, fg=TEXT_SEC, activebackground=BORDER, activeforeground=TEXT_PRI)
 
     def _toggle_uvx_dlg(self):
         self._uvx_expanded = not self._uvx_expanded
@@ -851,7 +832,8 @@ class CommandLauncherGUI:
                 f"One or more presets in config.json are invalid:\n{e}\n\n"
                 "Proceeding with an empty preset list.")
             self.presets = {}
-        self._search_mode  = True
+        self._open_browser = self.config.get("open_browser", True)
+        self._models       = {}
         self.uvx_command   = self.config.get(
             "uvx_command",
             f'uvx mcp-proxy --named-server-config "{CONFIG_FILE}" --allow-origin "*" --port 8001 --stateless'
@@ -941,6 +923,16 @@ class CommandLauncherGUI:
             activebackground=BG_PANEL, activeforeground=TEXT_SEC,
             selectcolor=BG_INPUT, cursor="hand2").pack(side="right", padx=16, pady=8)
 
+        # Below the status bar: the direct API address for agents (bypasses the
+        # proxy, so no system prompt or date injection). Click to copy.
+        self.api_bar = tk.Frame(self.master, bg=BG)
+        tk.Label(self.api_bar, text="Agent API", font=FONT_SMALL,
+                 fg=TEXT_MUT, bg=BG).pack(side="left")
+        self._api_label = tk.Label(self.api_bar, text=AGENT_API_URL, font=FONT_MONO,
+                                   fg=ACCENT, bg=BG, cursor="hand2")
+        self._api_label.pack(side="left", padx=(8, 0))
+        self._api_label.bind("<Button-1>", lambda e: self._copy_api_url())
+
         # ── Rows 7–8: Running state (hidden until Launch is pressed)
         # Two stacked log panes separated by a draggable sash.
 
@@ -996,7 +988,7 @@ class CommandLauncherGUI:
         self.model_var.trace_add("write",  lambda *_: self._on_model_changed())
         self.preset_var.trace_add("write", lambda *_: self._load_preset())
 
-        self._refresh_preset_menu(init=True)
+        self._refresh_preset_menu(reset=True)
 
         # Set up system tray icon if available
         self._setup_tray()
@@ -1019,8 +1011,8 @@ class CommandLauncherGUI:
             self.master, self.llama_dir, on_save,
             uvx_command=self.uvx_command,
             on_save_uvx=on_save_uvx,
-            search_mode=self._search_mode,
-            on_set_mode=self._set_mode,
+            open_browser=self._open_browser,
+            on_set_open_browser=self._set_open_browser,
         )
 
 
@@ -1029,8 +1021,16 @@ class CommandLauncherGUI:
     def _resize_config(self):
         self.master.geometry(f"{W}x{H_CONFIG}")
 
-    def _set_mode(self, search):
-        self._search_mode = search
+    def _set_open_browser(self, open_browser):
+        self._open_browser = open_browser
+        self.config["open_browser"] = open_browser
+        save_config(self.config)
+
+    def _copy_api_url(self):
+        self.master.clipboard_clear()
+        self.master.clipboard_append(AGENT_API_URL)
+        self._api_label.config(text="copied")
+        self.master.after(1200, lambda: self._api_label.config(text=AGENT_API_URL))
 
 
     # ── Two-state view switching ──────────────────────────────
@@ -1041,10 +1041,11 @@ class CommandLauncherGUI:
             w.grid_remove()
         self.status_bar.grid(row=4, column=0,
                              sticky="ew", padx=16, pady=(10, 0))
-        self.master.grid_rowconfigure(5, weight=1)
-        self.log_pane.grid(row=5, column=0,
+        self.api_bar.grid(row=5, column=0, sticky="ew", padx=16, pady=(6, 0))
+        self.master.grid_rowconfigure(6, weight=1)
+        self.log_pane.grid(row=6, column=0,
                            sticky="nsew", padx=16, pady=(6, 6))
-        self.exit_btn.grid(row=6, column=0,
+        self.exit_btn.grid(row=7, column=0,
                            sticky="ew", padx=16, pady=(0, 14))
         self.master.resizable(True, True)
         self.master.geometry(f"{W}x{H_RUNNING}")
@@ -1055,8 +1056,9 @@ class CommandLauncherGUI:
         self._stop_health_poll()
         self._stop_elapsed()
         self.master.resizable(False, False)
-        self.master.grid_rowconfigure(5, weight=0)
+        self.master.grid_rowconfigure(6, weight=0)
         self.status_bar.grid_remove()
+        self.api_bar.grid_remove()
         self.log_pane.grid_remove()
         self.exit_btn.grid_remove()
         # Reset pane labels for the next launch
@@ -1071,11 +1073,11 @@ class CommandLauncherGUI:
     # ── Model & preset list management ───────────────────────
 
     def _refresh_models(self, init=False):
-        models = detect_models(self.llama_dir)
+        self._models = detect_models(self.llama_dir)
         menu = self.model_menu.menu
         menu.delete(0, "end")
-        if models:
-            display = [m[:-5] if m.lower().endswith(".gguf") else m for m in models]
+        if self._models:
+            display = sorted(self._models, key=str.lower)
             for d in display:
                 menu.add_command(label=d, command=lambda v=d: self.model_var.set(v))
             current = self.model_var.get()
@@ -1095,7 +1097,7 @@ class CommandLauncherGUI:
         if m and not m.startswith("("):
             self.config["last_model"] = m
             save_config(self.config)
-        self._refresh_preset_menu()
+        self._refresh_preset_menu(reset=True)
 
     def _filtered_presets(self):
         model = self.model_var.get()
@@ -1103,7 +1105,9 @@ class CommandLauncherGUI:
             return {}
         return {n: d for n, d in self.presets.items() if preset_matches_model(d, model)}
 
-    def _refresh_preset_menu(self, init=False):
+    def _refresh_preset_menu(self, reset=False):
+        # reset=True (startup, model change) always selects Auto; other presets
+        # are manual overrides and are not remembered between launches.
         filtered = self._filtered_presets()
         menu = self.preset_menu.menu
         menu.delete(0, "end")
@@ -1111,43 +1115,37 @@ class CommandLauncherGUI:
             for name in filtered:
                 menu.add_command(label=name, command=lambda v=name: self.preset_var.set(v))
             current = self.preset_var.get()
-            if init or not current or current not in filtered:
-                last = self.config.get("last_preset")
-                self._auto_preset_update = True
-                if init and last and last in filtered:
-                    self.preset_var.set(last)
-                else:
-                    self.preset_var.set(next(iter(filtered)))
-                self._auto_preset_update = False
+            if reset or current not in filtered:
+                self.preset_var.set(AUTO_PRESET if AUTO_PRESET in filtered else next(iter(filtered)))
             else:
                 self._load_preset()
         else:
             menu.add_command(label="(no matching presets)",
                              command=lambda: self.preset_var.set("(no matching presets)"))
-            self._auto_preset_update = True
             self.preset_var.set("(no matching presets)")
-            self._auto_preset_update = False
             self.llama_cmd = ""
 
     def _load_preset(self):
-        # Build the launch command by substituting {model} with the actual file path.
+        # Build the launch command by substituting {model} with the actual file
+        # path, and attach the model's mmproj projector when it has one.
         name  = self.preset_var.get()
-        model = self.model_var.get()
+        entry = self._models.get(self.model_var.get())
         if not name or name not in self.presets:
             return
-        template   = self.presets[name]["command"]
-        models_dir = self.llama_dir if self.llama_dir else "."
-        model_path = os.path.join(models_dir, model + ".gguf") if model and not model.startswith("(") else model
-        self.llama_cmd = template.replace("{model}", model_path)
-        if not getattr(self, "_auto_preset_update", False):
-            self.config["last_preset"] = name
-            save_config(self.config)
+        if entry is None:
+            self.llama_cmd = ""
+            return
+        model_path, mmproj = entry
+        cmd = self.presets[name]["command"].replace("{model}", model_path)
+        if mmproj and "--mmproj" not in cmd and not re.search(r"(^|\s)-mm\s", cmd):
+            cmd += f' --mmproj "{mmproj}"'
+        self.llama_cmd = cmd
 
 
     # ── Preset CRUD ───────────────────────────────────────────
 
     def _add_preset(self):
-        models = [m[:-5] if m.lower().endswith(".gguf") else m for m in detect_models(self.llama_dir)]
+        models = sorted(detect_models(self.llama_dir), key=str.lower)
         dlg = PresetDialog(self.master, "Add Preset", available_models=models)
         self.master.wait_window(dlg)
         if dlg.result_name:
@@ -1170,7 +1168,7 @@ class CommandLauncherGUI:
             messagebox.showwarning("No Preset", "Please select a preset to edit.")
             return
         data   = self.presets[name]
-        models = [m[:-5] if m.lower().endswith(".gguf") else m for m in detect_models(self.llama_dir)]
+        models = sorted(detect_models(self.llama_dir), key=str.lower)
         dlg    = PresetDialog(self.master, "Edit Preset", name=name,
                               command=data["command"],
                               model_keywords=data.get("models", []),
@@ -1196,6 +1194,10 @@ class CommandLauncherGUI:
         if not name or name not in self.presets:
             messagebox.showwarning("No Preset", "Please select a preset to delete.")
             return
+        if name == AUTO_PRESET:
+            messagebox.showinfo("Auto Preset",
+                "The Auto preset is the default for every model and can't be deleted.")
+            return
         if not messagebox.askyesno("Confirm Delete", f'Delete preset "{name}"?'):
             return
         del self.presets[name]
@@ -1220,7 +1222,7 @@ class CommandLauncherGUI:
                     if status == "ok":
                         color = SUCCESS
                         text  = "● online"
-                        if not browser_opened and self._search_mode:
+                        if not browser_opened and self._open_browser:
                             browser_opened = True
                             self.master.after(0, lambda: webbrowser.open("http://127.0.0.1:8080/"))
                     else:
@@ -1356,6 +1358,9 @@ class CommandLauncherGUI:
     def _stream_output(self, proc, widget):
         # Read the process's stdout line-by-line in a background thread and
         # schedule each line onto the main thread so tkinter stays thread-safe.
+        # This thread must keep draining the pipe: if it stopped, the pipe would
+        # fill and the child would block on its next write. Output is decoded as
+        # UTF-8 with errors="replace" so an odd byte can't kill it.
         def reader():
             try:
                 for line in proc.stdout:
@@ -1399,6 +1404,8 @@ class CommandLauncherGUI:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 cwd=cwd,
             )
             self._llama_label_var.set(f"llama-server  ·  {self.model_var.get()}  ·  PID {self._llama_proc.pid}")
@@ -1412,6 +1419,8 @@ class CommandLauncherGUI:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 cwd=cwd,
             )
             self._uvx_label_var.set(f"UVX Proxy  ·  PID {self._uvx_proc.pid}")
@@ -1422,13 +1431,14 @@ class CommandLauncherGUI:
             proxy_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "proxy.py")
             if not os.path.isfile(proxy_script):
                 raise FileNotFoundError(f"proxy.py not found at {proxy_script}")
-            mode = "search" if self._search_mode else "code"
             self._proxy_proc = subprocess.Popen(
-                [sys.executable, proxy_script, "8080", "8081", mode],
+                [sys.executable, proxy_script, "8080", "8081"],
                 shell=False,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
             self._proxy_label_var.set(f"System Prompt Proxy  ·  PID {self._proxy_proc.pid}")
             self._append_log(self.proxy_log, f"Launched (PID {self._proxy_proc.pid})")

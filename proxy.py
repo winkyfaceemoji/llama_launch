@@ -6,13 +6,11 @@ _SP = ""
 _UP = 8081
 
 
-def _load(mode="search"):
+def _load():
     cfg = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
     if os.path.isfile(cfg):
         with open(cfg, encoding="utf-8") as f:
-            data = json.load(f)
-            key = "code_system_prompt" if mode == "code" else "system_prompt"
-            return data.get(key, "")
+            return json.load(f).get("system_prompt", "")
     return ""
 
 
@@ -43,8 +41,10 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 d    = json.loads(body)
                 m    = d.get("messages", [])
-                now  = datetime.now().strftime("%A, %B %d, %Y %H:%M")
-                sp   = f"Current date and time: {now}\n\n{_SP}"
+                # date only: a per-minute timestamp at the top of the prompt would
+                # invalidate llama-server's prompt cache every minute
+                today = datetime.now().strftime("%A, %B %d, %Y")
+                sp    = f"Current date: {today}\n\n{_SP}"
                 if not m or m[0].get("role") != "system":
                     d["messages"] = [{"role": "system", "content": sp}] + m
                 else:
@@ -59,7 +59,8 @@ class Handler(BaseHTTPRequestHandler):
             hdrs["Content-Length"] = str(len(body))
 
         try:
-            conn = http.client.HTTPConnection("127.0.0.1", _UP, timeout=300)
+            # no timeout: long prompts can take minutes before the first byte
+            conn = http.client.HTTPConnection("127.0.0.1", _UP, timeout=None)
             conn.request(self.command, self.path, body=body, headers=hdrs)
             r = conn.getresponse()
             self.send_response(r.status)
@@ -68,7 +69,9 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_header(k, v)
             self.end_headers()
             while True:
-                chunk = r.read(4096)
+                # read1 returns whatever has arrived; read(n) would hold
+                # streamed tokens back until n bytes had accumulated
+                chunk = r.read1(65536)
                 if not chunk:
                     break
                 self.wfile.write(chunk)
@@ -91,10 +94,9 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     listen = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
     _UP    = int(sys.argv[2]) if len(sys.argv) > 2 else 8081
-    _mode  = sys.argv[3] if len(sys.argv) > 3 else "search"
 
-    _SP = _load(_mode)
+    _SP = _load()
     print(f"system prompt: {'loaded' if _SP else 'none'}", flush=True)
     print(f"proxy :{listen} -> :{_UP}", flush=True)
 
-    ThreadingHTTPServer(("0.0.0.0", listen), Handler).serve_forever()
+    ThreadingHTTPServer(("127.0.0.1", listen), Handler).serve_forever()
