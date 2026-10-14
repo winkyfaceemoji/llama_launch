@@ -7,7 +7,10 @@ from . import plans
 
 MAX_CALLS = 40
 MAX_SECONDS = 20 * 60
-MAX_RESULT_CHARS = 12000
+MAX_RESULT_CHARS = 6000
+CONTEXT_CHARS = 40000
+ELIDED = "[older tool result removed to save space]"
+TRUNCATED = "\n[truncated]"
 
 
 class Context:
@@ -34,48 +37,102 @@ def _invoke(fns, name, raw_args):
         return f"error: {type(e).__name__}: {e}"
 
 
+def _trim(messages):
+    """Keep the history inside CONTEXT_CHARS by dropping the oldest tool results (never the last 4 messages)."""
+    total = sum(len(m.get("content") or "") for m in messages)
+    for i in range(len(messages) - 4):
+        if total <= CONTEXT_CHARS:
+            break
+        m = messages[i]
+        if m.get("role") == "tool" and m.get("content") != ELIDED:
+            total -= len(m.get("content") or "") - len(ELIDED)
+            messages[i] = {**m, "content": ELIDED}
+
+
 def run_agent(chat, system, task, tools, max_calls=MAX_CALLS, max_seconds=MAX_SECONDS, clock=time.monotonic):
     schemas = [t[1] for t in tools]
     fns = {t[0]: t[2] for t in tools}
     messages = [{"role": "system", "content": system}, {"role": "user", "content": task}]
-    start, used = clock(), 0
+    start, used, turns, last_text = clock(), 0, 0, ""
+
+    def finish(text, reason):
+        text = text or last_text
+        if not text.strip():
+            reason = f"{reason}; the model gave no final answer" if reason else "the model gave no final answer"
+        return text, reason
+
     while True:
-        reply = chat(messages, schemas)
+        _trim(messages)
+        try:
+            reply = chat(messages, schemas)
+        except RuntimeError as e:
+            if turns == 0:
+                raise
+            return last_text, f"stopped: model error: {e}"
+        turns += 1
+        text = reply.get("content") or ""
+        if text.strip():
+            last_text = text
         requested = reply.get("tool_calls") or []
         if not requested:
-            return reply.get("content") or "", ""
-        messages.append({"role": "assistant", "content": reply.get("content") or "", "tool_calls": requested})
-        over_calls = used >= max_calls
-        if over_calls or clock() - start >= max_seconds:
-            reason = (f"stopped after {used} tool calls" if over_calls
-                      else f"stopped after {max_seconds // 60} minutes")
-            for c in requested:
-                messages.append({"role": "tool", "tool_call_id": c.get("id", ""), "content": "Limit reached."})
-            messages.append({"role": "user", "content": "You are out of tool calls. Write your final answer now from what you have."})
-            return chat(messages, None).get("content") or "", reason
+            return finish(text, "")
+        messages.append({"role": "assistant", "content": text, "tool_calls": requested})
+        timed_out, limited = clock() - start >= max_seconds, False
         for c in requested:
-            used += 1
-            fn = c.get("function", {})
-            messages.append({"role": "tool", "tool_call_id": c.get("id", ""),
-                             "content": _invoke(fns, fn.get("name"), fn.get("arguments"))})
+            call_id = c.get("id", "") if isinstance(c, dict) else ""
+            if timed_out or used >= max_calls:
+                limited, result = True, "Limit reached."
+            else:
+                used += 1
+                fn = c.get("function") if isinstance(c, dict) else None
+                if isinstance(fn, dict) and isinstance(fn.get("name"), str):
+                    result = _invoke(fns, fn["name"], fn.get("arguments"))
+                else:
+                    result = "error: malformed tool call"
+            messages.append({"role": "tool", "tool_call_id": call_id, "content": result})
+        if limited:
+            reason = (f"stopped after {used} tool calls" if used >= max_calls
+                      else f"stopped after {max_seconds // 60} minutes")
+            messages.append({"role": "user", "content": "You are out of tool calls. Write your final answer now from what you have."})
+            _trim(messages)
+            try:
+                return finish(chat(messages, None).get("content") or "", reason)
+            except RuntimeError as e:
+                return last_text, f"stopped: model error: {e}"
 
 
-def file_tools(policy):
+def _file_tools(policy, sandbox_only):
+    def full_path(path):
+        return path if os.path.isabs(path) else os.path.join(policy.sandbox, path)
+
+    def readable(full):
+        return policy.can_write(full) if sandbox_only else policy.can_read(full)
+
+    def no_access(path):
+        if sandbox_only:
+            return f"error: you can only read files you wrote inside {policy.sandbox}"
+        return f"error: no read access to {path}. Ask the user to add the folder."
+
     def list_dir(path):
-        if not policy.can_read(path):
-            return f"error: no read access to {path}. Ask the user to add the folder."
-        entries = sorted(os.scandir(path), key=lambda e: e.name.lower())[:500]
+        full = full_path(path)
+        if not readable(full):
+            return no_access(path)
+        entries = sorted(os.scandir(full), key=lambda e: e.name.lower())[:500]
         lines = [f"[dir] {e.name}" if e.is_dir() else f"{e.name}  ({e.stat().st_size} bytes)" for e in entries]
         return "\n".join(lines) or "(empty)"
 
     def read_file(path):
-        if not policy.can_read(path):
-            return f"error: no read access to {path}. Ask the user to add the folder."
-        with open(path, encoding="utf-8", errors="replace") as f:
-            return f.read(20000)
+        full = full_path(path)
+        if not readable(full):
+            return no_access(path)
+        with open(full, encoding="utf-8", errors="replace") as f:
+            text = f.read(MAX_RESULT_CHARS + 1)
+        if len(text) > MAX_RESULT_CHARS:
+            return text[:MAX_RESULT_CHARS - len(TRUNCATED)] + TRUNCATED
+        return text
 
     def write_file(path, content):
-        full = path if os.path.isabs(path) else os.path.join(policy.sandbox, path)
+        full = full_path(path)
         if not policy.can_write(full):
             return f"error: you can only write inside {policy.sandbox}"
         os.makedirs(os.path.dirname(full), exist_ok=True)
@@ -85,8 +142,18 @@ def file_tools(policy):
 
     s = {"type": "string"}
     return [tool("list_dir", "List a folder.", {"path": s}, ["path"], list_dir),
-            tool("read_file", "Read a text file (first 20,000 characters).", {"path": s}, ["path"], read_file),
+            tool("read_file", f"Read a text file (first {MAX_RESULT_CHARS:,} characters).", {"path": s}, ["path"], read_file),
             tool("write_file", "Write a file inside the sandbox.", {"path": s, "content": s}, ["path", "content"], write_file)]
+
+
+def file_tools(policy):
+    """Read the user's listed folders (and the sandbox), write the sandbox. Never combined with web tools."""
+    return _file_tools(policy, False)
+
+
+def sandbox_tools(policy):
+    """Read and write only inside the sandbox. These go with the web tools."""
+    return _file_tools(policy, True)
 
 
 def web_tools(mcp_call):
@@ -103,9 +170,11 @@ RESEARCH_PROMPT = (
     "then the findings, then a Sources list. Cite a source URL for every claim, and say where sources disagree.")
 
 PLAN_PROMPT = (
-    "You plan projects. Research as needed, then write a Markdown plan with numbered steps. Before your "
-    "final answer, call propose_steps once with follow-up jobs worth running, each either "
-    '{"kind": "research", "topic": "..."} or {"kind": "organize", "folder": "<absolute path>", "goal": "..."}.')
+    "You plan projects. Research as needed, then write a Markdown plan with numbered steps. You cannot look "
+    "inside the user's own folders. Before your final answer, call propose_steps once with follow-up jobs "
+    "worth running, each either "
+    '{"kind": "research", "topic": "..."} or {"kind": "organize", "folder": "<absolute path>", "goal": "..."}. '
+    "Name a folder in an organize step only if the goal text gives its path.")
 
 ORGANIZE_PROMPT = (
     "You organise files inside {folder}. Look around with list_dir and read_file, then call propose_plan "
@@ -122,7 +191,7 @@ REVIEW_PROMPT = (
 
 
 def run_research(job, ctx):
-    tools = web_tools(ctx.mcp_call) + file_tools(ctx.policy)
+    tools = web_tools(ctx.mcp_call) + sandbox_tools(ctx.policy)
     text, stop = run_agent(ctx.chat, RESEARCH_PROMPT, job["args"]["topic"], tools)
     ctx.store.write_text(job["id"], "result.md", text)
     ctx.store.update(job["id"], state="done", note=stop)
@@ -139,7 +208,7 @@ def run_plan(job, ctx):
         return f"saved {len(good)} follow-up jobs"
 
     steps_param = {"steps": {"type": "array", "items": {"type": "object"}}}
-    tools = web_tools(ctx.mcp_call) + file_tools(ctx.policy) + [
+    tools = web_tools(ctx.mcp_call) + sandbox_tools(ctx.policy) + [
         tool("propose_steps", "Save follow-up jobs for the user to queue.", steps_param, ["steps"], propose_steps)]
     text, stop = run_agent(ctx.chat, PLAN_PROMPT, job["args"]["goal"], tools)
     ctx.store.write_text(job["id"], "result.md", text)
@@ -185,13 +254,23 @@ def approve(job_id, ctx):
         ctx.store.transition(job_id, ("awaiting_approval",), "applying")
     except (KeyError, ValueError) as e:
         return f"Not applied: {e}"
-    ops = ctx.store.read_json(job_id, "plan.json")
-    errors = plans.validate_plan(ops, ctx.policy)
+    try:
+        ops = ctx.store.read_json(job_id, "plan.json")
+        errors = plans.validate_plan(ops, ctx.policy)
+    except Exception as e:
+        ctx.store.update(job_id, state="awaiting_approval", note=f"could not start applying: {type(e).__name__}: {e}")
+        return f"Not applied; nothing was changed: {type(e).__name__}: {e}"
     if errors:
         ctx.store.update(job_id, state="awaiting_approval", note="files changed since the plan was made")
         return "Not applied; the plan no longer matches the files:\n" + "\n".join(errors)
-    log, error = plans.apply_plan(ops, job_id, ctx.policy)
-    ctx.store.write_json(job_id, "applied.json", log)
+    try:
+        # The log is saved after every operation, so a crash still leaves something Restore can use.
+        log, error = plans.apply_plan(ops, job_id, ctx.policy,
+                                      on_step=lambda done: ctx.store.write_json(job_id, "applied.json", done))
+        ctx.store.write_json(job_id, "applied.json", log)
+    except Exception as e:
+        ctx.store.update(job_id, state="failed", note=f"apply failed: {type(e).__name__}: {e}")
+        return f"Apply failed: {type(e).__name__}: {e}. Restore undoes the completed steps."
     if error:
         ctx.store.update(job_id, state="failed", note=f"partly applied: {error}")
         return f"Partly applied ({len(log)} of {len(ops)}): {error}. Restore undoes the completed steps."
@@ -214,7 +293,11 @@ def undo(job_id, ctx):
         ctx.store.transition(job_id, ("applied", "failed"), "restoring")
     except (KeyError, ValueError) as e:
         return f"Not restored: {e}"
-    skipped = plans.restore(ctx.store.read_json(job_id, "applied.json"))
+    try:
+        skipped = plans.restore(ctx.store.read_json(job_id, "applied.json"))
+    except Exception as e:
+        ctx.store.update(job_id, state="failed", note=f"restore failed: {type(e).__name__}: {e}; try Restore again")
+        return f"Restore failed: {type(e).__name__}: {e}. You can try Restore again."
     ctx.store.update(job_id, state="restored", note=f"{len(skipped)} skipped" if skipped else "")
     return "Restored." + ("\nSkipped:\n" + "\n".join(skipped) if skipped else "")
 

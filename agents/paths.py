@@ -23,6 +23,11 @@ def is_inside(path, root):
     return p == r or p.startswith(r.rstrip("\\") + "\\")
 
 
+def _has_colon(path):
+    # A ':' after the drive prefix names an NTFS alternate data stream ("jobs:evil").
+    return ":" in os.path.splitdrive(os.path.abspath(path))[1]
+
+
 def is_local(path):
     # Check for UNC before realpath: resolving a dead share can hang.
     if os.path.abspath(path).startswith("\\\\"):
@@ -80,20 +85,21 @@ class Policy:
         return is_inside(path, self.jobs_dir) or is_inside(path, self.trash_dir)
 
     def can_read(self, path):
-        if not is_local(path):
+        if _has_colon(path) or not is_local(path):
             return False
         return ((is_inside(path, self.sandbox) or any(is_inside(path, f) for f in self.read_folders()))
                 and not is_inside(path, APP_DIR))
 
     def can_write(self, path):
-        return is_inside(path, self.sandbox) and not self._system(path)
+        return (not _has_colon(path) and is_inside(path, self.sandbox) and not self._system(path))
 
     def can_change(self, path):
         # What an approved plan may touch: strictly inside a listed folder (not
         # a listed folder itself, or one that contains another), never the sandbox or the launcher's own folder
         # (config, key, folder list), and never a folder that contains either.
         folders = self.read_folders()
-        return (is_local(path)
+        return (not _has_colon(path)
+                and is_local(path)
                 and any(is_inside(path, f) and _real(path) != _real(f) for f in folders)
                 and not any(is_inside(f, path) for f in folders)
                 and not is_inside(path, self.sandbox)

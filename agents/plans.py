@@ -154,26 +154,32 @@ def _stop_reason(op, policy):
     return None
 
 
-def apply_plan(ops, job_id, policy):
+def apply_plan(ops, job_id, policy, on_step=None):
+    """Run the plan; never raises. on_step(log) is called after each completed operation."""
     log = []
     for i, op in enumerate(ops, 1):
-        reason = _stop_reason(op, policy)
-        if reason:
-            return log, f"step {i} stopped, nothing changed by it: {reason}"
         try:
-            if op["op"] == "mkdir":
-                os.makedirs(op["path"])
-                log.append({"op": "mkdir", "path": op["path"]})
-            elif op["op"] == "move":
-                os.rename(op["src"], op["dst"])
-                log.append({"op": "move", "from": op["src"], "to": op["dst"]})
-            else:
-                to = trash_path(policy, job_id, op["path"], i)
-                os.makedirs(os.path.dirname(to), exist_ok=True)
-                os.rename(op["path"], to)
-                log.append({"op": "remove", "from": op["path"], "to": to})
-        except (OSError, ValueError) as e:
-            return log, f"step {i} failed, nothing changed by it: {e}"
+            reason = _stop_reason(op, policy)
+            if reason:
+                return log, f"step {i} stopped, nothing changed by it: {reason}"
+            try:
+                if op["op"] == "mkdir":
+                    os.makedirs(op["path"])
+                    log.append({"op": "mkdir", "path": op["path"]})
+                elif op["op"] == "move":
+                    os.rename(op["src"], op["dst"])
+                    log.append({"op": "move", "from": op["src"], "to": op["dst"]})
+                else:
+                    to = trash_path(policy, job_id, op["path"], i)
+                    os.makedirs(os.path.dirname(to), exist_ok=True)
+                    os.rename(op["path"], to)
+                    log.append({"op": "remove", "from": op["path"], "to": to})
+            except (OSError, ValueError) as e:
+                return log, f"step {i} failed, nothing changed by it: {e}"
+            if on_step:
+                on_step(log)
+        except Exception as e:
+            return log, f"step {i} failed: {type(e).__name__}: {e}"
     return log, None
 
 

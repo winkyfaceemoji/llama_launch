@@ -106,6 +106,15 @@ class PolicyTests(unittest.TestCase):
         self.assertFalse(self.policy.can_read(os.path.join(link, "a.txt")))
         self.assertFalse(self.policy.can_change(os.path.join(link, "a.txt")))
 
+    def test_colon_after_drive_is_refused(self):
+        # NTFS alternate data streams: "jobs:evil" would write into jobs\ itself.
+        self.assertFalse(self.policy.can_write(os.path.join(self.sandbox, "jobs:evil")))
+        self.assertFalse(self.policy.can_write(os.path.join(self.sandbox, "trash:evil")))
+        self.assertFalse(self.policy.can_write(os.path.join(self.sandbox, "note.md:stream")))
+        self.assertFalse(self.policy.can_read(os.path.join(self.allowed, "a.txt:stream")))
+        self.assertFalse(self.policy.can_change(os.path.join(self.allowed, "a.txt:stream")))
+        self.assertTrue(self.policy.can_write(os.path.join(self.sandbox, "note.md")))
+
     def test_network_paths_are_refused(self):
         self.assertFalse(paths.is_local(r"\\server\share\file.txt"))
         with self.assertRaises(ValueError):

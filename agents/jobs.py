@@ -87,6 +87,9 @@ class JobStore:
         for job in self.list():
             if job["state"] in UNFINISHED:
                 self.update(job["id"], state="cancelled", note="stopped when the servers exited")
+            elif job["state"] in ("applying", "restoring"):
+                self.update(job["id"], state="failed",
+                            note="interrupted while applying/restoring; use Restore to undo what ran")
 
     def has(self, job_id, name):
         return os.path.exists(self.path(job_id, name))

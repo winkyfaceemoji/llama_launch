@@ -48,6 +48,17 @@ class JobStoreTests(unittest.TestCase):
         self.assertEqual(self.store.get(a["id"])["state"], "cancelled")
         self.assertEqual(self.store.get(b["id"])["state"], "done")
 
+    def test_cancel_unfinished_fails_jobs_caught_applying_or_restoring(self):
+        a = self.store.create("organize", {})
+        b = self.store.create("organize", {})
+        self.store.update(a["id"], state="applying")
+        self.store.update(b["id"], state="restoring")
+        self.store.cancel_unfinished()
+        for job in (a, b):
+            got = self.store.get(job["id"])
+            self.assertEqual(got["state"], "failed")
+            self.assertIn("use Restore to undo what ran", got["note"])
+
     def test_list_newest_first_and_skips_junk(self):
         a = self.store.create("research", {})
         time.sleep(0.01)

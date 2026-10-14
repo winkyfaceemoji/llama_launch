@@ -76,6 +76,37 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(len(log), 1)
         self.assertIn("step 2", error)
 
+    def test_on_step_sees_log_after_each_operation(self):
+        seen = []
+        ops = [{"op": "remove", "path": self.p("a.pdf")}, {"op": "remove", "path": self.p("b.tmp")}]
+        log, error = plans.apply_plan(ops, "20261014-000000-abcd", self.policy,
+                                      on_step=lambda l: seen.append(len(l)))
+        self.assertIsNone(error)
+        self.assertEqual(seen, [1, 2])
+
+    def test_apply_never_raises(self):
+        real = self.policy.can_change
+
+        def flaky(path):
+            if path == self.p("b.tmp") and not os.path.exists(self.p("a.pdf")):
+                raise PermissionError("folder list is being saved")
+            return real(path)
+
+        ops = [{"op": "remove", "path": self.p("a.pdf")}, {"op": "remove", "path": self.p("b.tmp")}]
+        with mock.patch.object(self.policy, "can_change", flaky):
+            log, error = plans.apply_plan(ops, "20261014-000000-abcd", self.policy)
+        self.assertEqual(len(log), 1)
+        self.assertTrue(error.startswith("step 2 failed"), error)
+
+    def test_on_step_failure_ends_run_with_log_intact(self):
+        def boom(log):
+            raise OSError("disk full")
+
+        log, error = plans.apply_plan([{"op": "remove", "path": self.p("a.pdf")}], "20261014-000000-abcd",
+                                      self.policy, on_step=boom)
+        self.assertEqual(len(log), 1)
+        self.assertIn("step 1 failed", error)
+
     def test_restore_skips_occupied_paths(self):
         ops = [{"op": "remove", "path": self.p("a.pdf")}, {"op": "remove", "path": self.p("b.tmp")}]
         log, _ = plans.apply_plan(ops, "20261014-000000-abcd", self.policy)

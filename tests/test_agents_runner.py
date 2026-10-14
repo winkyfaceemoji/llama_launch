@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agents import jobs, paths, runner
@@ -25,7 +26,10 @@ class Script:
 
     def __call__(self, messages, tools=None):
         self.seen.append((list(messages), tools))
-        return self.replies.pop(0)
+        reply = self.replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
 
 
 class RunAgentTests(unittest.TestCase):
@@ -57,6 +61,80 @@ class RunAgentTests(unittest.TestCase):
         chat = Script(call("echo", {"text": "x"}), call("echo", {"text": "y"}), final("late"))
         text, stop = runner.run_agent(chat, "s", "t", [self.echo_tool()], max_seconds=1200, clock=lambda: next(ticks))
         self.assertIn("20 minutes", stop)
+
+    def test_old_tool_results_are_dropped_to_stay_in_budget(self):
+        big = runner.tool("big", "Big", {}, [], lambda: "x" * 10000)
+        chat = Script(*([call("big", {})] * 20), final("done"))
+        text, stop = runner.run_agent(chat, "s", "t", [big])
+        self.assertEqual((text, stop), ("done", ""))
+        limit = runner.CONTEXT_CHARS + runner.MAX_RESULT_CHARS
+        for messages, _ in chat.seen:
+            self.assertLessEqual(sum(len(m["content"]) for m in messages), limit)
+        last = chat.seen[-1][0]
+        self.assertEqual(last[3]["role"], "tool")
+        self.assertEqual(last[3]["content"], runner.ELIDED)
+        self.assertNotEqual(last[-1]["content"], runner.ELIDED)  # the newest result is kept
+
+    def test_model_error_after_first_turn_returns_what_it_has(self):
+        reply = call("echo", {"text": "x"})
+        reply["content"] = "working on it"
+        chat = Script(reply, RuntimeError("HTTP 400: context exceeded"))
+        text, stop = runner.run_agent(chat, "s", "t", [self.echo_tool()])
+        self.assertEqual(text, "working on it")
+        self.assertTrue(stop.startswith("stopped: model error"), stop)
+        self.assertIn("context exceeded", stop)
+
+    def test_model_error_on_first_turn_propagates(self):
+        with self.assertRaises(RuntimeError):
+            runner.run_agent(Script(RuntimeError("down")), "s", "t", [self.echo_tool()])
+
+    def test_model_error_on_final_answer_after_cap(self):
+        chat = Script(call("echo", {"text": "x"}), call("echo", {"text": "x"}), RuntimeError("boom"))
+        text, stop = runner.run_agent(chat, "s", "t", [self.echo_tool()], max_calls=1)
+        self.assertEqual(text, "")
+        self.assertTrue(stop.startswith("stopped: model error"), stop)
+
+    def test_parallel_calls_never_exceed_cap(self):
+        ran = []
+        counting = runner.tool("count", "Count", {}, [], lambda: ran.append(1) or "ok")
+        three = {"role": "assistant", "content": "", "tool_calls": [
+            {"id": f"c{i}", "type": "function", "function": {"name": "count", "arguments": "{}"}} for i in range(3)]}
+        chat = Script(three, final("wrapped up"))
+        text, stop = runner.run_agent(chat, "s", "t", [counting], max_calls=2)
+        self.assertEqual(len(ran), 2)
+        self.assertEqual(text, "wrapped up")
+        self.assertIn("2 tool calls", stop)
+        results = [m["content"] for m in chat.seen[-1][0] if m["role"] == "tool"]
+        self.assertEqual(results, ["ok", "ok", "Limit reached."])
+
+    def test_malformed_tool_call_shapes_return_error(self):
+        bad = {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "a", "function": None}, {"id": "b"}, {"id": "c", "function": {"name": 7, "arguments": "{}"}},
+            {"id": "d", "function": {"name": ["echo"], "arguments": "{}"}}]}
+        chat = Script(bad, final("ok"))
+        text, _ = runner.run_agent(chat, "s", "t", [self.echo_tool()])
+        self.assertEqual(text, "ok")
+        results = [m["content"] for m in chat.seen[1][0] if m["role"] == "tool"]
+        self.assertEqual(results, ["error: malformed tool call"] * 4)
+
+    def test_empty_final_answer_falls_back_to_earlier_text(self):
+        first = call("echo", {"text": "x"})
+        first["content"] = "draft findings"
+        text, stop = runner.run_agent(Script(first, final("")), "s", "t", [self.echo_tool()])
+        self.assertEqual(text, "draft findings")
+        self.assertEqual(stop, "")
+
+    def test_no_final_answer_is_noted(self):
+        text, stop = runner.run_agent(Script(final("")), "s", "t", [self.echo_tool()])
+        self.assertEqual(text, "")
+        self.assertIn("the model gave no final answer", stop)
+
+    def test_no_final_answer_after_cap_is_noted(self):
+        chat = Script(call("echo", {"text": "x"}), call("echo", {"text": "x"}), final(""))
+        text, stop = runner.run_agent(chat, "s", "t", [self.echo_tool()], max_calls=1)
+        self.assertEqual(text, "")
+        self.assertIn("1 tool calls", stop)
+        self.assertIn("the model gave no final answer", stop)
 
 
 class JobKindTests(unittest.TestCase):
@@ -148,6 +226,119 @@ class JobKindTests(unittest.TestCase):
         self.assertIn("already", runner.queue_steps(job["id"], self.ctx(Script()), submitted.append))
         self.assertEqual(len(submitted), 1)
         self.assertEqual(self.store.get(submitted[0])["args"], {"topic": "t"})
+
+    def test_model_error_mid_research_still_writes_result(self):
+        job = self.start("research", {"topic": "llama"})
+        reply = call("web_search", {"query": "llama"})
+        reply["content"] = "partial notes"
+        runner.run_job(job, self.ctx(Script(reply, RuntimeError("HTTP 400: context exceeded"))))
+        got = self.store.get(job["id"])
+        self.assertEqual(got["state"], "done")
+        self.assertTrue(got["note"].startswith("stopped: model error"), got["note"])
+        self.assertEqual(self.store.read_text(job["id"], "result.md"), "partial notes")
+
+    def test_model_error_mid_organize_without_plan_stays_failed(self):
+        job = self.start("organize", {"folder": self.dl, "goal": "tidy"})
+        runner.run_job(job, self.ctx(Script(call("list_dir", {"path": self.dl}), RuntimeError("down"))))
+        self.assertEqual(self.store.get(job["id"])["state"], "failed")
+
+    def read_attempt(self, kind, args, first_call):
+        job = self.start(kind, args)
+        chat = Script(first_call, final("ok"))
+        runner.run_job(job, self.ctx(chat))
+        return job, chat
+
+    def test_research_and_plan_cannot_read_listed_folders(self):
+        target = os.path.join(self.dl, "a.pdf")
+        for kind, args in (("research", {"topic": "t"}), ("plan", {"goal": "g"})):
+            for name, params in (("read_file", {"path": target}), ("list_dir", {"path": self.dl})):
+                _, chat = self.read_attempt(kind, args, call(name, params))
+                self.assertTrue(chat.seen[1][0][-1]["content"].startswith("error:"), (kind, name))
+            names = {t["function"]["name"] for t in chat.seen[0][1]}
+            self.assertLessEqual({"web_search", "fetch_url", "read_file"}, names)
+
+    def test_research_can_read_its_own_sandbox_files_but_not_job_records(self):
+        with open(os.path.join(self.policy.sandbox, "notes.md"), "w") as f:
+            f.write("my notes")
+        _, chat = self.read_attempt("research", {"topic": "t"}, call("read_file", {"path": "notes.md"}))
+        self.assertEqual(chat.seen[1][0][-1]["content"], "my notes")
+        job, _ = self.read_attempt("research", {"topic": "t"}, call("noop", {}))
+        record = os.path.join(self.policy.jobs_dir, job["id"], "job.json")
+        _, chat = self.read_attempt("research", {"topic": "t"}, call("read_file", {"path": record}))
+        self.assertTrue(chat.seen[1][0][-1]["content"].startswith("error:"))
+
+    def test_organize_has_no_web_tools_and_reads_listed_folders(self):
+        _, chat = self.read_attempt("organize", {"folder": self.dl, "goal": "g"},
+                                    call("list_dir", {"path": self.dl}))
+        names = {t["function"]["name"] for t in chat.seen[0][1]}
+        self.assertEqual(names, {"list_dir", "read_file", "write_file", "propose_plan"})
+        self.assertIn("a.pdf", chat.seen[1][0][-1]["content"])
+
+    def test_relative_paths_resolve_against_sandbox(self):
+        fns = {t[0]: t[2] for t in runner.file_tools(self.policy)}
+        fns["write_file"]("notes/x.md", "hello")
+        self.assertEqual(fns["read_file"]("notes/x.md"), "hello")
+        self.assertIn("x.md", fns["list_dir"]("notes"))
+
+    def test_read_file_truncation_is_marked_and_bounded(self):
+        fns = {t[0]: t[2] for t in runner.file_tools(self.policy)}
+        fns["write_file"]("long.txt", "y" * 20000)
+        fns["write_file"]("short.txt", "z" * 100)
+        out = fns["read_file"]("long.txt")
+        self.assertLessEqual(len(out), runner.MAX_RESULT_CHARS)
+        self.assertTrue(out.endswith("[truncated]"))
+        self.assertEqual(fns["read_file"]("short.txt"), "z" * 100)
+
+    def test_colon_paths_are_refused_by_file_tools(self):
+        fns = {t[0]: t[2] for t in runner.file_tools(self.policy)}
+        self.assertTrue(fns["write_file"]("jobs:evil", "x").startswith("error:"))
+
+    def test_crash_mid_apply_is_failed_and_restorable(self):
+        with open(os.path.join(self.dl, "b.pdf"), "w") as f:
+            f.write("y")
+        job_id = self.organize([{"op": "remove", "path": os.path.join(self.dl, "a.pdf")},
+                                {"op": "remove", "path": os.path.join(self.dl, "b.pdf")}])
+        a, b = os.path.join(self.dl, "a.pdf"), os.path.join(self.dl, "b.pdf")
+        real = self.policy.can_change
+
+        def flaky(path):
+            if path == b and not os.path.exists(a):
+                raise PermissionError("folder list is being saved")
+            return real(path)
+
+        ctx = self.ctx(Script())
+        with mock.patch.object(self.policy, "can_change", flaky):
+            runner.approve(job_id, ctx)
+        self.assertEqual(self.store.get(job_id)["state"], "failed")
+        self.assertEqual(len(self.store.read_json(job_id, "applied.json")), 1)
+        self.assertIn("Restored", runner.undo(job_id, ctx))
+        self.assertTrue(os.path.exists(a))
+        self.assertEqual(self.store.get(job_id)["state"], "restored")
+
+    def test_approve_that_cannot_start_returns_to_awaiting_approval(self):
+        job_id = self.organize([{"op": "remove", "path": os.path.join(self.dl, "a.pdf")}])
+        self.store.write_text(job_id, "plan.json", "{not json")
+        out = runner.approve(job_id, self.ctx(Script()))
+        self.assertIn("Not applied", out)
+        got = self.store.get(job_id)
+        self.assertEqual(got["state"], "awaiting_approval")
+        self.assertTrue(got["note"])
+        self.assertTrue(os.path.exists(os.path.join(self.dl, "a.pdf")))
+
+    def test_undo_crash_marks_failed_and_can_retry(self):
+        job_id = self.organize([{"op": "remove", "path": os.path.join(self.dl, "a.pdf")}])
+        ctx = self.ctx(Script())
+        runner.approve(job_id, ctx)
+        good = self.store.read_json(job_id, "applied.json")
+        self.store.write_json(job_id, "applied.json", [{"op": "move"}])  # no "from"
+        runner.undo(job_id, ctx)
+        got = self.store.get(job_id)
+        self.assertEqual(got["state"], "failed")
+        self.assertTrue(got["note"].startswith("restore failed"), got["note"])
+        self.assertTrue(got["note"].endswith("try Restore again"))
+        self.store.write_json(job_id, "applied.json", good)
+        self.assertIn("Restored", runner.undo(job_id, ctx))
+        self.assertTrue(os.path.exists(os.path.join(self.dl, "a.pdf")))
 
 
 if __name__ == "__main__":
