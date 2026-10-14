@@ -31,3 +31,4 @@ Tkinter launcher (`launcher.pyw`) that starts llama-server, the system prompt pr
 - [0003](docs/adr/0003-no-context-shift-or-swa-full.md) `--context-shift` and `--swa-full` stay off
 - [0004](docs/adr/0004-proxy-injects-date-only.md) Proxy injects the date only; exact time comes from `--tools get_datetime`
 - [0005](docs/adr/0005-api-key-and-no-mcp-cors.md) API key on llama-server; MCP proxy sends no CORS headers
+- [0006](docs/adr/0006-local-agents.md) Local agents run as an MCP server behind the Web UI; sandbox writes, plan-approve-apply, per-job trash
