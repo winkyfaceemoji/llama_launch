@@ -1,0 +1,69 @@
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from agents import paths
+
+
+class PolicyTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = self.tmp.name
+        self.sandbox = os.path.join(root, "sandbox")
+        self.allowed = os.path.join(root, "allowed")
+        self.outside = os.path.join(root, "outside")
+        for d in (self.allowed, self.outside):
+            os.makedirs(d)
+        self.policy = paths.Policy(self.sandbox, folders_file=os.path.join(root, "folders.json"))
+        self.policy.ensure_dirs()
+        self.policy.add_folder(self.allowed)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_reads_only_sandbox_and_listed_folders(self):
+        self.assertTrue(self.policy.can_read(os.path.join(self.allowed, "a.txt")))
+        self.assertTrue(self.policy.can_read(os.path.join(self.sandbox, "notes.md")))
+        self.assertFalse(self.policy.can_read(os.path.join(self.outside, "a.txt")))
+
+    def test_sibling_with_same_prefix_is_not_inside(self):
+        self.assertFalse(self.policy.can_read(self.allowed + "2"))
+
+    def test_writes_only_in_sandbox_outside_system_folders(self):
+        self.assertTrue(self.policy.can_write(os.path.join(self.sandbox, "report.md")))
+        self.assertFalse(self.policy.can_write(os.path.join(self.policy.jobs_dir, "x", "job.json")))
+        self.assertFalse(self.policy.can_write(os.path.join(self.policy.trash_dir, "x")))
+        self.assertFalse(self.policy.can_write(os.path.join(self.allowed, "a.txt")))
+
+    def test_plans_may_change_listed_folders_only(self):
+        self.assertTrue(self.policy.can_change(os.path.join(self.allowed, "a.txt")))
+        self.assertFalse(self.policy.can_change(os.path.join(self.sandbox, "a.txt")))
+        self.assertFalse(self.policy.can_change(os.path.join(paths.APP_DIR, "config.json")))
+
+    def test_junction_escape_is_refused(self):
+        link = os.path.join(self.allowed, "escape")
+        subprocess.run(["cmd", "/c", "mklink", "/J", link, self.outside], check=True, capture_output=True)
+        self.assertFalse(self.policy.can_read(os.path.join(link, "a.txt")))
+        self.assertFalse(self.policy.can_change(os.path.join(link, "a.txt")))
+
+    def test_network_paths_are_refused(self):
+        self.assertFalse(paths.is_local(r"\\server\share\file.txt"))
+        with self.assertRaises(ValueError):
+            self.policy.add_folder(r"\\server\share")
+
+    def test_folder_list_round_trip(self):
+        self.policy.add_folder(self.allowed)  # duplicate is ignored
+        self.assertEqual(len(self.policy.read_folders()), 1)
+        self.policy.remove_folder(self.allowed)
+        self.assertEqual(self.policy.read_folders(), [])
+
+    def test_missing_folder_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.policy.add_folder(os.path.join(self.outside, "nope"))
+
+
+if __name__ == "__main__":
+    unittest.main()
