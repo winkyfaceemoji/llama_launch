@@ -155,7 +155,8 @@ CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.j
 # call the server on localhost (it allows every origin). Gitignored.
 API_KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "api_key.txt")
 
-# The agents MCP server (ADR 0006); mcp-proxy starts it from config.json.
+# The agents MCP server (ADR 0007). The launcher starts it on 127.0.0.1:8002
+# (agent_llm.AGENTS_PORT) as a fourth process; its log goes to the UVX pane.
 AGENTS_SERVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agents", "server.py")
 
 # llama-server's own OpenAI-compatible API. Agents connect here directly,
@@ -272,15 +273,21 @@ def resolve_uvx_command(cmd, config_file):
     return cmd.replace("{config}", config_file)
 
 
-def ensure_agents_server(config, server_path):
-    # Keep config.json's agents entry pointing at this folder's server.py.
-    # mcp-proxy reads mcpServers itself, so a {config}-style placeholder can't work here.
-    entry = {"command": "uv", "args": ["run", "--script", server_path]}
-    servers = config.setdefault("mcpServers", {})
-    if servers.get("agents") == entry:
-        return False
-    servers["agents"] = entry
-    return True
+def remove_stale_agents_entry(config):
+    # The agents server used to run inside mcp-proxy from config.json's mcpServers.
+    # The launcher starts it itself now (ADR 0007), so drop that old entry.
+    return config.get("mcpServers", {}).pop("agents", None) is not None
+
+
+def empty_trash_refusal(jobs, busy):
+    # Why Empty trash must wait, or None. A running apply or restore moves files
+    # into or out of the trash; deleting under it loses them for good.
+    if busy:
+        return "An approval or restore from this pane is still running. Wait for it to finish."
+    moving = [f"{j['id']} ({j['state']})" for j in jobs if j.get("state") in ("applying", "restoring")]
+    if moving:
+        return "These jobs are still moving files:\n" + "\n".join(moving) + "\nWait for them to finish."
+    return None
 
 
 def job_actions(job, has_result, has_applied_log, has_steps):
@@ -1020,6 +1027,7 @@ class CommandLauncherGUI:
         self._llama_proc   = None
         self._uvx_proc     = None
         self._proxy_proc   = None
+        self._agents_proc  = None
         self._polling      = False
         self._launch_time  = None
         self._agents_busy  = False
@@ -1444,7 +1452,7 @@ class CommandLauncherGUI:
                 except Exception:
                     health = "offline"
                 procs = {"llama-server": self._llama_proc, "UVX proxy": self._uvx_proc,
-                         "prompt proxy": self._proxy_proc}
+                         "prompt proxy": self._proxy_proc, "agents server": self._agents_proc}
                 codes = {n: p.poll() for n, p in procs.items() if p is not None}
                 text, level = health_status(codes, health)
                 if level == "ok" and not browser_opened and self._open_browser:
@@ -1513,7 +1521,7 @@ class CommandLauncherGUI:
 
     # ── Jobs pane ─────────────────────────────────────────────
     # Reads job files directly, but every state change (apply, reject,
-    # restore, queue) goes through the agents server's MCP tools.
+    # restore, queue) goes through the agents server's key-checked routes.
 
     def _jobs_store(self):
         return agent_jobs.JobStore(self.agent_policy.jobs_dir)
@@ -1578,13 +1586,14 @@ class CommandLauncherGUI:
         for key, b in self._job_buttons.items():
             b.config(state=tk.NORMAL if key in allowed else tk.DISABLED)
 
-    def _call_agents(self, tool, job_id):
+    def _call_agents(self, action, job_id):
         # The agents server owns job state; go through it so approvals can't race.
+        # Plans are approved only here, where the full plan is shown (ADR 0007).
         if self._agents_busy:
             return
         self._agents_busy = True
         self._update_job_buttons()
-        timeout = 900 if tool in ("apply", "restore") else 120
+        timeout = 900 if action in ("apply", "restore") else 120
 
         def done(msg):
             self._agents_busy = False
@@ -1593,7 +1602,7 @@ class CommandLauncherGUI:
 
         def work():
             try:
-                msg = agent_llm.mcp_call("agents", tool, {"job_id": job_id}, timeout=timeout)
+                msg = agent_llm.agents_action(action, job_id, timeout=timeout)
             except Exception as e:
                 msg = f"The agents server returned an error: {e}"
             self.master.after(0, lambda: done(msg))
@@ -1614,7 +1623,7 @@ class CommandLauncherGUI:
             if messagebox.askyesno("Restore", "Put every file this job moved or removed back where it was?"):
                 self._call_agents("restore", job["id"])
         elif key == "queue":
-            self._call_agents("queue_steps", job["id"])
+            self._call_agents("queue", job["id"])
 
     def _review_plan(self, job):
         store = self._jobs_store()
@@ -1653,11 +1662,26 @@ class CommandLauncherGUI:
         small_btn(row, "Reject", lambda: (dlg.destroy(), self._call_agents("reject", job["id"]))).pack(side="left", padx=8)
         small_btn(row, "Close", dlg.destroy).pack(side="right")
 
+    def _empty_trash_refusal(self):
+        try:
+            jobs = self._jobs_store().list()
+        except Exception as e:
+            return f"Couldn't check whether a job is still moving files:\n{e}"
+        return empty_trash_refusal(jobs, self._agents_busy)
+
     def _empty_trash(self):
+        why = self._empty_trash_refusal()
+        if why:
+            messagebox.showwarning("Empty trash", why)
+            return
         if messagebox.askyesno("Empty trash",
                                f"Permanently delete everything in {self.agent_policy.trash_dir}?\n"
                                "Jobs whose files are in there can no longer be restored.",
                                default="no"):
+            why = self._empty_trash_refusal()  # chat may have started a restore meanwhile
+            if why:
+                messagebox.showwarning("Empty trash", why)
+                return
             try:
                 n = agent_plans.empty_trash(self.agent_policy)
             except OSError as e:
@@ -1688,7 +1712,7 @@ class CommandLauncherGUI:
             subprocess.run(f"taskkill /F /T /PID {pid}", shell=True, capture_output=True)
             self._append_log(widget, f"  Port {port} was in use — freed PID {pid} ({name})")
 
-    def _kill_proc(self, proc, widget=None):
+    def _kill_proc(self, proc, widget=None, prefix=""):
         # Kill a process and its full child tree (/T) — ensures GPU workers are also stopped.
         if proc is None:
             return
@@ -1696,10 +1720,10 @@ class CommandLauncherGUI:
             subprocess.run(f"taskkill /F /T /PID {proc.pid}",
                            shell=True, capture_output=True)
             if widget:
-                self._append_log(widget, f"─── killed (PID {proc.pid}) ───")
+                self._append_log(widget, f"{prefix}─── killed (PID {proc.pid}) ───")
         except Exception as e:
             if widget:
-                self._append_log(widget, f"─── kill failed: {e} ───")
+                self._append_log(widget, f"{prefix}─── kill failed: {e} ───")
 
     def _kill_all(self):
         self._kill_proc(self._llama_proc, getattr(self, "llama_log", None))
@@ -1708,7 +1732,9 @@ class CommandLauncherGUI:
         self._uvx_proc = None
         self._kill_proc(self._proxy_proc, getattr(self, "proxy_log", None))
         self._proxy_proc = None
-        # Jobs ran inside the UVX proxy's agents server, which is gone now.
+        self._kill_proc(self._agents_proc, getattr(self, "uvx_log", None), "[agents] ")
+        self._agents_proc = None
+        # Jobs ran inside the agents server, which is gone now (so it can't race these writes).
         # A failure here (e.g. unreadable sandbox) must never stop the exit.
         try:
             agent_jobs.JobStore(self.agent_policy.jobs_dir).cancel_unfinished()
@@ -1717,7 +1743,8 @@ class CommandLauncherGUI:
 
     def _on_close(self):
         # If servers are running and tray is available, minimize to tray instead of closing.
-        if (self._llama_proc is not None or self._uvx_proc is not None or self._proxy_proc is not None) and _TRAY_AVAILABLE:
+        running = (self._llama_proc, self._uvx_proc, self._proxy_proc, self._agents_proc)
+        if any(p is not None for p in running) and _TRAY_AVAILABLE:
             self._hide_to_tray()
         else:
             if hasattr(self, "_llama_proc"):
@@ -1735,24 +1762,52 @@ class CommandLauncherGUI:
             widget.see("end")
         widget.config(state=tk.DISABLED)
 
-    def _stream_output(self, proc, widget):
+    def _stream_output(self, proc, widget, prefix=""):
         # Read the process's stdout line-by-line in a background thread and
         # schedule each line onto the main thread so tkinter stays thread-safe.
         # This thread must keep draining the pipe: if it stopped, the pipe would
         # fill and the child would block on its next write. Output is decoded as
-        # UTF-8 with errors="replace" so an odd byte can't kill it.
+        # UTF-8 with errors="replace" so an odd byte can't kill it. prefix marks
+        # lines from a process that shares a pane (the agents server).
         def reader():
             try:
                 for line in proc.stdout:
-                    line = line.rstrip("\r\n")
+                    line = prefix + line.rstrip("\r\n")
                     widget.after(0, lambda l=line: self._append_log(widget, l))
             except Exception:
                 pass
-            widget.after(0, lambda: self._append_log(widget, "─── process ended ───"))
+            widget.after(0, lambda: self._append_log(widget, f"{prefix}─── process ended ───"))
         threading.Thread(target=reader, daemon=True).start()
 
 
     # ── Launch sequence ───────────────────────────────────────
+
+    def _start_agents_server(self):
+        # Optional (ADR 0007): any failure is logged and the launch carries on.
+        # A crash after start shows in the status bar as "agents server exited".
+        if self._agents_error:
+            self._append_log(self.uvx_log, f"[agents] not started: {self._agents_error}")
+            return
+        port = agent_llm.AGENTS_PORT
+        try:
+            self._free_port(f"--port {port}", port, self.uvx_log)
+            self._agents_proc = subprocess.Popen(
+                ["uv", "run", "--script", AGENTS_SERVER, "--port", str(port)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                cwd=os.path.dirname(os.path.abspath(__file__)),
+                creationflags=subprocess.CREATE_NO_WINDOW,  # no shell, so hide uv's console
+            )
+        except Exception as e:
+            self._agents_proc = None
+            self._append_log(self.uvx_log, f"[agents] not started: {e}")
+            return
+        self._uvx_label_var.set(f"{self._uvx_label_var.get()}  ·  agents PID {self._agents_proc.pid}")
+        self._append_log(self.uvx_log, f"[agents] launched on 127.0.0.1:{port} (PID {self._agents_proc.pid})")
+        self._stream_output(self._agents_proc, self.uvx_log, "[agents] ")
 
     def run_commands(self):
         uvx_cmd = resolve_uvx_command(self.uvx_command.strip(), CONFIG_FILE)
@@ -1777,7 +1832,7 @@ class CommandLauncherGUI:
         cwd = self.llama_dir if self.llama_dir else None
 
         try:
-            if ensure_agents_server(self.config, AGENTS_SERVER):
+            if remove_stale_agents_entry(self.config):
                 save_config(self.config)
             self._free_port(self.llama_cmd, 8081, self.llama_log)
             self._llama_proc = subprocess.Popen(
@@ -1808,6 +1863,8 @@ class CommandLauncherGUI:
             self._uvx_label_var.set(f"UVX Proxy  ·  PID {self._uvx_proc.pid}")
             self._append_log(self.uvx_log, f"Launched (PID {self._uvx_proc.pid})")
             self._stream_output(self._uvx_proc, self.uvx_log)
+
+            self._start_agents_server()
 
             self._free_port("--port 8080", 8080, self.proxy_log)
             proxy_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "proxy.py")

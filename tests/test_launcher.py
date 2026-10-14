@@ -108,19 +108,38 @@ class PortOwnershipTests(unittest.TestCase):
         self.assertFalse(launcher.is_own_process("node.exe", "", r"C:\app"))
 
 
-class EnsureAgentsServerTests(unittest.TestCase):
-    def test_adds_entry_once(self):
-        config = {"mcpServers": {"fetch": {"command": "uvx", "args": ["mcp-server-fetch"]}}}
-        self.assertTrue(launcher.ensure_agents_server(config, r"C:\app\agents\server.py"))
-        self.assertEqual(config["mcpServers"]["agents"],
-                         {"command": "uv", "args": ["run", "--script", r"C:\app\agents\server.py"]})
-        self.assertFalse(launcher.ensure_agents_server(config, r"C:\app\agents\server.py"))
-        self.assertIn("fetch", config["mcpServers"])
+class RemoveStaleAgentsEntryTests(unittest.TestCase):
+    def test_removes_old_mcp_proxy_entry(self):
+        config = {"mcpServers": {"fetch": {"command": "uvx", "args": ["mcp-server-fetch"]},
+                                 "agents": {"command": "uv", "args": ["run", "--script", r"C:\app\agents\server.py"]}}}
+        self.assertTrue(launcher.remove_stale_agents_entry(config))
+        self.assertEqual(list(config["mcpServers"]), ["fetch"])
+        self.assertFalse(launcher.remove_stale_agents_entry(config))
 
-    def test_updates_moved_path(self):
-        config = {"mcpServers": {"agents": {"command": "uv", "args": ["run", "--script", r"D:\old\server.py"]}}}
-        self.assertTrue(launcher.ensure_agents_server(config, r"C:\new\server.py"))
-        self.assertEqual(config["mcpServers"]["agents"]["args"][-1], r"C:\new\server.py")
+    def test_nothing_to_remove(self):
+        self.assertFalse(launcher.remove_stale_agents_entry({}))
+        self.assertFalse(launcher.remove_stale_agents_entry({"mcpServers": {"fetch": {}}}))
+
+
+class EmptyTrashRefusalTests(unittest.TestCase):
+    def job(self, state, job_id="20261014-000000-abcd"):
+        return {"id": job_id, "kind": "organize", "state": state, "args": {}, "note": ""}
+
+    def test_allowed_when_nothing_is_moving_files(self):
+        jobs = [self.job(s) for s in ("applied", "failed", "restored", "awaiting_approval", "running", "done")]
+        self.assertIsNone(launcher.empty_trash_refusal(jobs, busy=False))
+        self.assertIsNone(launcher.empty_trash_refusal([], busy=False))
+
+    def test_refused_while_a_job_applies_or_restores(self):
+        for state in ("applying", "restoring"):
+            msg = launcher.empty_trash_refusal([self.job("done", "20261014-000000-0000"),
+                                                self.job(state, "20261014-000000-ffff")], busy=False)
+            self.assertIsNotNone(msg)
+            self.assertIn("20261014-000000-ffff", msg)
+            self.assertIn(state, msg)
+
+    def test_refused_while_the_pane_has_a_call_in_flight(self):
+        self.assertIsNotNone(launcher.empty_trash_refusal([], busy=True))
 
 
 class JobActionsTests(unittest.TestCase):
