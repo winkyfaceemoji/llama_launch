@@ -84,6 +84,26 @@ class RunAgentTests(unittest.TestCase):
         self.assertTrue(stop.startswith("stopped: model error"), stop)
         self.assertIn("context exceeded", stop)
 
+    def test_network_errors_after_first_turn_also_stop_cleanly(self):
+        for error in (TimeoutError("timed out"), ConnectionResetError("reset"), OSError("URLError")):
+            reply = call("echo", {"text": "x"})
+            reply["content"] = "notes so far"
+            text, stop = runner.run_agent(Script(reply, error), "s", "t", [self.echo_tool()])
+            self.assertEqual(text, "notes so far")
+            self.assertTrue(stop.startswith("stopped: model error"), stop)
+
+    def test_network_error_on_final_answer_after_cap(self):
+        chat = Script(call("echo", {"text": "x"}), call("echo", {"text": "x"}), TimeoutError("timed out"))
+        text, stop = runner.run_agent(chat, "s", "t", [self.echo_tool()], max_calls=1)
+        self.assertTrue(stop.startswith("stopped: model error"), stop)
+
+    def test_tool_results_are_capped_at_6000_characters(self):
+        self.assertLessEqual(runner.MAX_RESULT_CHARS, 6000)
+        big = runner.tool("big", "Big", {}, [], lambda: "x" * 10000)
+        chat = Script(call("big", {}), final("done"))
+        runner.run_agent(chat, "s", "t", [big])
+        self.assertLessEqual(len(chat.seen[1][0][-1]["content"]), 6000)
+
     def test_model_error_on_first_turn_propagates(self):
         with self.assertRaises(RuntimeError):
             runner.run_agent(Script(RuntimeError("down")), "s", "t", [self.echo_tool()])
@@ -237,6 +257,16 @@ class JobKindTests(unittest.TestCase):
         self.assertTrue(got["note"].startswith("stopped: model error"), got["note"])
         self.assertEqual(self.store.read_text(job["id"], "result.md"), "partial notes")
 
+    def test_network_error_mid_research_still_writes_result(self):
+        job = self.start("research", {"topic": "llama"})
+        reply = call("web_search", {"query": "llama"})
+        reply["content"] = "partial notes"
+        runner.run_job(job, self.ctx(Script(reply, TimeoutError("timed out"))))
+        got = self.store.get(job["id"])
+        self.assertEqual(got["state"], "done")
+        self.assertTrue(got["note"].startswith("stopped: model error"), got["note"])
+        self.assertEqual(self.store.read_text(job["id"], "result.md"), "partial notes")
+
     def test_model_error_mid_organize_without_plan_stays_failed(self):
         job = self.start("organize", {"folder": self.dl, "goal": "tidy"})
         runner.run_job(job, self.ctx(Script(call("list_dir", {"path": self.dl}), RuntimeError("down"))))
@@ -271,7 +301,7 @@ class JobKindTests(unittest.TestCase):
         _, chat = self.read_attempt("organize", {"folder": self.dl, "goal": "g"},
                                     call("list_dir", {"path": self.dl}))
         names = {t["function"]["name"] for t in chat.seen[0][1]}
-        self.assertEqual(names, {"list_dir", "read_file", "write_file", "propose_plan"})
+        self.assertEqual(names, {"list_dir", "read_file", "propose_plan"})
         self.assertIn("a.pdf", chat.seen[1][0][-1]["content"])
 
     def test_relative_paths_resolve_against_sandbox(self):
@@ -314,6 +344,35 @@ class JobKindTests(unittest.TestCase):
         self.assertIn("Restored", runner.undo(job_id, ctx))
         self.assertTrue(os.path.exists(a))
         self.assertEqual(self.store.get(job_id)["state"], "restored")
+
+    def test_apply_progress_is_saved_after_each_step(self):
+        # A hard crash (process killed) leaves no chance to write the log afterwards, so approve must
+        # have it written step by step. Simulate the crash right after step 1 completes.
+        class Crash(BaseException):
+            pass
+
+        with open(os.path.join(self.dl, "b.pdf"), "w") as f:
+            f.write("y")
+        job_id = self.organize([{"op": "remove", "path": os.path.join(self.dl, "a.pdf")},
+                                {"op": "remove", "path": os.path.join(self.dl, "b.pdf")}])
+        real = runner.plans.apply_plan
+
+        def crashing(ops, jid, policy, on_step=None):
+            def stepper(log):
+                if on_step:
+                    on_step(log)
+                raise Crash()
+            return real(ops, jid, policy, on_step=stepper)
+
+        ctx = self.ctx(Script())
+        with mock.patch.object(runner.plans, "apply_plan", crashing):
+            with self.assertRaises(Crash):
+                runner.approve(job_id, ctx)
+        self.assertEqual(len(self.store.read_json(job_id, "applied.json")), 1)
+        self.store.cancel_unfinished()  # what the next start does to a job left in "applying"
+        self.assertEqual(self.store.get(job_id)["state"], "failed")
+        self.assertIn("Restored", runner.undo(job_id, ctx))
+        self.assertTrue(os.path.exists(os.path.join(self.dl, "a.pdf")))
 
     def test_approve_that_cannot_start_returns_to_awaiting_approval(self):
         job_id = self.organize([{"op": "remove", "path": os.path.join(self.dl, "a.pdf")}])

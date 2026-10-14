@@ -65,7 +65,7 @@ def run_agent(chat, system, task, tools, max_calls=MAX_CALLS, max_seconds=MAX_SE
         _trim(messages)
         try:
             reply = chat(messages, schemas)
-        except RuntimeError as e:
+        except (RuntimeError, OSError) as e:
             if turns == 0:
                 raise
             return last_text, f"stopped: model error: {e}"
@@ -97,7 +97,7 @@ def run_agent(chat, system, task, tools, max_calls=MAX_CALLS, max_seconds=MAX_SE
             _trim(messages)
             try:
                 return finish(chat(messages, None).get("content") or "", reason)
-            except RuntimeError as e:
+            except (RuntimeError, OSError) as e:
                 return last_text, f"stopped: model error: {e}"
 
 
@@ -228,7 +228,8 @@ def run_organize(job, ctx):
         return f"plan saved with {len(operations)} operations"
 
     ops_param = {"operations": {"type": "array", "items": {"type": "object"}}}
-    tools = file_tools(ctx.policy) + [
+    # No write_file: the model must not copy listed-folder contents into the sandbox, which web-enabled jobs read.
+    tools = [t for t in file_tools(ctx.policy) if t[0] != "write_file"] + [
         tool("propose_plan", "Propose the full list of file operations.", ops_param, ["operations"], propose_plan)]
     text, stop = run_agent(ctx.chat, ORGANIZE_PROMPT.format(folder=folder), goal, tools)
     ctx.store.write_text(job["id"], "result.md", text)
