@@ -1,7 +1,6 @@
 """Validate, apply and undo organise plans. Standard library only."""
 import os
 import re
-import shutil
 import stat
 
 from .paths import _real, is_inside
@@ -28,6 +27,32 @@ def _shape_error(op):
     return None
 
 
+_BAD_CHARS = set('*?"<>|')
+
+
+def _drive(path):
+    return os.path.splitdrive(os.path.abspath(path))[0].upper()
+
+
+def _path_problem(op, policy):
+    """Why a plan path is not a plain local Windows path, or crosses drives, else None (no disk access)."""
+    for k in OPS[op["op"]]:
+        path = op[k]
+        if not re.match(r"[A-Za-z]:[\\/]", path):
+            return f"not a plain drive path (start with a drive letter, as in C:\\folder\\file): {path}"
+        rest = path[2:]
+        if ":" in rest or _BAD_CHARS & set(rest):
+            return f"not a plain path (no : * ? \" < > | after the drive letter): {path}"
+        if any(part.endswith((".", " ")) for part in re.split(r"[\\/]", rest) if part):
+            return f"not a plain path (a name ends in a dot or space): {path}"
+    if op["op"] == "move" and _drive(op["src"]) != _drive(op["dst"]):
+        return "moves across drives aren't supported"
+    if op["op"] == "remove" and _drive(op["path"]) != _drive(policy.trash_dir):
+        return ("removing files on another drive isn't supported; move them to the sandbox's drive "
+                "first or delete them yourself")
+    return None
+
+
 def validate_plan(ops, policy):
     if not isinstance(ops, list) or not ops:
         return ["the plan has no operations"]
@@ -37,6 +62,10 @@ def validate_plan(ops, policy):
         shape = _shape_error(op)
         if shape:
             errors.append(f"{i}: {shape}")
+            continue
+        problem = _path_problem(op, policy)
+        if problem:
+            errors.append(f"{i}: {problem}")
             continue
         fields = OPS[op["op"]]
         bad = [op[k] for k in fields if not os.path.isabs(op[k]) or not policy.can_change(op[k])]
@@ -97,6 +126,9 @@ def _stop_reason(op, policy):
     shape = _shape_error(op)
     if shape:
         return shape
+    problem = _path_problem(op, policy)
+    if problem:
+        return problem
     for k in OPS[op["op"]]:
         if not os.path.isabs(op[k]) or not policy.can_change(op[k]):
             return f"not allowed: {op[k]}"
@@ -121,26 +153,20 @@ def apply_plan(ops, job_id, policy):
         reason = _stop_reason(op, policy)
         if reason:
             return log, f"step {i} stopped, nothing changed by it: {reason}"
-        src = to = None
         try:
             if op["op"] == "mkdir":
                 os.makedirs(op["path"])
                 log.append({"op": "mkdir", "path": op["path"]})
             elif op["op"] == "move":
-                src, to = op["src"], op["dst"]
-                shutil.move(src, to)
-                log.append({"op": "move", "from": src, "to": to})
+                os.rename(op["src"], op["dst"])
+                log.append({"op": "move", "from": op["src"], "to": op["dst"]})
             else:
-                src = op["path"]
-                to = trash_path(policy, job_id, src, i)
+                to = trash_path(policy, job_id, op["path"], i)
                 os.makedirs(os.path.dirname(to), exist_ok=True)
-                shutil.move(src, to)
-                log.append({"op": "remove", "from": src, "to": to})
+                os.rename(op["path"], to)
+                log.append({"op": "remove", "from": op["path"], "to": to})
         except (OSError, ValueError) as e:
-            msg = f"step {i} failed: {e}"
-            if src and to and os.path.lexists(src) and os.path.lexists(to):
-                msg += f". A copy was left at {to}; the original is still at {src}. Nothing was deleted"
-            return log, msg
+            return log, f"step {i} failed, nothing changed by it: {e}"
     return log, None
 
 
@@ -159,33 +185,40 @@ def restore(log):
                 skipped.append(f"no longer there (trash emptied?): {entry['to']}")
             else:
                 os.makedirs(os.path.dirname(entry["from"]), exist_ok=True)
-                shutil.move(entry["to"], entry["from"])
+                os.rename(entry["to"], entry["from"])
         except OSError as e:
             skipped.append(f"could not restore {entry.get('from', entry.get('path'))}: {e}")
     return skipped
 
 
-def _make_writable(path):
-    if os.path.isdir(path) and not os.path.islink(path):
-        for root, dirs, files in os.walk(path):
-            for name in dirs + files:
-                try:
-                    os.chmod(os.path.join(root, name), stat.S_IWRITE | stat.S_IREAD)
-                except OSError:
-                    pass
+def _is_link(path):
+    return os.path.islink(path) or getattr(os.path, "isjunction", lambda p: False)(path)
+
+
+def _retry_writable(func, path):
     try:
-        os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
-    except OSError:
-        pass
+        func(path)
+    except PermissionError:
+        os.chmod(path, stat.S_IWRITE | stat.S_IREAD)  # only the exact path that failed
+        func(path)
 
 
 def _delete(path):
-    remove = shutil.rmtree if os.path.isdir(path) and not os.path.islink(path) else os.unlink
-    try:
-        remove(path)
-    except PermissionError:
-        _make_writable(path)
-        remove(path)
+    """Delete a file, folder tree or link without ever following a link."""
+    if _is_link(path):
+        try:
+            os.rmdir(path)  # a junction or folder symlink goes as a link; its target is left alone
+        except OSError:
+            os.unlink(path)
+        return
+    if os.path.isdir(path):
+        with os.scandir(path) as entries:
+            children = [e.path for e in entries]
+        for child in children:
+            _delete(child)
+        _retry_writable(os.rmdir, path)
+    else:
+        _retry_writable(os.unlink, path)
 
 
 def empty_trash(policy):

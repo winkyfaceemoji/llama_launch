@@ -1,10 +1,10 @@
 import os
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
-from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agents import paths, plans
@@ -196,29 +196,92 @@ class PlanTests(unittest.TestCase):
         self.assertIn("could not restore " + self.p("sub", "x.txt"), skipped[0])
         self.assertTrue(os.path.exists(self.p("a.pdf")))
 
-    # R7: a partly failed move reports the copy it left behind and deletes nothing.
-    def test_r7_partial_move_reports_the_copy(self):
-        def copy_then_fail(src, dst):
-            shutil.copy2(src, dst)
-            raise OSError("file is locked")
-
-        for op, dst in [({"op": "move", "src": self.p("a.pdf"), "dst": self.p("b.pdf")}, self.p("b.pdf")),
-                        ({"op": "remove", "path": self.p("a.pdf")}, None)]:
-            with mock.patch.object(plans.shutil, "move", side_effect=copy_then_fail):
-                log, error = plans.apply_plan([op], "20261014-000000-abcd", self.policy)
+    # S1: only plain Windows paths are accepted.
+    def test_s1_odd_paths_are_rejected(self):
+        touch(self.p("e.txt"), "EEE")
+        cases = [
+            {"op": "move", "src": self.p("a.pdf"), "dst": self.p("e.txt:hidden")},
+            {"op": "move", "src": self.p("a.pdf"), "dst": self.p("x.txt.")},
+            {"op": "move", "src": self.p("a.pdf"), "dst": self.p("x.txt ")},
+            {"op": "move", "src": self.p("a.pdf"), "dst": self.p("sub. ", "x.txt")},
+            {"op": "move", "src": self.p("a.pdf"), "dst": self.p("x*.txt")},
+            {"op": "move", "src": self.p("a.pdf"), "dst": self.p("x?.txt")},
+            {"op": "move", "src": self.p("a.pdf"), "dst": self.p("x<>.txt")},
+            {"op": "move", "src": self.p("a.pdf"), "dst": self.p("x|.txt")},
+            {"op": "mkdir", "path": self.p("bad:name")},
+        ]
+        for op in cases:
+            errors = plans.validate_plan([op], self.policy)
+            self.assertEqual(len(errors), 1, (op, errors))
+            self.assertIn("plain", errors[0])
+            log, error = plans.apply_plan([op], "20261014-000000-abcd", self.policy)
             self.assertEqual(log, [])
-            target = dst or plans.trash_path(self.policy, "20261014-000000-abcd", self.p("a.pdf"), 1)
-            self.assertIn(f"A copy was left at {target}", error)
-            self.assertIn(f"the original is still at {self.p('a.pdf')}", error)
-            self.assertTrue(os.path.exists(target) and os.path.exists(self.p("a.pdf")))
-            os.unlink(target)
+            self.assertIn("nothing changed", error)
+        self.assertTrue(os.path.exists(self.p("a.pdf")))
+        with open(self.p("e.txt")) as f:
+            self.assertEqual(f.read(), "EEE")
 
-    def test_r7_plain_failure_has_no_copy_note(self):
-        with mock.patch.object(plans.shutil, "move", side_effect=OSError("boom")):
-            log, error = plans.apply_plan([{"op": "remove", "path": self.p("a.pdf")}],
+    # S2: moves and removes never copy.
+    def _other_drive(self):
+        here = os.path.splitdrive(os.path.abspath(self.tmp.name))[0].upper()
+        return "Q:" if here != "Q:" else "R:"
+
+    def test_s2_cross_drive_operations_are_rejected_without_touching_the_disk(self):
+        other = self._other_drive()
+        move = {"op": "move", "src": self.p("a.pdf"), "dst": other + "\\Downloads\\a.pdf"}
+        errors = plans.validate_plan([move], self.policy)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("moves across drives aren't supported", errors[0])
+        remove = {"op": "remove", "path": other + "\\Downloads\\a.pdf"}
+        errors = plans.validate_plan([remove], self.policy)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("removing files on another drive isn't supported", errors[0])
+        for op in (move, remove):
+            log, error = plans.apply_plan([op], "20261014-000000-abcd", self.policy)
+            self.assertEqual(log, [])
+            self.assertIn("nothing changed", error)
+
+    def test_s2_move_of_folder_with_open_file_leaves_folder_in_place(self):
+        for name in "abc":
+            touch(self.p("D", name), name)
+        ops = [{"op": "move", "src": self.p("D"), "dst": self.p("E")}]
+        self.assertEqual(plans.validate_plan(ops, self.policy), [])
+        with open(self.p("D", "b"), "rb"):
+            log, error = plans.apply_plan(ops, "20261014-000000-abcd", self.policy)
+        self.assertEqual(log, [])
+        self.assertIn("nothing changed", error)
+        self.assertEqual(sorted(os.listdir(self.p("D"))), ["a", "b", "c"])
+        self.assertFalse(os.path.exists(self.p("E")))
+
+    def test_s2_remove_of_folder_with_open_file_leaves_folder_in_place(self):
+        for name in "abc":
+            touch(self.p("D", name), name)
+        with open(self.p("D", "b"), "rb"):
+            log, error = plans.apply_plan([{"op": "remove", "path": self.p("D")}],
                                           "20261014-000000-abcd", self.policy)
-        self.assertIn("step 1 failed", error)
-        self.assertNotIn("copy was left", error)
+        self.assertEqual(log, [])
+        self.assertIn("nothing changed", error)
+        self.assertEqual(sorted(os.listdir(self.p("D"))), ["a", "b", "c"])
+
+    # S3: empty_trash never follows links.
+    def test_s3_empty_trash_leaves_junction_targets_alone(self):
+        outside = os.path.join(self.tmp.name, "outside")
+        outside_file = os.path.join(outside, "user_ro.txt")
+        touch(outside_file, "keep")
+        os.chmod(outside_file, stat.S_IREAD)
+        touch(self.p("D", "a_ro.txt"))
+        os.chmod(self.p("D", "a_ro.txt"), stat.S_IREAD)
+        subprocess.run(["cmd", "/c", "mklink", "/J", self.p("D", "z_link"), outside],
+                       check=True, capture_output=True)
+        log, error = plans.apply_plan([{"op": "remove", "path": self.p("D")}], "20261014-000000-abcd", self.policy)
+        self.assertIsNone(error)
+        self.assertEqual(plans.empty_trash(self.policy), 1)
+        self.assertEqual(os.listdir(self.policy.trash_dir), [])
+        try:
+            self.assertTrue(os.path.exists(outside_file))
+            self.assertFalse(os.stat(outside_file).st_mode & stat.S_IWRITE)
+        finally:
+            os.chmod(outside_file, stat.S_IWRITE | stat.S_IREAD)
 
     # R8: empty_trash copes with a missing folder, stray files and read-only files.
     def test_r8_empty_trash_edge_cases(self):

@@ -66,6 +66,15 @@ class PolicyTests(unittest.TestCase):
         self.assertFalse(self.policy.can_change(self.allowed))
         self.assertTrue(self.policy.can_change(os.path.join(self.allowed, "sub")))
 
+    def test_plans_may_not_change_a_listed_folder_nested_in_another(self):
+        inner = os.path.join(self.allowed, "inner")
+        os.makedirs(inner)
+        self.policy.add_folder(inner)
+        self.assertFalse(self.policy.can_change(inner))
+        self.assertFalse(self.policy.can_change(self.allowed))
+        self.assertTrue(self.policy.can_change(os.path.join(inner, "a.txt")))
+        self.assertTrue(self.policy.can_change(os.path.join(self.allowed, "other.txt")))
+
     def test_plans_may_not_change_ancestors_of_launcher_folder(self):
         grandparent = os.path.dirname(os.path.dirname(paths.APP_DIR))
         policy = paths.Policy(self.sandbox, folders_file=os.path.join(self.tmp.name, "anc.json"))
