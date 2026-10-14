@@ -1022,6 +1022,7 @@ class CommandLauncherGUI:
         self._proxy_proc   = None
         self._polling      = False
         self._launch_time  = None
+        self._agents_busy  = False
 
         self.master.columnconfigure(0, weight=1)
 
@@ -1164,11 +1165,16 @@ class CommandLauncherGUI:
             b.pack(side="left", padx=(8, 0))
             self._job_buttons[key] = b
         small_btn(jobs_hdr, "Empty trash", self._empty_trash).pack(side="right")
-        self._jobs_tree = ttk.Treeview(jobs_frame, columns=("kind", "state", "what"), show="headings", height=5)
+        jobs_body = tk.Frame(jobs_frame, bg=BG)
+        jobs_body.pack(fill="both", expand=True)
+        self._jobs_tree = ttk.Treeview(jobs_body, columns=("kind", "state", "what"), show="headings", height=5)
+        jobs_sb = ttk.Scrollbar(jobs_body, orient="vertical", command=self._jobs_tree.yview)
+        self._jobs_tree.configure(yscrollcommand=jobs_sb.set)
+        jobs_sb.pack(side="right", fill="y")
         for col, width in (("kind", 80), ("state", 130), ("what", 400)):
             self._jobs_tree.heading(col, text=col)
             self._jobs_tree.column(col, width=width, stretch=(col == "what"))
-        self._jobs_tree.pack(fill="both", expand=True)
+        self._jobs_tree.pack(side="left", fill="both", expand=True)
         self._jobs_tree.bind("<<TreeviewSelect>>", lambda e: self._update_job_buttons())
         self.log_pane.add(jobs_frame, stretch="always", minsize=120)
 
@@ -1532,29 +1538,36 @@ class CommandLauncherGUI:
             self._jobs_after_id = self.master.after(2000, self._refresh_jobs)
 
     def _fill_jobs(self):
-        selected = self._jobs_tree.selection()
-        self._jobs_tree.delete(*self._jobs_tree.get_children())
+        # Update the tree in place so selection and scroll position survive each poll.
         if self._agents_error:
-            self._jobs_tree.insert("", "end", iid="agents-unavailable",
-                                   values=("", "unavailable", f"Agents unavailable: {self._agents_error}"))
-            self._update_job_buttons()
-            return
-        for job in self._jobs_store().list()[:50]:
-            try:
-                what = ", ".join(str(v) for v in job["args"].values())
-                state = job["state"] + (f" ({job['note']})" if job.get("note") else "")
-                self._jobs_tree.insert("", "end", iid=job["id"], values=(job["kind"], state, what))
-            except Exception:
-                continue  # skip a job whose record is unreadable
-        keep = [i for i in selected if self._jobs_tree.exists(i)]
-        if keep:
-            self._jobs_tree.selection_set(keep)
+            rows = [("agents-unavailable", ("", "unavailable", f"Agents unavailable: {self._agents_error}"))]
+        else:
+            rows = []
+            for job in self._jobs_store().list()[:50]:
+                try:
+                    what = ", ".join(str(v) for v in job["args"].values())
+                    state = job["state"] + (f" ({job['note']})" if job.get("note") else "")
+                    rows.append((job["id"], (job["kind"], state, what)))
+                except Exception:
+                    continue  # skip a job whose record is unreadable
+        wanted = {iid for iid, _ in rows}
+        for iid in self._jobs_tree.get_children():
+            if iid not in wanted:
+                self._jobs_tree.delete(iid)
+        for index, (iid, values) in enumerate(rows):
+            if self._jobs_tree.exists(iid):
+                if tuple(str(v) for v in self._jobs_tree.item(iid, "values")) != tuple(str(v) for v in values):
+                    self._jobs_tree.item(iid, values=values)
+                if self._jobs_tree.index(iid) != index:
+                    self._jobs_tree.move(iid, "", index)
+            else:
+                self._jobs_tree.insert("", index, iid=iid, values=values)
         self._update_job_buttons()
 
     def _update_job_buttons(self):
         allowed = set()
         try:
-            job = self._selected_job()
+            job = None if self._agents_busy else self._selected_job()
             if job is not None:
                 store = self._jobs_store()
                 has_steps = store.has(job["id"], "steps.json") and bool(store.read_json(job["id"], "steps.json"))
@@ -1567,12 +1580,23 @@ class CommandLauncherGUI:
 
     def _call_agents(self, tool, job_id):
         # The agents server owns job state; go through it so approvals can't race.
+        if self._agents_busy:
+            return
+        self._agents_busy = True
+        self._update_job_buttons()
+        timeout = 900 if tool in ("apply", "restore") else 120
+
+        def done(msg):
+            self._agents_busy = False
+            self._update_job_buttons()
+            messagebox.showinfo("Agent job", msg)
+
         def work():
             try:
-                msg = agent_llm.mcp_call("agents", tool, {"job_id": job_id})
+                msg = agent_llm.mcp_call("agents", tool, {"job_id": job_id}, timeout=timeout)
             except Exception as e:
-                msg = f"The agents server didn't answer: {e}"
-            self.master.after(0, lambda: messagebox.showinfo("Agent job", msg))
+                msg = f"The agents server returned an error: {e}"
+            self.master.after(0, lambda: done(msg))
         threading.Thread(target=work, daemon=True).start()
 
     def _job_action(self, key):
@@ -1615,12 +1639,14 @@ class CommandLauncherGUI:
         dlg.grab_set()
         text = tk.Text(dlg, font=FONT_LOG, bg=BG_INPUT, fg=TEXT_PRI, relief="flat", wrap="none")
         sb = ttk.Scrollbar(dlg, orient="vertical", command=text.yview)
-        text.configure(yscrollcommand=sb.set)
+        hsb = ttk.Scrollbar(dlg, orient="horizontal", command=text.xview)
+        text.configure(yscrollcommand=sb.set, xscrollcommand=hsb.set)
         lines += ["", "── Local review ──", review]
         text.insert("1.0", "\n".join(lines))
         text.config(state=tk.DISABLED)
         row = tk.Frame(dlg, bg=BG)
         row.pack(side="bottom", fill="x", padx=12, pady=12)
+        hsb.pack(side="bottom", fill="x")
         sb.pack(side="right", fill="y")
         text.pack(side="left", fill="both", expand=True)
         flat_btn(row, f"Approve all {len(ops)}", lambda: (dlg.destroy(), self._call_agents("apply", job["id"]))).pack(side="left")
@@ -1630,7 +1656,8 @@ class CommandLauncherGUI:
     def _empty_trash(self):
         if messagebox.askyesno("Empty trash",
                                f"Permanently delete everything in {self.agent_policy.trash_dir}?\n"
-                               "Jobs whose files are in there can no longer be restored."):
+                               "Jobs whose files are in there can no longer be restored.",
+                               default="no"):
             try:
                 n = agent_plans.empty_trash(self.agent_policy)
             except OSError as e:
