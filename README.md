@@ -206,9 +206,17 @@ The API key lives in its own file, `api_key.txt`, not in `config.json`.
 
 ## MCP web UI setup
 
-The UVX proxy serves each MCP server from `config.json` at `http://127.0.0.1:8001/servers/<name>/mcp` (for example `.../servers/ddg-search/mcp`). Add each one in the Web UI's MCP servers page and switch on **use proxy** for it.
+The UVX proxy serves each MCP server from `config.json` at `http://127.0.0.1:8001/servers/<name>/mcp`, where `<name>` is its key under `mcpServers` (`fetch`, `ddg-search`, ...).
 
-The UVX proxy deliberately sends no CORS headers, so web pages can't call it directly. With **use proxy** on, the Web UI reaches it through llama-server's `/cors-proxy`, which needs the API key. With **use proxy** off, the browser blocks the connection.
+Set the [API key](#api-key) in the Web UI first, then for each server:
+
+1. Click the **MCP Servers** icon in the Web UI's left sidebar (above the ⚙ settings icon). This is a separate page, not the **MCP** tab inside Settings.
+2. Click **+ Add New Server**, enter the URL (for example `http://127.0.0.1:8001/servers/ddg-search/mcp`) and click **Add**. It shows **Failed to fetch** at this point; that's expected.
+3. Click the pencil icon on the server's card, switch on **Use llama-server proxy**, and click **Update**. The switch is only in this edit form, not in the Add dialog.
+
+The card then shows the server name, **Connected**, and the number of tools available.
+
+The UVX proxy deliberately sends no CORS headers, so web pages can't call it directly. With **Use llama-server proxy** on, the Web UI reaches it through llama-server's `/cors-proxy`, which needs the API key. With it off, the browser blocks the connection.
 
 ---
 
