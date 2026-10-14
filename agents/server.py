@@ -2,20 +2,34 @@
 # requires-python = ">=3.11"
 # dependencies = ["mcp>=2.3,<3"]
 # ///
-"""Agents MCP server (ADR 0006). Run by mcp-proxy with `uv run --script`."""
+"""Agents MCP server (ADR 0007). The launcher starts it with `uv run --script agents/server.py`.
+
+Serves MCP at http://127.0.0.1:8002/mcp with DNS-rebinding protection, plus key-checked
+approval routes for the launcher's Jobs pane. Never run a second copy while the launcher is
+running: starting up cancels unfinished jobs, including ones the live server is applying.
+"""
+import argparse
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import anyio.to_thread  # noqa: E402
 from mcp.server.mcpserver import MCPServer  # noqa: E402
+from mcp.server.transport_security import TransportSecuritySettings  # noqa: E402
+from starlette.responses import JSONResponse  # noqa: E402
 
 from agents import jobs, llm, paths, runner  # noqa: E402
 
+PORT = llm.AGENTS_PORT  # --port replaces it; the approval routes check Host against it
+
 policy = paths.Policy(paths.default_sandbox())
-policy.ensure_dirs()
-store = jobs.JobStore(policy.jobs_dir)
-store.cancel_unfinished()  # anything left from a previous run was killed with it
+try:
+    policy.ensure_dirs()
+    store = jobs.JobStore(policy.jobs_dir)
+    store.cancel_unfinished()  # anything left from a previous run was killed with it
+except Exception as e:
+    sys.exit(f"agents server can't start: {type(e).__name__}: {e}")
 ctx = runner.Context(policy, store, llm.chat, llm.mcp_call)
 worker = jobs.Worker(store, lambda job: runner.run_job(job, ctx))
 
@@ -23,7 +37,8 @@ MAX_FILE_CHARS = 8000  # per file in job_result; keeps big plans out of the chat
 
 server = MCPServer("agents", instructions=(
     "Background jobs on the user's PC. Tools return a job ID at once; check progress with job_status "
-    "and read output with job_result. organize only proposes a plan; the user approves it."))
+    "and read output with job_result. organize only proposes a plan; the user reviews and approves it "
+    "in the launcher's Jobs pane, never in chat."))
 
 
 def _start(kind, args):
@@ -82,12 +97,6 @@ def job_result(job_id: str) -> str:
 
 
 @server.tool()
-def apply(job_id: str) -> str:
-    """Apply an approved organise plan exactly as proposed."""
-    return runner.approve(job_id, ctx)
-
-
-@server.tool()
 def reject(job_id: str) -> str:
     """Reject an organise plan; nothing changes."""
     return runner.reject(job_id, ctx)
@@ -114,5 +123,48 @@ def request_folder_access(path: str) -> str:
         return f"Not added: {e}"
 
 
+# Approval routes for the Jobs pane, which shows the full plan. Applying is not an MCP tool:
+# a chat prompt shows only the job ID, so approving there would approve an unseen plan.
+ACTIONS = {
+    "apply": lambda job_id: runner.approve(job_id, ctx),
+    "reject": lambda job_id: runner.reject(job_id, ctx),
+    "restore": lambda job_id: runner.undo(job_id, ctx),
+    "queue": lambda job_id: runner.queue_steps(job_id, ctx, worker.submit),
+}
+
+
+def _key():
+    try:
+        return llm.read_key(llm.API_KEY_FILE)
+    except OSError:
+        return ""  # no key file: check_request refuses everything
+
+
+@server.custom_route("/jobs/{job_id}/{action}", methods=["POST"])
+async def job_action(request):
+    if not llm.check_request(request.headers, PORT, _key()):
+        return JSONResponse({"ok": False, "message": "Forbidden."}, status_code=403)
+    fn = ACTIONS.get(request.path_params["action"])
+    if fn is None:
+        return JSONResponse({"ok": False, "message": "Unknown action."}, status_code=404)
+    message = await anyio.to_thread.run_sync(fn, request.path_params["job_id"])
+    return JSONResponse({"ok": True, "message": message})
+
+
+def main():
+    global PORT
+    parser = argparse.ArgumentParser(description="Agents MCP server (the launcher starts it).")
+    parser.add_argument("--port", type=int, default=llm.AGENTS_PORT)
+    PORT = parser.parse_args().port
+    # Explicit, so a change in mcp's defaults can't silently drop the rebinding check.
+    security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=["127.0.0.1:*", "localhost:*"],
+        allowed_origins=["http://127.0.0.1:*", "http://localhost:*"])
+    # Stateless JSON replies, as mcp-proxy --stateless served the Web UI before.
+    server.run("streamable-http", host="127.0.0.1", port=PORT, streamable_http_path="/mcp",
+               json_response=True, stateless_http=True, transport_security=security)
+
+
 if __name__ == "__main__":
-    server.run()
+    main()

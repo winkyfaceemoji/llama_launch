@@ -1,7 +1,9 @@
-"""HTTP calls to llama-server and the UVX MCP proxy. Standard library only."""
+"""HTTP calls to llama-server, the UVX MCP proxy and the agents server's approval routes. Standard library only."""
+import hmac
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from .paths import APP_DIR
@@ -9,6 +11,10 @@ from .paths import APP_DIR
 LLAMA_URL = "http://127.0.0.1:8081/v1/chat/completions"
 MCP_URL = "http://127.0.0.1:8001/servers/{server}/mcp"
 API_KEY_FILE = os.path.join(APP_DIR, "api_key.txt")
+AGENTS_PORT = 8002
+AGENTS_BASE = f"http://127.0.0.1:{AGENTS_PORT}"
+AGENTS_URL = f"{AGENTS_BASE}/mcp"  # the agents server's own MCP endpoint (not behind mcp-proxy)
+ACTIONS = ("apply", "reject", "restore", "queue")  # the Jobs pane's routes: /jobs/<id>/<action>
 
 
 def _post(url, body, headers, timeout):
@@ -38,9 +44,35 @@ def _snippet(data):
     return json.dumps(data)[:200]
 
 
-def chat(messages, tools=None, url=LLAMA_URL, key_file=API_KEY_FILE, timeout=900):
+def read_key(key_file=API_KEY_FILE):
     with open(key_file, encoding="utf-8") as f:
-        key = f.read().strip()
+        return f.read().strip()
+
+
+def check_request(headers, port, key):
+    """True only if Host is this server's loopback address and the request carries the API key.
+
+    Guards the approval routes: a rebound web page sends its own Host, and no page knows the key.
+    """
+    h = {str(k).lower(): v for k, v in headers.items()}
+    if h.get("host", "").lower() not in (f"127.0.0.1:{port}", f"localhost:{port}"):
+        return False
+    return bool(key) and hmac.compare_digest(h.get("authorization", "").encode(), f"Bearer {key}".encode())
+
+
+def agents_action(action, job_id, base=AGENTS_BASE, key_file=API_KEY_FILE, timeout=120):
+    """Ask the agents server to apply, reject, restore or queue a job; returns its message."""
+    if action not in ACTIONS:
+        raise ValueError(f"unknown action {action!r}")
+    url = f"{base}/jobs/{urllib.parse.quote(job_id, safe='')}/{action}"
+    data = _post(url, {}, {"Authorization": f"Bearer {read_key(key_file)}"}, timeout)
+    if not isinstance(data, dict) or not isinstance(data.get("message"), str):
+        raise RuntimeError(f"unexpected reply from the agents server: {_snippet(data)}")
+    return data["message"]
+
+
+def chat(messages, tools=None, url=LLAMA_URL, key_file=API_KEY_FILE, timeout=900):
+    key = read_key(key_file)
     body = {"messages": messages}
     if tools:
         body["tools"] = tools
