@@ -1,6 +1,6 @@
 # llama_launch
 
-A desktop GUI launcher for [llama.cpp](https://github.com/ggerganov/llama.cpp) that lets you select a model, pick a launch preset, and start a local AI server, a system prompt proxy, and a UVX MCP proxy with a single click.
+A desktop GUI launcher for [llama.cpp](https://github.com/ggerganov/llama.cpp) that lets you select a model and start a local AI server, a system prompt proxy, and a UVX MCP proxy with a single click. It runs one model at a time, on this PC only.
 
 ---
 
@@ -9,17 +9,19 @@ A desktop GUI launcher for [llama.cpp](https://github.com/ggerganov/llama.cpp) t
 The launcher starts and manages three processes:
 
 1. **llama-server** — runs a `.gguf` model file locally and exposes it as an API on port `8081`.
-2. **System Prompt Proxy** (`proxy.py`) — sits on port `8080` (the public-facing port), injects a system prompt and the current date/time into every `/v1/chat/completions` request, then forwards to llama-server on `8081`.
-3. **UVX MCP Proxy** — a middleware server on port `8001` that bridges the API to MCP tools (web search, fetch, time) for use with clients like Claude Desktop or Cursor.
+2. **System Prompt Proxy** (`proxy.py`) — sits on port `8080` (the Web UI port), injects your system prompt and today's date into every `/v1/chat/completions` request, then forwards to llama-server on `8081`.
+3. **UVX MCP Proxy** — a middleware server on port `8001` that bridges MCP tools (web search, fetch) to the llama-server Web UI.
 
 Once launched, the app shows live output from all three processes in separate log panes, monitors server health, and tracks uptime. Closing the window while servers are running minimizes to the system tray rather than killing them.
+
+All three servers listen on `127.0.0.1` only, so other devices on your network can't reach them.
 
 ---
 
 ## Requirements
 
 - **Python 3.8+** — all core dependencies are part of the Python standard library.
-- **llama.cpp** — must be built and available on your machine. The launcher uses your llama.cpp folder as the working directory when starting `llama-server`.
+- **llama.cpp** — a recent build with `--fit` support (2026 builds have it on by default). `llama-server` must be on your system `PATH`.
 - **uv / uvx** — required for the MCP proxy. Install with `pip install uv`.
 - **pystray + Pillow** — required for the system tray icon. The launcher installs these automatically on first run.
 
@@ -52,36 +54,39 @@ Click **⚙ Settings** in the top-right corner at any time to update the models 
 llama_launch/
 ├── launcher.pyw      # the application
 ├── proxy.py          # system prompt injection proxy (port 8080 → 8081)
-├── config.json       # all settings: llama.cpp path, presets, system prompt, MCP servers
+├── config.json       # all settings: models folder, presets, system prompt, MCP servers
 └── README.md
 ```
 
-Your `.gguf` model files should all live directly inside the folder you point `llama_dir` at — no subfolder needed:
+Text-only models can sit directly in your models folder. Vision models go in a **subfolder together with their `mmproj` file** — the launcher then adds `--mmproj` automatically so you can paste images into the Web UI:
 
 ```
 GGUF Models/
-├── gemma-4-E4B-it-Q8_0.gguf
-├── qwen2.5-coder-14b-q8_0.gguf
-└── Qwen_Qwen3-14B-Q5_K_M.gguf
+├── Qwen_Qwen3-14B-Q5_K_M.gguf
+├── Qwen_Qwen3-8B-Q8_0.gguf
+└── gemma-4-12B-it-Q8_0/
+    ├── gemma-4-12B-it-Q8_0.gguf
+    └── mmproj-F16.gguf          # file name must start with "mmproj"
 ```
 
-`llama-server` itself must be on your system `PATH` (add your llama.cpp build folder to `PATH` if needed).
+`mmproj` files are never shown in the model list. For split models, only the first shard (`-00001-of-0000N`) is listed.
 
 ---
 
 ## Using the launcher
 
 ### Selecting a model
-The **MODEL** dropdown lists all `.gguf` files found in your models folder. Use the **Refresh** button if you've added files since opening the launcher.
+The **MODEL** dropdown lists all `.gguf` models found in your models folder and its subfolders. Use the **Refresh** button if you've added files since opening the launcher.
 
 ### Selecting a preset
-The **PRESET** dropdown shows presets associated with your chosen model. Selecting one builds the full `llama-server` command automatically.
+The **PRESET** dropdown is set to **Auto** whenever you pick a model. Auto lets llama.cpp size the context to your free VRAM (see [Presets](#presets)). Any other presets you've made for that model are listed too, as manual overrides.
 
 ### Launching
 Click **Launch Server**. The window switches to the running view, which shows:
 
+- **Status bar** — server health (`● online` / `● offline`), uptime counter, and an **Auto-scroll** toggle.
+- **Agent API** — the direct llama-server address for agents (`http://127.0.0.1:8081/v1`). Click it to copy.
 - **Three log panes** — live output from `llama-server` (top), the UVX proxy (middle), and the system prompt proxy (bottom). Drag the dividers to resize. The top pane header shows the active model name and PID.
-- **Status bar** — shows server health (`● online` / `● offline`), uptime counter, and an **Auto-scroll** toggle.
 
 ### Stopping
 Click **Exit Processes** to kill all three servers and return to the launcher screen.
@@ -100,7 +105,7 @@ The directory scanned for `.gguf` model files and used as the working directory 
 
 ### Launch options
 
-- **Web UI** — set to **Yes** to automatically open `http://127.0.0.1:8080/` in the browser once the server comes online. Set to **No** to skip this (useful when connecting via API only).
+- **Web UI** — set to **Yes** to automatically open `http://127.0.0.1:8080/` in the browser once the server comes online. Set to **No** to skip this. The choice is saved between launches and has no other effect.
 - **UVX Settings** — click **▶ Show command** to expand and edit the `uvx mcp-proxy` command. Changes are saved when you click **Save**.
 
 ---
@@ -111,17 +116,41 @@ Presets are stored in `config.json` under the `"presets"` key. Each preset has:
 
 - **Name** — displayed in the dropdown
 - **Command template** — the full `llama-server` command, using `{model}` as a placeholder for the model file path
-- **Models** — the specific `.gguf` files this preset applies to, selected from a listbox of files in your models folder. A preset only appears in the dropdown when the selected model is one of its associated files.
+- **Models** — the specific `.gguf` files this preset applies to. A preset only appears in the dropdown when the selected model is one of them; a preset with no models applies to every model.
 
-Use the **+ Add**, **Edit**, and **Delete** buttons next to the preset dropdown to manage presets.
+### The Auto preset
+
+```
+llama-server -m "{model}" --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 --webui-mcp-proxy --tools get_datetime --port 8081
+```
+
+Auto deliberately leaves context size (`-c`) and GPU layers (`-ngl`) unset. llama-server's `--fit` (on by default) then picks the largest context that fits in free VRAM, keeping a 1 GB margin. The chosen context size appears in the llama-server log pane. Auto always exists, is pre-selected for every model, and can't be deleted.
+
+Avoid adding `-c` or `-ngl` to a preset unless you mean to: setting either turns off `--fit` for that value, and a context that doesn't fit will spill out of VRAM and run far slower.
+
+`--context-shift` and `--swa-full` are left off: when a chat fills the context, start a new chat. `--tools get_datetime` gives the model the exact time from your PC's clock without granting it file or shell access.
+
+Use the **+ Add**, **Edit**, and **Delete** buttons next to the preset dropdown to manage your own presets.
 
 ---
 
 ## System prompt
 
-The system prompt is stored in `config.json` under the `"system_prompt"` key. The proxy automatically prepends the current date and time to it on every request, so the model always knows the current date without needing to call a time tool.
+The system prompt is stored in `config.json` under the `"system_prompt"` key. The proxy puts today's date at the top of it on every request, so the model always knows the date without calling a tool. Only the date is injected — a timestamp that changed every minute would force llama-server to reprocess the whole conversation.
 
-To edit the system prompt, update the `"system_prompt"` value in `config.json`.
+The proxy replaces any system message sent by the Web UI with this prompt, so edit it in `config.json` rather than in the Web UI's settings.
+
+---
+
+## Agents
+
+Agents you run yourself (anything that speaks the OpenAI API) should connect straight to llama-server at:
+
+```
+http://127.0.0.1:8081/v1
+```
+
+This bypasses the system prompt proxy, so the agent's own system prompt and tools reach the model untouched. Only the Web UI uses port `8080`.
 
 ---
 
@@ -133,10 +162,11 @@ All settings live in a single `config.json` next to the launcher:
 |---|---|
 | `llama_dir` | Path to the folder containing your `.gguf` model files |
 | `presets` | Saved launch presets |
-| `system_prompt` | System prompt injected into every chat request |
+| `system_prompt` | System prompt injected into every Web UI chat request |
 | `mcpServers` | MCP tool definitions used by the UVX proxy |
 | `uvx_command` | The `uvx mcp-proxy` command run at launch (editable in Settings) |
-| `last_model` / `last_preset` | Remembered selections between sessions |
+| `open_browser` | Whether to open the Web UI when the server comes online |
+| `last_model` | Remembered model selection between sessions |
 
 ---
 
@@ -144,15 +174,15 @@ All settings live in a single `config.json` next to the launcher:
 
 | Port | Process |
 |---|---|
-| `8080` | System prompt proxy (public-facing — connect clients here) |
-| `8081` | llama-server (internal — do not connect clients directly) |
+| `8080` | System prompt proxy — the Web UI |
+| `8081` | llama-server — agents connect here directly |
 | `8001` | UVX MCP proxy |
 
 ---
 
 ## MCP web UI setup
 
-When using the llama-server web UI at `http://127.0.0.1:8080/`, three server URLs will appear in the MCP settings. Replace the address in each with `MCP` to ensure they connect correctly.
+When using the llama-server web UI at `http://127.0.0.1:8080/`, the MCP server URLs will appear in the MCP settings. Replace the address in each with `MCP` to ensure they connect correctly.
 
 *Source: [How I got MCP working in the llama-server web UI](https://www.reddit.com/r/LocalLLaMA/comments/1rnyz75/how_i_got_mcp_working_in_the_llamaserver_web_ui_a/)*
 
@@ -160,10 +190,10 @@ When using the llama-server web UI at `http://127.0.0.1:8080/`, three server URL
 
 ## Models
 
-Recommended models for this setup:
+Models in use with this setup (RX 7800 XT, 16 GB VRAM):
 
-- **Gemma 4 E4B** (Q8_0) — general purpose, 131072 context, supports SWA
-- **Qwen2.5-Coder 14B** (Q8_0) — coding tasks, 32768 context
-- **Qwen3 14B** (Q5_K_M) — general + coding, good balance of speed and quality
+- **Gemma 4 12B** (Q8_0) — general purpose; with its `mmproj` file it can read images
+- **Qwen3 14B** (Q5_K_M) — reasoning and coding, with thinking mode
+- **Qwen3 8B** (Q8_0) — faster, for quick questions
 
 Qwen3 models: [HuggingFace — HauhauCS/Qwen3.6-35B-A3B-Uncensored](https://huggingface.co/HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive/tree/main)
