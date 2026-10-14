@@ -19,6 +19,8 @@ store.cancel_unfinished()  # anything left from a previous run was killed with i
 ctx = runner.Context(policy, store, llm.chat, llm.mcp_call)
 worker = jobs.Worker(store, lambda job: runner.run_job(job, ctx))
 
+MAX_FILE_CHARS = 8000  # per file in job_result; keeps big plans out of the chat model's context
+
 server = MCPServer("agents", instructions=(
     "Background jobs on the user's PC. Tools return a job ID at once; check progress with job_status "
     "and read output with job_result. organize only proposes a plan; the user approves it."))
@@ -47,6 +49,8 @@ def organize(folder: str, goal: str) -> str:
     """Propose a plan to organise a local folder. Nothing changes until the user approves it."""
     if not policy.can_read(folder):
         return f"No read access to {folder}. Call request_folder_access first."
+    if not os.path.isdir(folder):
+        return f"{folder} is not a folder."
     return _start("organize", {"folder": os.path.abspath(folder), "goal": goal})
 
 
@@ -70,7 +74,10 @@ def job_result(job_id: str) -> str:
     parts = [runner.describe(job)]
     for name in ("result.md", "plan.json", "review.md", "steps.json"):
         if store.has(job_id, name):
-            parts.append(f"--- {name} ---\n{store.read_text(job_id, name)}")
+            text = store.read_text(job_id, name)
+            if len(text) > MAX_FILE_CHARS:
+                text = text[:MAX_FILE_CHARS] + f"\n[truncated — full file: {store.path(job_id, name)}]"
+            parts.append(f"--- {name} ---\n{text}")
     return "\n\n".join(parts)
 
 
@@ -103,7 +110,7 @@ def request_folder_access(path: str) -> str:
     """Ask to let agents read a local folder. The user's approval of this call grants it."""
     try:
         return f"Agents can now read {policy.add_folder(path)}."
-    except ValueError as e:
+    except (ValueError, OSError) as e:
         return f"Not added: {e}"
 
 
