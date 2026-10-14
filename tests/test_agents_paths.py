@@ -43,6 +43,33 @@ class PolicyTests(unittest.TestCase):
         self.assertFalse(self.policy.can_change(os.path.join(self.sandbox, "a.txt")))
         self.assertFalse(self.policy.can_change(os.path.join(paths.APP_DIR, "config.json")))
 
+    def test_plans_skip_sandbox_under_listed_ancestor(self):
+        root = self.tmp.name
+        policy = paths.Policy(self.sandbox, folders_file=os.path.join(root, "ancestor.json"))
+        policy.ensure_dirs()
+        policy.add_folder(root)
+        self.assertTrue(policy.can_change(os.path.join(root, "ordinary.txt")))
+        self.assertFalse(policy.can_change(os.path.join(self.sandbox, "a.txt")))
+
+    def test_plans_skip_launcher_folder_under_listed_ancestor(self):
+        root = self.tmp.name
+        app_parent = os.path.dirname(paths.APP_DIR)
+        policy = paths.Policy(self.sandbox, folders_file=os.path.join(root, "app.json"))
+        policy.ensure_dirs()
+        policy.add_folder(root)
+        policy.add_folder(app_parent)
+        self.assertTrue(policy.can_change(os.path.join(app_parent, "other", "a.txt")))
+        self.assertFalse(policy.can_change(os.path.join(paths.APP_DIR, "config.json")))
+        self.assertFalse(policy.can_change(os.path.join(self.sandbox, "a.txt")))
+
+    def test_reads_skip_launcher_folder_under_listed_ancestor(self):
+        root = self.tmp.name
+        policy = paths.Policy(self.sandbox, folders_file=os.path.join(root, "app.json"))
+        policy.ensure_dirs()
+        policy.add_folder(os.path.dirname(paths.APP_DIR))
+        self.assertFalse(policy.can_read(os.path.join(paths.APP_DIR, "api_key.txt")))
+        self.assertFalse(policy.can_read(os.path.join(paths.APP_DIR, "config.json")))
+
     def test_junction_escape_is_refused(self):
         link = os.path.join(self.allowed, "escape")
         subprocess.run(["cmd", "/c", "mklink", "/J", link, self.outside], check=True, capture_output=True)

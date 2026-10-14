@@ -82,7 +82,8 @@ class Policy:
     def can_read(self, path):
         if not is_local(path):
             return False
-        return is_inside(path, self.sandbox) or any(is_inside(path, f) for f in self.read_folders())
+        return ((is_inside(path, self.sandbox) or any(is_inside(path, f) for f in self.read_folders()))
+                and not is_inside(path, APP_DIR))
 
     def can_write(self, path):
         return is_inside(path, self.sandbox) and not self._system(path)
