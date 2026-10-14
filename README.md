@@ -164,6 +164,42 @@ Agents must send the [API key](#api-key) as `Authorization: Bearer <key>`. In mo
 
 ---
 
+## Agent jobs (research, planning, organising)
+
+The chat model in the Web UI can start background jobs that run on your local model (ADR 0006):
+
+- **research** a topic: a cited Markdown report. It can search and fetch web pages, but cannot read your files.
+- **plan** a goal: a step-by-step plan, plus follow-up jobs you can queue from the Jobs pane. It also has web access and no access to your files, so it can only name a folder in a follow-up if your goal gives its path.
+- **organize** a folder: a list of proposed moves, renames, new folders and removals, checked by a local review pass. It can read your listed folders but has no web access. **Nothing changes until you approve it.**
+
+### Setup (once)
+
+1. Launch the server. The launcher adds the `agents` MCP server to `config.json` automatically. The first launch takes a little longer while `uv` installs the `mcp` package.
+2. In the Web UI's **MCP Servers** page, add `http://127.0.0.1:8001/servers/agents/mcp` and switch on **Use llama-server proxy**, as for the other servers.
+3. In the launcher, open **⚙ Settings → Agent folders → Manage…** and add the local folders agents may read and organise. The chat model can also ask for a folder with `request_folder_access`; approving that tool call adds it.
+
+Leave the Web UI's per-tool confirmation on for `apply` and `request_folder_access`. That confirmation is your approval.
+
+### What agents can and can't touch
+
+- **Write:** only `Documents\agent-sandbox`. Each job has a folder in `agent-sandbox\jobs\` with its `result.md` (and `plan.json` / `review.md` for organise jobs).
+- **Read:** the folders you listed, plus the sandbox. Network drives are never read or changed. The launcher's own folder (`api_key.txt`, `config.json`) is off limits even if a parent folder is listed.
+- **Changes to your files** happen only when you approve an organise plan, and only inside a listed folder, never the folder itself. A plan is refused if its operations overlap, if it moves a file to another drive, removes files on a different drive from `Documents`, or uses anything but plain paths (no `:`, wildcards or reserved names like `NUL`). Each step is checked again just before it runs, and a step that no longer fits stops the apply.
+- **Removals** move files to `agent-sandbox\trash\<job>\<step>\<drive>\<path>`. **Restore** puts a whole job back, skipping anything that now has a new file at its old path. **Empty trash** deletes all trash for good, without following links out of the folder.
+
+### Jobs pane
+
+The running view lists agent jobs. Select one to **Open result**, **Approve / Reject…** a plan (shows every operation and the review), **Restore** an applied plan, or **Queue steps** from a plan job. **Empty trash** asks first. The pane sends approvals through the agents server, so approving there and in chat can't both apply a plan.
+
+### Limits
+
+- Jobs run one at a time and stop after 40 tool calls or 20 minutes. Tool results are cut to 6,000 characters, and older results are dropped from the model's context once it grows past 40,000.
+- `job_result` shows at most 8,000 characters per file and gives the full file path when it cuts.
+- **Exit Processes** cancels queued and running jobs. A job that was applying or restoring is marked failed; use **Restore** to undo what it finished.
+- A 12-14B model makes mistakes: read the plan and the review before approving.
+
+---
+
 ## API key
 
 llama-server allows requests from every web origin, so without a key any web page open in your browser could chat with your model or use its `/cors-proxy` to read pages on your home network. The launcher therefore starts llama-server with an API key.

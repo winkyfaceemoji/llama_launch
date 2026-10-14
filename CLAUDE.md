@@ -8,11 +8,12 @@ Tkinter launcher (`launcher.pyw`) that starts llama-server, the system prompt pr
 - Tests: `python -m unittest discover -s tests`. They cover the pure helpers in `launcher.pyw` (it's loaded with `SourceFileLoader` because of the `.pyw` extension); the GUI has no tests.
 - Syntax check: `python -m py_compile launcher.pyw proxy.py`.
 - Run the proxy alone: `python proxy.py 8080 8081` (listen port, upstream port).
+- Agents MCP server alone: `uv run --script agents/server.py` (stdio; normally started by mcp-proxy from config.json).
 - Smoke-test a model without the GUI: run the Auto preset command (`AUTO_COMMAND` in `launcher.pyw`) with `-m` set to a real `.gguf`, then stream a `/v1/chat/completions` request through `:8080` and `:8081` and compare. The llama-server log shows the context `--fit` picked (`n_ctx = ...`).
 
 ## Conventions
 
-- Standard library only. The one exception is pystray + Pillow for the tray icon, which `_bootstrap()` installs on first run.
+- Standard library only, except pystray + Pillow for the tray icon (`_bootstrap()` installs them) and `mcp` in `agents/server.py` (run through `uv`).
 - Windows only: process control uses `netstat`, `taskkill` and `shell=True`.
 - `launcher.pyw` is one file split by `# SECTION N` banners. Keep new code in the matching section.
 - Commit messages: short, lowercase, imperative (see `git log`).

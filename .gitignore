@@ -2,4 +2,5 @@
 !.claude/rules/
 config.json
 api_key.txt
+agent_folders.json
 __pycache__/
