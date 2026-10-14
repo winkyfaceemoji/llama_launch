@@ -217,6 +217,42 @@ class JobKindTests(unittest.TestCase):
         self.assertEqual(self.store.get(job["id"])["state"], "failed")
         self.assertIn("not allowed", chat.seen[1][0][-1]["content"])
 
+    def test_rejected_later_proposal_clears_the_saved_plan(self):
+        job = self.start("organize", {"folder": self.dl, "goal": "tidy"})
+        good = [{"op": "remove", "path": os.path.join(self.dl, "a.pdf")}]
+        bad = [{"op": "remove", "path": "C:\\Windows"}]
+        chat = Script(call("propose_plan", {"operations": good}), call("propose_plan", {"operations": bad}),
+                      final("removed C:\\Windows"))
+        runner.run_job(job, self.ctx(chat))
+        self.assertEqual(self.store.get(job["id"])["state"], "failed")
+        self.assertFalse(self.store.has(job["id"], "plan.json"))
+
+    def other_folder(self):
+        other = os.path.join(self.tmp.name, "Other")
+        os.makedirs(other)
+        with open(os.path.join(other, "keep.txt"), "w") as f:
+            f.write("x")
+        self.policy.add_folder(other)
+        return os.path.join(other, "keep.txt")
+
+    def test_plan_outside_the_job_folder_is_refused(self):
+        keep = self.other_folder()
+        job = self.start("organize", {"folder": self.dl, "goal": "tidy"})
+        chat = Script(call("propose_plan", {"operations": [{"op": "remove", "path": keep}]}), final("gave up"))
+        runner.run_job(job, self.ctx(chat))
+        self.assertEqual(self.store.get(job["id"])["state"], "failed")
+        self.assertIn("outside the job's folder", chat.seen[1][0][-1]["content"])
+
+    def test_approve_rechecks_the_job_folder(self):
+        keep = self.other_folder()
+        job_id = self.organize([{"op": "remove", "path": os.path.join(self.dl, "a.pdf")}])
+        self.store.write_json(job_id, "plan.json", [{"op": "remove", "path": keep}])
+        out = runner.approve(job_id, self.ctx(Script()))
+        self.assertIn("Not applied", out)
+        self.assertIn("outside the job's folder", out)
+        self.assertEqual(self.store.get(job_id)["state"], "awaiting_approval")
+        self.assertTrue(os.path.exists(keep))
+
     def test_approve_then_undo(self):
         job_id = self.organize([{"op": "remove", "path": os.path.join(self.dl, "a.pdf")}])
         ctx = self.ctx(Script())

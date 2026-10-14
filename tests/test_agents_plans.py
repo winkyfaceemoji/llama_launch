@@ -55,6 +55,25 @@ class PlanTests(unittest.TestCase):
         for ops in cases:
             self.assertNotEqual(plans.validate_plan(ops, self.policy), [], ops)
 
+    def test_root_limits_operations_to_the_job_folder(self):
+        other = os.path.join(self.tmp.name, "Other")
+        touch(os.path.join(other, "keep.txt"))
+        self.policy.add_folder(other)
+        outside = [{"op": "remove", "path": os.path.join(other, "keep.txt")}]
+        self.assertEqual(plans.validate_plan(outside, self.policy), [])  # both folders are listed
+        errors = plans.validate_plan(outside, self.policy, root=self.dl)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("outside the job's folder", errors[0])
+        self.assertEqual(plans.validate_plan([{"op": "remove", "path": self.p("a.pdf")}], self.policy, root=self.dl), [])
+        # A subfolder job may not touch its parent's files or the subfolder itself.
+        touch(self.p("Sub", "c.txt"))
+        sub = self.p("Sub")
+        for ops in ([{"op": "remove", "path": self.p("a.pdf")}],
+                    [{"op": "remove", "path": sub}],
+                    [{"op": "move", "src": self.p("Sub", "c.txt"), "dst": self.p("c.txt")}]):
+            self.assertNotEqual(plans.validate_plan(ops, self.policy, root=sub), [], ops)
+        self.assertEqual(plans.validate_plan([{"op": "mkdir", "path": self.p("Sub", "New")}], self.policy, root=sub), [])
+
     def test_apply_then_restore_round_trip(self):
         ops = [{"op": "mkdir", "path": self.p("Docs")},
                {"op": "move", "src": self.p("a.pdf"), "dst": self.p("Docs", "a.pdf")},

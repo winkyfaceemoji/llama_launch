@@ -14,6 +14,8 @@ paths: agents/**
   - Operations may not overlap each other; the only exception is a later path under an earlier `mkdir`. Without this, one op could depend on another in ways validation can't see.
   - Moves are `os.rename` only (no cross-drive), and removals only on the sandbox's drive, because trashing is a rename into `trash\`.
   - Paths must be plain: drive-letter absolute, no `:` streams, wildcards, control characters, trailing dot or space, or device names (`CON`, `NUL`, ...).
+  - Every path must be strictly inside the job's own folder (`root=job["args"]["folder"]`), checked at `propose_plan` and again in `approve`. Listing two folders must not let a plan for one touch the other, and the approval dialog's "Folder:" line must stay true.
+  - A rejected `propose_plan` clears any earlier saved plan, so `result.md` can't describe a plan other than the one in `plan.json`.
   - `validate_plan` writes nothing. The same checks run again per operation in `_stop_reason` right before it executes (files may have changed since the proposal), and the first problem stops the apply.
 - **Approval is a state transition under a lock** (`awaiting_approval` to `applying`). The launcher's Jobs pane calls the server's `apply` tool instead of applying itself, so pane and chat can't both apply a plan.
 - **`applied.json` is written after every step (`on_step`)**, not only at the end, so a crash mid-apply still leaves a log Restore can use. Restore skips occupied or missing items and reports them instead of overwriting.

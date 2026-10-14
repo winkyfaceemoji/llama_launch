@@ -60,7 +60,8 @@ def _path_problem(op, policy):
     return None
 
 
-def validate_plan(ops, policy):
+def validate_plan(ops, policy, root=None):
+    # root: the job's folder; every path must be strictly inside it.
     if not isinstance(ops, list) or not ops:
         return ["the plan has no operations"]
     errors, created = [], set()
@@ -79,6 +80,11 @@ def validate_plan(ops, policy):
         if bad:
             errors.append(f"{i}: not allowed (use absolute paths inside the readable folders): {', '.join(bad)}")
             continue
+        if root is not None:
+            outside = [op[k] for k in fields if not is_inside(op[k], root) or _real(op[k]) == _real(root)]
+            if outside:
+                errors.append(f"{i}: outside the job's folder {root}: {', '.join(outside)}")
+                continue
         # No operation may depend on another, except through mkdir parents.
         overlap = None
         mine = [(k, _real(op[k])) for k in fields]

@@ -221,8 +221,9 @@ def run_organize(job, ctx):
     proposed = []
 
     def propose_plan(operations):
-        errors = plans.validate_plan(operations, ctx.policy)
+        errors = plans.validate_plan(operations, ctx.policy, root=folder)
         if errors:
+            proposed[:] = []  # an earlier plan must not survive under a summary of this one
             return "error: plan rejected:\n" + "\n".join(errors)
         proposed[:] = operations
         return f"plan saved with {len(operations)} operations"
@@ -252,12 +253,12 @@ def run_job(job, ctx):
 
 def approve(job_id, ctx):
     try:
-        ctx.store.transition(job_id, ("awaiting_approval",), "applying")
+        job = ctx.store.transition(job_id, ("awaiting_approval",), "applying")
     except (KeyError, ValueError) as e:
         return f"Not applied: {e}"
     try:
         ops = ctx.store.read_json(job_id, "plan.json")
-        errors = plans.validate_plan(ops, ctx.policy)
+        errors = plans.validate_plan(ops, ctx.policy, root=job["args"]["folder"])
     except Exception as e:
         ctx.store.update(job_id, state="awaiting_approval", note=f"could not start applying: {type(e).__name__}: {e}")
         return f"Not applied; nothing was changed: {type(e).__name__}: {e}"
