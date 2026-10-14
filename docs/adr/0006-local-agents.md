@@ -1,6 +1,6 @@
 # 0006. Local agents run as an MCP server behind the Web UI
 
-Status: Accepted
+Status: Superseded by 0007
 
 ## Context
 

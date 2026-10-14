@@ -1,20 +1,21 @@
 # llama_launch
 
-A desktop GUI launcher for [llama.cpp](https://github.com/ggerganov/llama.cpp) that lets you select a model and start a local AI server, a system prompt proxy, and a UVX MCP proxy with a single click. It runs one model at a time, on this PC only.
+A desktop GUI launcher for [llama.cpp](https://github.com/ggerganov/llama.cpp) that lets you select a model and start a local AI server, a system prompt proxy, a UVX MCP proxy and an agents server with a single click. It runs one model at a time, on this PC only.
 
 ---
 
 ## What it does
 
-The launcher starts and manages three processes:
+The launcher starts and manages four processes:
 
 1. **llama-server** — runs a `.gguf` model file locally and exposes it as an API on port `8081`.
 2. **System Prompt Proxy** (`proxy.py`) — sits on port `8080` (the Web UI port), injects your system prompt and today's date into every `/v1/chat/completions` request, then forwards to llama-server on `8081`.
 3. **UVX MCP Proxy** — a middleware server on port `8001` that bridges MCP tools (web search, fetch) to the llama-server Web UI.
+4. **Agents server** (`agents/server.py`) — an MCP server on port `8002` that runs background [agent jobs](#agent-jobs-research-planning-organising). It's optional: if it can't start, everything else still runs.
 
-Once launched, the app shows live output from all three processes in separate log panes, monitors server health, and tracks uptime. Closing the window while servers are running minimizes to the system tray rather than killing them.
+Once launched, the app shows live output from all four processes in log panes (the agents server shares the UVX pane), monitors server health, and tracks uptime. Closing the window while servers are running minimizes to the system tray rather than killing them.
 
-All three servers listen on `127.0.0.1` only, so other devices on your network can't reach them. Web pages open in your browser still can, so llama-server also requires an API key (see [API key](#api-key)).
+All four servers listen on `127.0.0.1` only, so other devices on your network can't reach them. Web pages open in your browser still can, so llama-server also requires an API key (see [API key](#api-key)).
 
 ---
 
@@ -22,7 +23,7 @@ All three servers listen on `127.0.0.1` only, so other devices on your network c
 
 - **Python 3.8+** — all core dependencies are part of the Python standard library.
 - **llama.cpp** — a recent build with `--fit` support (2026 builds have it on by default). `llama-server` must be on your system `PATH`.
-- **uv / uvx** — required for the MCP proxy. Install with `pip install uv`.
+- **uv / uvx** — required for the MCP proxy and the agents server. Install with `pip install uv`.
 - **pystray + Pillow** — required for the system tray icon. The launcher installs these automatically on first run.
 
 ---
@@ -52,10 +53,12 @@ Click **⚙ Settings** in the top-right corner at any time to update the models 
 
 ```
 llama_launch/
-├── launcher.pyw      # the application
-├── proxy.py          # system prompt injection proxy (port 8080 → 8081)
-├── config.json       # all settings: models folder, presets, system prompt, MCP servers
-├── api_key.txt       # llama-server API key, created on first run (keep private)
+├── launcher.pyw          # the application
+├── proxy.py              # system prompt injection proxy (port 8080 → 8081)
+├── agents/               # agents server (server.py, port 8002) and the job, plan and path code it uses
+├── config.json           # all settings: models folder, presets, system prompt, MCP servers
+├── api_key.txt           # llama-server API key, created on first run (keep private)
+├── agent_folders.json    # folders agents may read and organise (created when you add one)
 └── README.md
 ```
 
@@ -85,15 +88,15 @@ The **PRESET** dropdown is set to **Auto** whenever you pick a model. Auto lets 
 ### Launching
 Click **Launch Server**. The window switches to the running view, which shows:
 
-- **Status bar** — server health (`● online`, `● loading model`, `● offline`, or `● <process> exited (code N)` if one of the three crashed), uptime counter, and an **Auto-scroll** toggle.
+- **Status bar** — server health (`● online`, `● loading model`, `● offline`, or `● <process> exited (code N)` if one of the four crashed, for example `● agents server exited (code 1)`), uptime counter, and an **Auto-scroll** toggle.
 - **Agent API** — the direct llama-server address for agents (`http://127.0.0.1:8081/v1`). Click it to copy.
 - **API key** — click **click to copy** to put the key on the clipboard. The key itself is never shown.
-- **Three log panes** — live output from `llama-server` (top), the UVX proxy (middle), and the system prompt proxy (bottom). Drag the dividers to resize. The top pane header shows the active model name and PID.
+- **Jobs pane and three log panes** — agent jobs (top), then live output from `llama-server`, the UVX proxy (with the agents server's lines, marked `[agents]`), and the system prompt proxy. Drag the dividers to resize. The llama-server pane header shows the active model name and PID.
 
-If a port the launcher needs (8080, 8081 or 8001) is still held by a leftover llama-server or proxy from an earlier run, the launcher stops it first. If any other program holds it, the launch is cancelled and the llama-server log pane names that program and its PID.
+If a port the launcher needs (8080, 8081, 8001 or 8002) is still held by a leftover llama-server, proxy or agents server from an earlier run, the launcher stops it first. If any other program holds 8080, 8081 or 8001, the launch is cancelled and the llama-server log pane names that program and its PID. If another program holds 8002, only the agents server is skipped, and the UVX pane says why.
 
 ### Stopping
-Click **Exit Processes** to kill all three servers and return to the launcher screen.
+Click **Exit Processes** to kill all four servers and return to the launcher screen.
 
 ### System tray
 Closing the window while servers are running minimizes to the system tray. Right-click the tray icon to **Show** the window or **Exit**.
@@ -166,30 +169,32 @@ Agents must send the [API key](#api-key) as `Authorization: Bearer <key>`. In mo
 
 ## Agent jobs (research, planning, organising)
 
-The chat model in the Web UI can start background jobs that run on your local model (ADR 0006):
+The chat model in the Web UI can start background jobs that run on your local model (ADR 0007):
 
 - **research** a topic: a cited Markdown report. It can search and fetch web pages, but cannot read your files.
 - **plan** a goal: a step-by-step plan, plus follow-up jobs you can queue from the Jobs pane. It also has web access and no access to your files, so it can only name a folder in a follow-up if your goal gives its path.
-- **organize** a folder: a list of proposed moves, renames, new folders and removals, checked by a local review pass. It can read your listed folders but has no web access. **Nothing changes until you approve it.**
+- **organize** a folder: a list of proposed moves, renames, new folders and removals, checked by a local review pass. It can read your listed folders but has no web access. **Nothing changes until you approve it in the launcher's Jobs pane.**
 
 ### Setup (once)
 
-1. Launch the server. The launcher adds the `agents` MCP server to `config.json` automatically. The first launch takes a little longer while `uv` installs the `mcp` package.
-2. In the Web UI's **MCP Servers** page, add `http://127.0.0.1:8001/servers/agents/mcp` and switch on **Use llama-server proxy**, as for the other servers.
+1. Launch the server. The launcher starts the agents server itself on port `8002`. The first launch takes a little longer while `uv` installs the `mcp` package; the UVX pane shows its progress on lines marked `[agents]`.
+2. In the Web UI's **MCP Servers** page, add `http://127.0.0.1:8002/mcp` and switch on **Use llama-server proxy**, as for the other servers (see [MCP web UI setup](#mcp-web-ui-setup)). If you added the old `http://127.0.0.1:8001/servers/agents/mcp` before, delete it.
 3. In the launcher, open **⚙ Settings → Agent folders → Manage…** and add the local folders agents may read and organise. The chat model can also ask for a folder with `request_folder_access`; approving that tool call adds it.
 
-Leave the Web UI's per-tool confirmation on for `apply` and `request_folder_access`. That confirmation is your approval.
+Leave the Web UI's per-tool confirmation on for `organize`, `restore`, `queue_steps` and `request_folder_access`, and check that it really asks before each of them (no "always allow"). That confirmation is your approval for those calls: `organize` reads your listed folders into its report, `restore` moves files, `queue_steps` starts the jobs a plan proposed, and `request_folder_access` widens what agents can read.
+
+**Plans are approved only in the launcher's Jobs pane**, which shows every operation and the review. The chat model can't apply a plan; it has no `apply` tool.
 
 ### What agents can and can't touch
 
 - **Write:** only `Documents\agent-sandbox`. Each job has a folder in `agent-sandbox\jobs\` with its `result.md` (and `plan.json` / `review.md` for organise jobs).
 - **Read:** the folders you listed, plus the sandbox. Network drives are never read or changed. The launcher's own folder (`api_key.txt`, `config.json`) is off limits even if a parent folder is listed.
-- **Changes to your files** happen only when you approve an organise plan, and only inside a listed folder, never the folder itself. A plan is refused if its operations overlap, if it moves a file to another drive, removes files on a different drive from `Documents`, or uses anything but plain paths (no `:`, wildcards or reserved names like `NUL`). Each step is checked again just before it runs, and a step that no longer fits stops the apply.
+- **Changes to your files** happen only when you approve an organise plan in the Jobs pane, and only inside the folder that job was asked to organise (a listed folder or one inside it), never that folder itself or a listed folder itself. A plan is refused if its operations overlap, if it moves a file to another drive, removes files on a different drive from `Documents`, or uses anything but plain paths (no `:`, wildcards or reserved names like `NUL`). Each step is checked again just before it runs, and a step that no longer fits stops the apply.
 - **Removals** move files to `agent-sandbox\trash\<job>\<step>\<drive>\<path>`. **Restore** puts a whole job back, skipping anything that now has a new file at its old path. **Empty trash** deletes all trash for good, without following links out of the folder.
 
 ### Jobs pane
 
-The running view lists agent jobs. Select one to **Open result**, **Approve / Reject…** a plan (shows every operation and the review), **Restore** an applied plan, or **Queue steps** from a plan job. **Empty trash** asks first. The pane sends approvals through the agents server, so approving there and in chat can't both apply a plan.
+The running view lists the 50 most recent agent jobs. Select one to **Open result**, **Approve / Reject…** a plan (shows every operation and the review; this is the only place a plan can be approved), **Restore** an applied plan, or **Queue steps** from a plan job. **Empty trash** asks first, and refuses while a job is still applying or restoring. The pane sends its actions to the agents server, which owns job state, so the pane and the chat can't act on a job at the same time.
 
 ### Limits
 
@@ -239,12 +244,13 @@ The API key lives in its own file, `api_key.txt`, not in `config.json`.
 | `8080` | System prompt proxy — the Web UI |
 | `8081` | llama-server — agents connect here directly |
 | `8001` | UVX MCP proxy |
+| `8002` | Agents server (MCP at `/mcp`) |
 
 ---
 
 ## MCP web UI setup
 
-The UVX proxy serves each MCP server from `config.json` at `http://127.0.0.1:8001/servers/<name>/mcp`, where `<name>` is its key under `mcpServers` (`fetch`, `ddg-search`, ...).
+The UVX proxy serves each MCP server from `config.json` at `http://127.0.0.1:8001/servers/<name>/mcp`, where `<name>` is its key under `mcpServers` (`fetch`, `ddg-search`, ...). The agents server is separate, at `http://127.0.0.1:8002/mcp`.
 
 Set the [API key](#api-key) in the Web UI first, then for each server:
 
@@ -254,7 +260,10 @@ Set the [API key](#api-key) in the Web UI first, then for each server:
 
 The card then shows the server name, **Connected**, and the number of tools available.
 
-The UVX proxy deliberately sends no CORS headers, so web pages can't call it directly. With **Use llama-server proxy** on, the Web UI reaches it through llama-server's `/cors-proxy`, which needs the API key. With it off, the browser blocks the connection.
+Neither MCP server sends CORS headers, so with **Use llama-server proxy** off the browser blocks the connection; with it on, the Web UI reaches them through llama-server's `/cors-proxy`, which needs the API key. Missing CORS headers don't stop DNS rebinding, where a web page points its own host name at `127.0.0.1`:
+
+- The agents server checks every request's `Host` (and `Origin`, when sent) and answers only `127.0.0.1` and `localhost`, so a rebound page is refused. Its approval routes, used by the Jobs pane, also require the API key.
+- The UVX proxy on `8001` has no such check, so a rebound page can still reach fetch and ddg-search.
 
 ---
 

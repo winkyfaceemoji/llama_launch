@@ -30,3 +30,15 @@ Agreed in a grilling session on 2026-10-14. Decision record: [ADR 0006](../../ad
 ## Jobs pane (launcher)
 
 Lists every job with its state. Buttons: **Open result**, **Approve** / **Reject** (the dialog shows the full plan and the review), **Restore**, **Queue steps** (for a plan document's follow-up jobs), **Empty trash**.
+
+## Amendments
+
+Changes made during implementation and review. Where they conflict with the sections above, these win. Decision record: [ADR 0007](../../adr/0007-agents-server-standalone.md).
+
+- **Agents server runs standalone, not behind the UVX proxy.** The launcher starts it as a fourth process at `http://127.0.0.1:8002/mcp`, with DNS-rebinding protection on (Host and Origin limited to `127.0.0.1` and `localhost`). Behind mcp-proxy, any web page could reach it through DNS rebinding, and an agents startup failure took fetch and ddg-search down too. The launcher no longer writes an `agents` entry into `config.json`; it removes the old one.
+- **Plans are approved only in the Jobs pane.** `apply` is no longer an MCP tool, because the Web UI's prompt shows only the job ID, not the plan. The pane's Approve, Reject, Restore and Queue steps go to `POST /jobs/<id>/apply|reject|restore|queue` on the agents server, which needs the API key and a loopback `Host`. Chat keeps `reject`, `restore` and `queue_steps`; the Web UI prompt stays the approval for those, for `organize` and for `request_folder_access`.
+- **Plans are limited to the job's folder.** Every operation must be strictly inside the folder the organize job was given. This is checked when the plan is proposed and again at apply. A rejected later proposal clears any earlier saved plan.
+- **Empty trash waits for running applies and restores.** It is refused while any job is applying or restoring, or while the pane has an action in flight.
+- **Web XOR user files, per job kind.** research and plan get web tools and read and write only the sandbox; organize reads the listed folders, has no web tools, and can't write files. This replaces "agents read the sandbox plus listed folders" in [Files](#files): a fetched page must never steer an agent that can read private files.
+- **Plans are rename-only, on one drive.** Moves use `os.rename`, so cross-drive moves are refused, and removals only work on the sandbox's drive (trashing is a rename into `trash\`). A copy-and-delete fallback could half-move a folder.
+- **The Jobs pane shows the 50 most recent jobs**, not every job, because it re-reads job files every 2 s on the UI thread.
