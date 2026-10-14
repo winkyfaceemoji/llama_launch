@@ -123,5 +123,26 @@ class EnsureAgentsServerTests(unittest.TestCase):
         self.assertEqual(config["mcpServers"]["agents"]["args"][-1], r"C:\new\server.py")
 
 
+class JobActionsTests(unittest.TestCase):
+    def job(self, kind, state, **extra):
+        return dict({"id": "20261014-000000-abcd", "kind": kind, "state": state, "args": {}, "note": ""}, **extra)
+
+    def test_awaiting_plan_can_be_reviewed(self):
+        self.assertEqual(launcher.job_actions(self.job("organize", "awaiting_approval"), True, False, False),
+                         {"open", "review"})
+
+    def test_applied_or_partly_applied_can_be_restored(self):
+        self.assertIn("restore", launcher.job_actions(self.job("organize", "applied"), True, True, False))
+        self.assertIn("restore", launcher.job_actions(self.job("organize", "failed"), True, True, False))
+        self.assertNotIn("restore", launcher.job_actions(self.job("organize", "failed"), True, False, False))
+
+    def test_plan_steps_queue_once(self):
+        self.assertIn("queue", launcher.job_actions(self.job("plan", "done"), True, False, True))
+        self.assertNotIn("queue", launcher.job_actions(self.job("plan", "done", steps_queued=True), True, False, True))
+
+    def test_running_job_has_nothing(self):
+        self.assertEqual(launcher.job_actions(self.job("research", "running"), False, False, False), set())
+
+
 if __name__ == "__main__":
     unittest.main()
