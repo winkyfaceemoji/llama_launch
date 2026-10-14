@@ -138,8 +138,8 @@ FONT_LOG    = ("Cascadia Code", 10)
 W           = 480
 H_SETUP     = 280    # height of the first-run setup screen
 H_CONFIG    = 270    # height of the main config view
-H_SETTINGS      = 415   # settings dialog, UVX collapsed
-H_SETTINGS_UVX  = 505  # settings dialog, UVX expanded
+H_SETTINGS      = 419   # settings dialog, UVX collapsed
+H_SETTINGS_UVX  = 509   # settings dialog, UVX expanded
 W_SETTINGS      = 460   # settings dialog width
 H_RUNNING   = 750    # height of the running/log view
 
@@ -723,7 +723,7 @@ class SettingsDialog(tk.Toplevel):
             agents_row = tk.Frame(self, bg=BG)
             agents_row.pack(fill="x", padx=20, pady=(0, 14))
             tk.Label(agents_row, text="Agent folders", font=FONT_SMALL, fg=TEXT_PRI, bg=BG).pack(side="left")
-            small_btn(agents_row, "Manage…", on_open_folders).pack(side="right")
+            small_btn(agents_row, "Manage…", lambda: on_open_folders(self)).pack(side="right")
 
         # UVX Settings: label + description + accordion toggle
         uvx_hdr = tk.Frame(self, bg=BG)
@@ -794,15 +794,20 @@ class SettingsDialog(tk.Toplevel):
 
 class FoldersDialog(tk.Toplevel):
     # Folders agents may read (and organise through approved plans).
-    def __init__(self, parent, policy):
+    def __init__(self, parent, policy, error=None):
         super().__init__(parent)
         self.title("Agent folders")
         self.configure(bg=BG)
         self.geometry(f"{W_SETTINGS}x320")
+        self.protocol("WM_DELETE_WINDOW", self._close)
         self.grab_set()
+        self._parent = parent
         self._policy = policy
         section_label(self, "FOLDERS AGENTS CAN READ").pack(fill="x", padx=20, pady=(20, 6))
-        tk.Label(self, text=f"Agents always write only to {policy.sandbox}. Local drives only.",
+        note = f"Agents always write only to {policy.sandbox}. Local drives only."
+        if error:
+            note += f" The sandbox can't be created: {error}"
+        tk.Label(self, text=note,
                  font=FONT_SMALL, fg=TEXT_MUT, bg=BG, wraplength=W_SETTINGS - 40,
                  justify="left").pack(padx=20, anchor="w")
         self._list = tk.Listbox(self, font=FONT_MONO, bg=BG_INPUT, fg=TEXT_PRI, relief="flat",
@@ -812,12 +817,26 @@ class FoldersDialog(tk.Toplevel):
         row.pack(fill="x", padx=20, pady=(0, 20))
         flat_btn(row, "Add folder…", self._add).pack(side="left", padx=(0, 8))
         small_btn(row, "Remove", self._remove).pack(side="left")
-        small_btn(row, "Close", self.destroy).pack(side="right")
+        small_btn(row, "Close", self._close).pack(side="right")
         self._refresh()
+
+    def _close(self):
+        # Tk drops the grab when this window goes; hand it back to Settings.
+        self.destroy()
+        try:
+            if self._parent.winfo_exists():
+                self._parent.grab_set()
+        except tk.TclError:
+            pass
 
     def _refresh(self):
         self._list.delete(0, "end")
-        for f in self._policy.read_folders():
+        try:
+            folders = self._policy.read_folders()
+        except (OSError, ValueError) as e:
+            messagebox.showerror("Folder list unreadable", str(e), parent=self)
+            return
+        for f in folders:
             self._list.insert("end", f)
 
     def _add(self):
@@ -826,14 +845,17 @@ class FoldersDialog(tk.Toplevel):
             return
         try:
             self._policy.add_folder(path)
-        except ValueError as e:
+        except (OSError, ValueError) as e:
             messagebox.showerror("Not added", str(e), parent=self)
         self._refresh()
 
     def _remove(self):
         sel = self._list.curselection()
         if sel:
-            self._policy.remove_folder(self._list.get(sel[0]))
+            try:
+                self._policy.remove_folder(self._list.get(sel[0]))
+            except (OSError, ValueError) as e:
+                messagebox.showerror("Not removed", str(e), parent=self)
             self._refresh()
 
 
@@ -974,7 +996,12 @@ class CommandLauncherGUI:
         )
         self.api_key       = load_api_key(API_KEY_FILE)
         self.agent_policy  = agent_paths.Policy(agent_paths.default_sandbox())
-        self.agent_policy.ensure_dirs()
+        self._agents_error = None
+        try:
+            self.agent_policy.ensure_dirs()
+        except OSError as e:
+            # Agents are optional: an unusable sandbox must never stop the launcher.
+            self._agents_error = str(e)
         self.llama_cmd     = ""
         self._llama_proc   = None
         self._uvx_proc     = None
@@ -1157,7 +1184,7 @@ class CommandLauncherGUI:
             on_save_uvx=on_save_uvx,
             open_browser=self._open_browser,
             on_set_open_browser=self._set_open_browser,
-            on_open_folders=lambda: FoldersDialog(self.master, self.agent_policy),
+            on_open_folders=lambda parent: FoldersDialog(parent, self.agent_policy, self._agents_error),
         )
 
 
