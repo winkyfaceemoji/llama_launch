@@ -450,6 +450,71 @@ def check_verdict(results):
     return True, "Build check passed."
 
 
+def _http(url, timeout, data=None, headers=None):
+    # (status, body) for any HTTP answer; error statuses are returned, not raised.
+    req = urllib.request.Request(url, data=data, headers=headers or {})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.read()
+    except urllib.error.HTTPError as e:
+        with e:
+            return e.code, e.read()
+
+
+def probe_server(base, key, origin="http://evil.example", timeout=10):
+    # Build check against a running llama-server: chat answers with the key, and
+    # without it chat, /tools and /cors-proxy don't, even for a foreign Origin
+    # (ADR 0005). Returns [(check name, ok, detail)] for check_verdict.
+    chat = json.dumps({"messages": [{"role": "user", "content": "Say hi."}],
+                       "max_tokens": 8}).encode()
+    json_type = {"Content-Type": "application/json"}
+
+    def chat_with_key():
+        status, body = _http(base + "/v1/chat/completions", timeout, chat,
+                             {**json_type, "Authorization": f"Bearer {key}"})
+        if status != 200:
+            return False, f"HTTP {status}"
+        msg = json.loads(body)["choices"][0]["message"]
+        # A thinking model can spend all 8 tokens on reasoning, leaving content empty.
+        text = msg.get("content") or msg.get("reasoning_content")
+        return bool(text), repr(text)
+
+    def without_key(path, data):
+        status, _ = _http(base + path, timeout, data, {**json_type, "Origin": origin})
+        # 404 passes: the endpoint isn't enabled on this build, so nothing answers.
+        return status in (401, 403, 404), f"HTTP {status}"
+
+    checks = [
+        ("chat with key", chat_with_key),
+        ("chat without key", lambda: without_key("/v1/chat/completions", chat)),
+        ("tools without key", lambda: without_key("/tools", b"{}")),
+        ("cors-proxy without key", lambda: without_key("/cors-proxy?url=http://127.0.0.1:1/", None)),
+    ]
+    results = []
+    for name, check in checks:
+        try:
+            ok, detail = check()
+        except Exception as e:  # connection refused, timeout, bad JSON
+            ok, detail = False, str(e) or type(e).__name__
+        results.append((name, ok, detail))
+    return results
+
+
+def wait_healthy(base, timeout):
+    # Polls /health once a second until {"status": "ok"}; False at timeout.
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            status, body = _http(base + "/health", 2)
+            if status == 200 and json.loads(body).get("status") == "ok":
+                return True
+        except Exception:
+            pass
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(1)
+
+
 # ============================================================
 # SECTION 4 — THEME & SHARED UI HELPERS
 # ============================================================
