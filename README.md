@@ -117,6 +117,19 @@ The directory scanned for `.gguf` model files and used as the working directory 
 
 - **Web UI** — set to **Yes** to automatically open `http://127.0.0.1:8080/` in the browser once the server comes online. Set to **No** to skip this. The choice is saved between launches and has no other effect.
 - **UVX Settings** — click **▶ Show command** to expand and edit the `uvx mcp-proxy` command. Changes are saved when you click **Save**.
+- **llama.cpp** — **Roll back to bNNNN** shows after an update, while the servers are stopped. See [Updating llama.cpp](#updating-llamacpp).
+
+---
+
+## Updating llama.cpp
+
+This needs llama.cpp installed through WinGet (package `ggml.llamacpp`). The Web UI is built into llama-server, so updating llama.cpp updates the Web UI too.
+
+- **Notice:** at startup the launcher asks WinGet in the background whether a newer build is out. If so, a row under the header shows both build numbers and an **Update** button. Nothing installs until you click it, and updating accepts the package's terms. If WinGet or the network isn't available, nothing shows.
+- **Servers stopped:** Windows locks a running `llama-server.exe`, so **Update** and roll back only work while the servers are stopped.
+- **Build check:** right after the update, the launcher starts the new build once on the spare port `18081` with the selected model and the API key, and checks that it reports the new version, comes online, answers a chat with the key, refuses chat, `/tools` and `/cors-proxy` without the key (also from a foreign web page), and logs the context size `--fit` picked. This uses the GPU for about 30 seconds. With no model selected, only the version is checked.
+- **Automatic roll back:** if any check fails, the launcher reinstalls the previous build and shows which check failed.
+- **Roll back by hand:** **⚙ Settings → llama.cpp → Roll back to bNNNN** reinstalls the build you had before the last update, then runs the build check (it only reports; there's nothing older to fall back to). Afterwards the startup notice offers the newer build again.
 
 ---
 
@@ -254,6 +267,7 @@ All settings live in a single `config.json` next to the launcher:
 | `uvx_command` | The `uvx mcp-proxy` command run at launch (editable in Settings). `{config}` stands for the path to `config.json` |
 | `open_browser` | Whether to open the Web UI when the server comes online |
 | `last_model` | Remembered model selection between sessions |
+| `previous_build` | The llama.cpp build before the last update (e.g. `b9776`), for roll back. Cleared after a roll back |
 
 The API key lives in its own file, `api_key.txt`, not in `config.json`.
 
@@ -267,6 +281,7 @@ The API key lives in its own file, `api_key.txt`, not in `config.json`.
 | `8081` | llama-server — agents connect here directly |
 | `8001` | UVX MCP proxy |
 | `8002` | Agents server (MCP at `/mcp`) |
+| `18081` | llama-server during the build check after an update, for about 30 seconds |
 
 ---
 

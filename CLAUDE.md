@@ -22,7 +22,7 @@ Tkinter launcher (`launcher.pyw`) that starts llama-server, the system prompt pr
 
 - `config.json` is gitignored and holds the user's real settings (models folder, presets, system prompt, MCP servers). Changing `_DEFAULT_CONFIG` only affects a first run; existing configs only pick up the Auto preset, which `load_presets` injects.
 - Localhost is not a security boundary against the browser: llama-server allows every origin. Keep the API key on every launch (ADR 0005), and test new server flags with a foreign `Origin` header.
-- Ports are fixed: `8080` proxy (Web UI), `8081` llama-server (agents connect here directly), `8001` UVX MCP proxy, `8002` agents MCP server. Launching kills leftovers of our own on them and refuses to launch if anything else holds one (on `8002` it only skips the agents server). While testing, check first whether the user's own launcher session is running on these ports.
+- Ports are fixed: `8080` proxy (Web UI), `8081` llama-server (agents connect here directly), `8001` UVX MCP proxy, `8002` agents MCP server; the build check after a llama.cpp update briefly runs llama-server on `18081`. Launching kills leftovers of our own on them and refuses to launch if anything else holds one (on `8002` it only skips the agents server). While testing, check first whether the user's own launcher session is running on these ports.
 - Hardware this is tuned for: RX 7800 XT (16 GB VRAM, Vulkan build of llama.cpp), 32 GB RAM. Anything that pushes a model out of VRAM silently spills to system RAM and runs several times slower rather than failing.
 
 ## ADR index

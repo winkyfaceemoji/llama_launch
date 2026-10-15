@@ -398,6 +398,36 @@ class UpdateRunnerTests(unittest.TestCase):
         self.versions = [9776]
         self.assertEqual(self.runner.rollback(9776), (True, "Rolled back to b9776."))
 
+    # rollback_and_check() (Settings)
+
+    def test_failed_install_skips_build_check(self):
+        self.exit_codes["install"] = 1
+        self.assertEqual(self.runner.rollback_and_check(9776, "C:\\m\\a.gguf", None, self.key_file),
+                         (False, "WinGet install failed (exit 1)."))
+        self.assertEqual(self.popened, [])
+
+    def test_roll_back_then_build_check(self):
+        self.versions = [9776, 9776]
+        wait, probe = self.patched()
+        with wait, probe:
+            self.assertEqual(self.runner.rollback_and_check(9776, "C:\\m\\a.gguf", None, self.key_file),
+                             (True, "Rolled back to b9776. Build check passed."))
+
+    def test_failed_check_after_roll_back_only_reports(self):
+        self.versions = [9776, 9776]
+        wait, probe = self.patched(probe=self.PROBE_LEAKY)
+        with wait, probe:
+            result = self.runner.rollback_and_check(9776, "C:\\m\\a.gguf", None, self.key_file)
+        self.assertEqual(result, (True, "Rolled back to b9776. "
+                                        "Build check failed: chat without key (HTTP 200)."))
+        self.assertEqual(self.calls.count(self.INSTALL_9776), 1)
+
+    def test_build_check_error_after_roll_back_is_reported(self):
+        self.versions = [9776, 9776]
+        with mock.patch.object(launcher, "wait_healthy", side_effect=RuntimeError("boom")):
+            result = self.runner.rollback_and_check(9776, "C:\\m\\a.gguf", None, self.key_file)
+        self.assertEqual(result, (True, "Rolled back to b9776. Build check failed: build check (boom)."))
+
 
 if __name__ == "__main__":
     unittest.main()

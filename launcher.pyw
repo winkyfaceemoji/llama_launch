@@ -141,6 +141,7 @@ H_CONFIG    = 270    # height of the main config view
 H_NOTICE    = 66     # added while the llama.cpp update notice shows
 H_SETTINGS      = 419   # settings dialog, UVX collapsed
 H_SETTINGS_UVX  = 509   # settings dialog, UVX expanded
+H_ROLLBACK      = 44    # added to both while the roll back row shows
 W_SETTINGS      = 460   # settings dialog width
 H_RUNNING   = 750   # height of the running/log view
 
@@ -623,17 +624,28 @@ class UpdateRunner:
         error = self._winget("upgrade")
         if error:
             return False, error
-        try:
-            results = self.build_check(newest, model_path, mmproj, key_file)
-        except Exception as e:
-            results = [("build check", False, str(e) or type(e).__name__)]
-        passed, message = check_verdict(results)
+        passed, message = self._verdict(newest, model_path, mmproj, key_file)
         if passed:
             return True, message
         ok, rolled = self.rollback(previous)
         if ok:
             return False, f"{message} Rolled back to b{previous}."
         return False, f"{message} Roll back to b{previous} also failed: {rolled}"
+
+    def _verdict(self, expected, model_path, mmproj, key_file):
+        try:
+            results = self.build_check(expected, model_path, mmproj, key_file)
+        except Exception as e:
+            results = [("build check", False, str(e) or type(e).__name__)]
+        return check_verdict(results)
+
+    def rollback_and_check(self, build, model_path, mmproj, key_file):
+        # Settings' roll back: reinstall build, then a build check that only reports
+        # (there's no older build to fall back to). (rolled back, message).
+        ok, message = self.rollback(build)
+        if not ok:
+            return False, message
+        return True, f"{message} {self._verdict(build, model_path, mmproj, key_file)[1]}"
 
     def rollback(self, build):
         # Reinstalls build through WinGet and confirms llama-server reports it.
@@ -917,15 +929,19 @@ class SettingsDialog(tk.Toplevel):
     def __init__(self, parent, current_path, on_save,
                  uvx_command="", on_save_uvx=None,
                  open_browser=True, on_set_open_browser=None,
-                 on_open_folders=None):
+                 on_open_folders=None, previous_build=None, on_rollback=None):
         super().__init__(parent)
         self.title("Settings")
         self.configure(bg=BG)
         self.resizable(False, False)
-        self.geometry(f"{W_SETTINGS}x{H_SETTINGS}")
+        # on_rollback is None while the servers run (Windows locks llama-server.exe).
+        self._rollback_build = parse_build(previous_build or "") if on_rollback else None
+        self._extra_h = H_ROLLBACK if self._rollback_build else 0
+        self.geometry(f"{W_SETTINGS}x{H_SETTINGS + self._extra_h}")
         self.grab_set()
 
         self._on_save        = on_save
+        self._on_rollback    = on_rollback
         self._on_save_uvx    = on_save_uvx
         self._on_set_open_browser = on_set_open_browser
         self._uvx_expanded   = False
@@ -982,6 +998,12 @@ class SettingsDialog(tk.Toplevel):
             tk.Label(agents_row, text="Agent folders", font=FONT_SMALL, fg=TEXT_PRI, bg=BG).pack(side="left")
             small_btn(agents_row, "Manage…", lambda: on_open_folders(self)).pack(side="right")
 
+        if self._rollback_build:
+            rollback_row = tk.Frame(self, bg=BG)
+            rollback_row.pack(fill="x", padx=20, pady=(0, 14))
+            tk.Label(rollback_row, text="llama.cpp", font=FONT_SMALL, fg=TEXT_PRI, bg=BG).pack(side="left")
+            small_btn(rollback_row, f"Roll back to b{self._rollback_build}", self._rollback).pack(side="right")
+
         # UVX Settings: label + description + accordion toggle
         uvx_hdr = tk.Frame(self, bg=BG)
         uvx_hdr.pack(fill="x", padx=20, pady=(0, 4))
@@ -1023,11 +1045,22 @@ class SettingsDialog(tk.Toplevel):
         if self._uvx_expanded:
             self._uvx_text.pack(fill="x", padx=20, pady=(0, 6), before=self._btn_row)
             self._uvx_btn.config(text="▼ Hide command")
-            self.geometry(f"{W_SETTINGS}x{H_SETTINGS_UVX}")
+            self.geometry(f"{W_SETTINGS}x{H_SETTINGS_UVX + self._extra_h}")
         else:
             self._uvx_text.pack_forget()
             self._uvx_btn.config(text="▶ Show command")
-            self.geometry(f"{W_SETTINGS}x{H_SETTINGS}")
+            self.geometry(f"{W_SETTINGS}x{H_SETTINGS + self._extra_h}")
+
+    def _rollback(self):
+        build = self._rollback_build
+        if messagebox.askyesno(
+                "Roll back llama.cpp",
+                f"Reinstall llama.cpp b{build} through WinGet, then run the build check? "
+                "This accepts the package's terms and uses the GPU for about 30 seconds.",
+                parent=self):
+            # Settings closes first, so the progress dialog takes the grab from the main window.
+            self.destroy()
+            self._on_rollback(build)
 
     def _browse(self):
         path = filedialog.askdirectory(title="Select llama.cpp folder")
@@ -1526,6 +1559,8 @@ class CommandLauncherGUI:
             open_browser=self._open_browser,
             on_set_open_browser=self._set_open_browser,
             on_open_folders=lambda parent: FoldersDialog(parent, self.agent_policy, self._agents_error),
+            previous_build=self.config.get("previous_build"),
+            on_rollback=None if self.exit_btn.winfo_manager() else self._start_rollback,
         )
 
 
@@ -1562,6 +1597,19 @@ class CommandLauncherGUI:
         if ok:
             self._notice.grid_remove()
             self._resize_config()
+
+    def _start_rollback(self, build):
+        model_path, mmproj = self._models.get(self.model_var.get(), (None, None))
+        UpdateDialog(self.master, f"Roll back to b{build}",
+                     lambda report: UpdateRunner(report).rollback_and_check(
+                         build, model_path, mmproj, API_KEY_FILE),
+                     on_done=self._rollback_done)
+
+    def _rollback_done(self, ok):
+        # Cleared so the startup notice offers the newer build again.
+        if ok:
+            self.config.pop("previous_build", None)
+            save_config(self.config)
 
 
     # ── Window sizing ─────────────────────────────────────────
