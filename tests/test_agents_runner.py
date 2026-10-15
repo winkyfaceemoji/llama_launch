@@ -161,6 +161,9 @@ class RunAgentTests(unittest.TestCase):
         self.assertEqual(st("web_search", {"query": "llama.cpp"}, "results"), 'Searched "llama.cpp"')
         self.assertEqual(st("fetch_url", {"url": "https://github.com/ggml-org/llama.cpp/releases?x=1"}, "page"),
                          "Read github.com/ggml-org/llama.cpp/releases")
+        self.assertEqual(st("fetch_url", {"url": "https://u:p@host.example:8443/x?q=1"}, "page"), "Read host.example:8443/x")
+        self.assertEqual(st("fetch_url", {"url": "https://user:secret@host.example/a"}, "page"), "Read host.example/a")
+        self.assertEqual(st("fetch_url", {"url": "http://[::1"}, "page"), "Read a web page")
         self.assertEqual(st("list_dir", {"path": "C:\\Users\\me\\Downloads\\"}, "a.pdf"), "Looked in Downloads")
         self.assertEqual(st("read_file", {"path": "C:\\x\\notes.txt"}, "text"), "Read notes.txt")
         self.assertEqual(st("write_file", {"path": "report.md", "content": "x"}, "wrote"), "Wrote report.md")

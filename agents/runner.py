@@ -75,8 +75,13 @@ def step_text(name, args, result):
     if name == "web_search":
         return f'Searched "{args.get("query", "")}"'
     if name == "fetch_url":
-        parts = urlsplit(str(args.get("url", "")))
-        return "Read " + (parts.netloc + parts.path)[:80]
+        try:  # never show user:password from the URL
+            parts = urlsplit(str(args.get("url", "")))
+            host = (parts.hostname or "") + (f":{parts.port}" if parts.port else "")
+            path = parts.path
+        except ValueError:
+            return "Read a web page"
+        return "Read " + (host + path)[:80]
     if name == "list_dir":
         return "Looked in " + _name_of(args.get("path"))
     if name == "read_file":
