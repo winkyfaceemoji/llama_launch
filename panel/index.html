@@ -13,7 +13,11 @@
   <button id="close" type="button" hidden>Close</button>
 </header>
 <div id="status" class="status" role="status" aria-live="polite" hidden></div>
-<div id="flash" class="flash" role="status" aria-live="polite" hidden></div>
+<form id="key-form" class="key-form" hidden>
+  <input id="key-input" type="password" autocomplete="off" spellcheck="false" aria-label="Approval key" placeholder="Approval key">
+  <button type="submit">Save</button>
+</form>
+<div id="flash"class="flash" role="status" aria-live="polite" hidden></div>
 <main id="jobs" class="jobs"></main>
 <footer class="bottom">
   <button id="empty-trash" type="button">Empty trash</button>

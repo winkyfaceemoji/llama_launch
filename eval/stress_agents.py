@@ -25,6 +25,7 @@ from agents import jobs as agent_jobs, panel_api, paths as agent_paths  # noqa: 
 AGENTS = "http://127.0.0.1:8002"
 PROXY = "http://127.0.0.1:8080"
 KEY = open(os.path.join(ROOT, "api_key.txt"), encoding="utf-8").read().strip()
+APPROVAL_KEY = open(os.path.join(ROOT, "approval_key.txt"), encoding="utf-8").read().strip()  # the panel's routes
 BASE = os.path.join(os.environ["TEMP"], "agent-stress")
 OUTSIDE = os.path.join(os.environ["TEMP"], "agent-stress-outside")
 POLICY = agent_paths.Policy(agent_paths.default_sandbox())
@@ -70,7 +71,7 @@ def tools_list(url):
 
 def route(action, job_id):
     req = urllib.request.Request(f"{AGENTS}/jobs/{job_id}/{action}", data=b"", method="POST",
-                                 headers={"Authorization": f"Bearer {KEY}", "Host": "127.0.0.1:8002"})
+                                 headers={"Authorization": f"Bearer {APPROVAL_KEY}", "Host": "127.0.0.1:8002"})
     with urllib.request.urlopen(req, timeout=900) as r:
         return json.loads(r.read().decode("utf-8"))
 
@@ -264,7 +265,7 @@ def watch_panel(stop, samples):
         t = time.perf_counter()
         try:
             req = urllib.request.Request(f"{PROXY}/agent-jobs/api/jobs",
-                                         headers={"Authorization": f"Bearer {KEY}", "Host": "127.0.0.1:8080"})
+                                         headers={"Authorization": f"Bearer {APPROVAL_KEY}", "Host": "127.0.0.1:8080"})
             with urllib.request.urlopen(req, timeout=10) as r:
                 r.read()
                 samples.append((round(time.perf_counter() - t, 3), r.status))

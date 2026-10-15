@@ -19,6 +19,10 @@ h1{font-size:15px;font-weight:500;margin:0}
 .status,.flash{margin:0 14px 10px;padding:8px 10px;border-radius:8px;font-size:12px}
 .status{background:var(--muted-bg);color:var(--muted-text)}
 .flash{background:var(--surface-2);color:var(--text)}
+.key-form{display:flex;gap:8px;margin:0 14px 10px}
+.key-form input{flex:1;min-width:0;font:inherit;font-size:12px;padding:6px 8px;border-radius:8px;
+  border:1px solid var(--border);background:var(--surface);color:var(--text)}
+.key-form[hidden]{display:none}
 .card{background:var(--surface);border:0.5px solid var(--border);border-radius:12px;padding:10px 12px}
 .card.review{border-color:var(--warn-border)}
 .card.compact{display:flex;align-items:center;gap:8px;cursor:pointer;width:100%;text-align:left;color:var(--text);

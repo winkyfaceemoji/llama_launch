@@ -98,6 +98,7 @@ class PolicyTests(unittest.TestCase):
         policy.ensure_dirs()
         policy.add_folder(os.path.dirname(paths.APP_DIR))
         self.assertFalse(policy.can_read(os.path.join(paths.APP_DIR, "api_key.txt")))
+        self.assertFalse(policy.can_read(os.path.join(paths.APP_DIR, "approval_key.txt")))
         self.assertFalse(policy.can_read(os.path.join(paths.APP_DIR, "config.json")))
 
     def test_junction_escape_is_refused(self):

@@ -28,13 +28,27 @@
   // Paths come from the model; a newline in one must not draw a fake line in the plan box.
   const clean = (s) => String(s).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ");
 
-  function apiKey() {
-    try { return String(JSON.parse(localStorage.getItem("LlamaUi.config") || "{}").apiKey || "").trim(); }
+  // The agents server's own key, not the llama API key (ADR 0009). The user pastes it here once.
+  const KEY_STORE = "agentJobs.approvalKey";
+  const keyForm = $("key-form"), keyInput = $("key-input");
+
+  function approvalKey() {
+    try { return String(localStorage.getItem(KEY_STORE) || "").trim(); }
     catch (e) { return ""; }
   }
 
+  keyForm.addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    const key = keyInput.value.trim();
+    if (!key) return;
+    try { localStorage.setItem(KEY_STORE, key); } catch (e) { flash("Couldn't save the key: " + e.message); return; }
+    keyInput.value = "";
+    lastSig = null;
+    refresh();
+  });
+
   async function api(method, path) {
-    const key = apiKey();
+    const key = approvalKey();
     if (!key) { const e = new Error("no key"); e.kind = "no-key"; throw e; }
     let r;
     try { r = await fetch("/agent-jobs/api/" + path, {method, headers: {Authorization: "Bearer " + key}}); }
@@ -91,7 +105,7 @@
       const res = await api("POST", path);
       flash(res.message || (res.ok ? "Done." : "That didn't work."));
     } catch (e) {
-      flash(e.kind === "down" ? "Agents server isn't running." : e.kind === "forbidden" ? "The API key was refused." : e.message);
+      flash(e.kind === "down" ? "Agents server isn't running." : e.kind === "forbidden" ? "The approval key was refused." : e.message);
     } finally {
       busy = false;
       lastSig = null;  // the busy render disabled the buttons; the next poll must draw them again
@@ -214,11 +228,12 @@
     } catch (e) { failure = e; }
     if (mine !== seq) return;  // a newer poll (or the refresh after an action) owns the screen and the timer
     try {
+      keyForm.hidden = !(failure && (failure.kind === "no-key" || failure.kind === "forbidden"));
       if (failure) {
         const e = failure;
-        showStatus(e.kind === "no-key" ? "Paste your API key in the Web UI under Settings → General, then reopen this panel."
+        showStatus(e.kind === "no-key" ? "The Jobs panel needs its approval key (not the API key). In the launcher, click the approval key to copy it, then paste it here."
           : e.kind === "down" ? "Agents server isn't running. Start the servers from the launcher."
-          : e.kind === "forbidden" ? "The API key was refused. Copy it again from the launcher and paste it in Settings → General."
+          : e.kind === "forbidden" ? "The approval key was refused. Copy it again from the launcher and paste it here."
           : "Couldn't load jobs: " + e.message);
         lastSig = null;
         postCounts(0, 0);  // don't leave a stale number on the Jobs button

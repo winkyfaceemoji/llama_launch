@@ -135,7 +135,7 @@ ACTIONS = {
 
 def _key():
     try:
-        return llm.read_key(llm.API_KEY_FILE)
+        return llm.read_key(llm.APPROVAL_KEY_FILE)
     except OSError:
         return ""  # no key file: check_request refuses everything
 

@@ -10,6 +10,8 @@ from .paths import APP_DIR
 LLAMA_URL = "http://127.0.0.1:8081/v1/chat/completions"
 MCP_URL = "http://127.0.0.1:8001/servers/{server}/mcp"
 API_KEY_FILE = os.path.join(APP_DIR, "api_key.txt")
+# The jobs panel's key for the agents server's routes, never the llama API key (ADR 0009).
+APPROVAL_KEY_FILE = os.path.join(APP_DIR, "approval_key.txt")
 AGENTS_PORT = 8002
 AGENTS_BASE = f"http://127.0.0.1:{AGENTS_PORT}"
 AGENTS_URL = f"{AGENTS_BASE}/mcp"  # the agents server's own MCP endpoint (not behind mcp-proxy)
@@ -48,9 +50,10 @@ def read_key(key_file=API_KEY_FILE):
 
 
 def check_request(headers, port, key):
-    """True only if Host is this server's loopback address and the request carries the API key.
+    """True only if Host is this server's loopback address and the request carries the key.
 
     Guards the approval routes: a rebound web page sends its own Host, and no page knows the key.
+    The server passes the approval key, so a client holding only the llama API key can't approve plans.
     """
     h = {str(k).lower(): v for k, v in headers.items()}
     if h.get("host", "").lower() not in (f"127.0.0.1:{port}", f"localhost:{port}"):

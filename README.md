@@ -59,6 +59,7 @@ llama_launch/
 ├── panel/                # the jobs panel the proxy adds to the Web UI (served at /agent-jobs)
 ├── config.json           # all settings: models folder, presets, system prompt, MCP servers
 ├── api_key.txt           # llama-server API key, created on first run (keep private)
+├── approval_key.txt      # Jobs panel key for the agents server, created on first run (keep private)
 ├── agent_folders.json    # folders agents may read and organise (created when you add one)
 └── README.md
 ```
@@ -92,6 +93,7 @@ Click **Launch Server**. The window switches to the running view, which shows:
 - **Status bar** — server health (`● online`, `● loading model`, `● offline`, or `● <process> exited (code N)` if one of the four crashed, for example `● agents server exited (code 1)`), uptime counter, and an **Auto-scroll** toggle.
 - **Agent API** — the direct llama-server address for agents (`http://127.0.0.1:8081/v1`). Click it to copy.
 - **API key** — click **click to copy** to put the key on the clipboard. The key itself is never shown.
+- **Approval key (Jobs panel)** — the same, for the key the Jobs panel needs (see [Approval key](#approval-key)).
 - **Three log panes** — live output from `llama-server`, the UVX proxy (with the agents server's lines, marked `[agents]`), and the system prompt proxy. Drag the dividers to resize. The llama-server pane header shows the active model name and PID.
 
 If a port the launcher needs (8080, 8081, 8001 or 8002) is still held by a leftover llama-server, proxy or agents server from an earlier run, the launcher stops it first. If any other program holds 8080, 8081 or 8001, the launch is cancelled and the llama-server log pane names that program and its PID. If another program holds 8002, only the agents server is skipped, and the UVX pane says why.
@@ -181,7 +183,7 @@ The chat model in the Web UI can start background jobs that run on your local mo
 1. Launch the server. The launcher starts the agents server itself on port `8002`. The first launch takes a little longer while `uv` installs the `mcp` package; the UVX pane shows its progress on lines marked `[agents]`.
 2. In the Web UI's **MCP Servers** page, add `http://127.0.0.1:8002/mcp` and switch on **Use llama-server proxy**, as for the other servers (see [MCP web UI setup](#mcp-web-ui-setup)). If you added the old `http://127.0.0.1:8001/servers/agents/mcp` before, delete it.
 3. In the launcher, open **⚙ Settings → Agent folders → Manage…** and add the local folders agents may read and organise. The chat model can also ask for a folder with `request_folder_access`; approving that tool call adds it.
-4. Paste your [API key](#api-key) into the Web UI under **Settings → General** if you haven't. The Jobs panel uses it to talk to the agents server.
+4. Paste your [API key](#api-key) into the Web UI under **Settings → General** if you haven't, and the [approval key](#approval-key) into the Jobs panel the first time it asks.
 
 Leave the Web UI's per-tool confirmation on for `organize`, `restore`, `queue_steps` and `request_folder_access`, and check that it really asks before each of them (no "always allow"). That confirmation is your approval for those calls: `organize` reads your listed folders into its report, `restore` moves files, `queue_steps` starts the jobs a plan proposed, and `request_folder_access` widens what agents can read.
 
@@ -203,7 +205,7 @@ Click **Jobs** at the top right of the Web UI to open a 360 px panel beside the 
 - **Restore** puts back everything an applied (or part-applied) plan moved or removed. **Queue** starts the follow-up jobs a plan job proposed.
 - **Empty trash** at the bottom deletes all trash for good. Click it once and it turns red and reads **Confirm empty trash**; click again (a click within the first 0.4 seconds is ignored, so a double-click doesn't count) within 5 seconds to go ahead, or wait and it reverts. It is refused while any job is applying or restoring, including a restore started from chat.
 
-The panel talks to the agents server through the proxy, with your Web UI API key, so the panel and the chat can't act on a job at the same time. If it says the agents server isn't running, start the servers from the launcher.
+The panel talks to the agents server through the proxy, with the approval key, so the panel and the chat can't act on a job at the same time. If it says the agents server isn't running, start the servers from the launcher.
 
 After updating the launcher, press Ctrl+F5 once in the Web UI so the browser drops its cached copy of the page.
 
@@ -227,6 +229,15 @@ llama-server allows requests from every web origin, so without a key any web pag
 - **Replacing it:** delete `api_key.txt` and relaunch. A new key is generated; paste it into the Web UI and your agents again.
 
 `/health` and `/v1/models` stay open without a key; everything else returns `401`.
+
+### Approval key
+
+The Jobs panel uses a second key, so a program you give the API key to can't approve plans that change your files.
+
+- **Where it comes from:** the launcher generates it on first run into `approval_key.txt` (gitignored).
+- **Getting it:** click **click to copy** next to **Approval key (Jobs panel)** in the running view.
+- **Jobs panel:** paste it into the field the panel shows the first time, or after the key changes. The panel saves it in your browser.
+- **Replacing it:** delete `approval_key.txt` and restart the launcher, then paste the new key into the panel.
 
 ---
 
@@ -273,7 +284,7 @@ The card then shows the server name, **Connected**, and the number of tools avai
 
 Neither MCP server sends CORS headers, so with **Use llama-server proxy** off the browser blocks the connection; with it on, the Web UI reaches them through llama-server's `/cors-proxy`, which needs the API key. Missing CORS headers don't stop DNS rebinding, where a web page points its own host name at `127.0.0.1`:
 
-- The agents server checks every request's `Host` (and `Origin`, when sent) and answers only `127.0.0.1` and `localhost`, so a rebound page is refused. Its approval routes, used by the Jobs panel, also require the API key. The panel's routes on the proxy (`/agent-jobs`) do the same Host check themselves, since the proxy rewrites Host before the agents server sees it.
+- The agents server checks every request's `Host` (and `Origin`, when sent) and answers only `127.0.0.1` and `localhost`, so a rebound page is refused. Its approval routes, used by the Jobs panel, also require the approval key. The panel's routes on the proxy (`/agent-jobs`) do the same Host check themselves, since the proxy rewrites Host before the agents server sees it.
 - The UVX proxy on `8001` has no such check, so a rebound page can still reach fetch and ddg-search.
 
 ---

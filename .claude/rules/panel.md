@@ -9,4 +9,5 @@ paths: panel/**
 - **Empty trash is a two-click confirm inside the panel, not `window.confirm`** (a native confirm focuses OK, so Enter would delete). The first click only arms the button for 5 seconds, and a click within 400 ms of arming is ignored (double-click, held Enter); Restore still uses `window.confirm`.
 - **`refresh()` must always re-arm its timer.** Rendering runs inside a try/catch that shows "Couldn't show jobs: ..." so a render bug can't freeze the polling.
 - **Plan warnings (`job.warnings`, a list of `{text, level}`) come from fixed server rules and are always shown above the review**, whatever the review says. Level `danger` (removing more than half the folder) gets the red style.
+- **The panel sends the approval key, not the Web UI's API key** (ADR 0009). The user pastes it into the panel's own field, saved as `localStorage["agentJobs.approvalKey"]`; the field shows only while the key is missing or refused. The proxy must never add it: then any page that can make the browser send a request to the proxy could approve plans.
 - Everything from the model (paths, step text) goes in with `textContent`, never as HTML.

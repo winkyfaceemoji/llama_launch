@@ -992,6 +992,8 @@ class CommandLauncherGUI:
             'uvx mcp-proxy --named-server-config "{config}" --port 8001 --stateless'
         )
         self.api_key       = load_api_key(API_KEY_FILE)
+        # Only the jobs panel sends this one, so llama API key holders can't approve plans (ADR 0009).
+        self.approval_key  = load_api_key(agent_llm.APPROVAL_KEY_FILE)
         self.agent_policy  = agent_paths.Policy(agent_paths.default_sandbox())
         self._agents_error = None
         try:
@@ -1088,19 +1090,29 @@ class CommandLauncherGUI:
         # Below the status bar: the direct API address for agents (bypasses the
         # proxy, so no system prompt or date injection). Click to copy.
         self.api_bar = tk.Frame(self.master, bg=BG)
-        tk.Label(self.api_bar, text="Agent API", font=FONT_SMALL,
+        api_row = tk.Frame(self.api_bar, bg=BG)
+        api_row.pack(fill="x")
+        tk.Label(api_row, text="Agent API", font=FONT_SMALL,
                  fg=TEXT_MUT, bg=BG).pack(side="left")
-        self._api_label = tk.Label(self.api_bar, text=AGENT_API_URL, font=FONT_MONO,
+        self._api_label = tk.Label(api_row, text=AGENT_API_URL, font=FONT_MONO,
                                    fg=ACCENT, bg=BG, cursor="hand2")
         self._api_label.pack(side="left", padx=(8, 0))
         self._api_label.bind("<Button-1>", lambda e: self._copy_api_url())
-        # The key itself is never shown, only copied.
-        tk.Label(self.api_bar, text="API key", font=FONT_SMALL,
-                 fg=TEXT_MUT, bg=BG).pack(side="left", padx=(24, 0))
-        self._key_label = tk.Label(self.api_bar, text="click to copy", font=FONT_MONO,
+        # The keys themselves are never shown, only copied. A second row: three pairs don't fit 480 px.
+        key_row = tk.Frame(self.api_bar, bg=BG)
+        key_row.pack(fill="x", pady=(2, 0))
+        tk.Label(key_row, text="API key", font=FONT_SMALL,
+                 fg=TEXT_MUT, bg=BG).pack(side="left")
+        self._key_label = tk.Label(key_row, text="click to copy", font=FONT_MONO,
                                    fg=ACCENT, bg=BG, cursor="hand2")
         self._key_label.pack(side="left", padx=(8, 0))
-        self._key_label.bind("<Button-1>", lambda e: self._copy_api_key())
+        self._key_label.bind("<Button-1>", lambda e: self._copy_key(self.api_key, self._key_label))
+        tk.Label(key_row, text="Approval key (Jobs panel)", font=FONT_SMALL,
+                 fg=TEXT_MUT, bg=BG).pack(side="left", padx=(24, 0))
+        self._approval_label = tk.Label(key_row, text="click to copy", font=FONT_MONO,
+                                        fg=ACCENT, bg=BG, cursor="hand2")
+        self._approval_label.pack(side="left", padx=(8, 0))
+        self._approval_label.bind("<Button-1>", lambda e: self._copy_key(self.approval_key, self._approval_label))
 
         # ── Rows 7–8: Running state (hidden until Launch is pressed)
         # Two stacked log panes separated by a draggable sash.
@@ -1202,11 +1214,11 @@ class CommandLauncherGUI:
         self._api_label.config(text="copied")
         self.master.after(1200, lambda: self._api_label.config(text=AGENT_API_URL))
 
-    def _copy_api_key(self):
+    def _copy_key(self, key, label):
         self.master.clipboard_clear()
-        self.master.clipboard_append(self.api_key)
-        self._key_label.config(text="copied")
-        self.master.after(1200, lambda: self._key_label.config(text="click to copy"))
+        self.master.clipboard_append(key)
+        label.config(text="copied")
+        self.master.after(1200, lambda: label.config(text="click to copy"))
 
 
     # ── Two-state view switching ──────────────────────────────
