@@ -48,6 +48,7 @@ button{font:inherit;font-size:12px;padding:6px 10px;border-radius:8px;cursor:poi
   color:var(--text);border:0.5px solid var(--border-strong)}
 button:hover{background:var(--surface-2)}
 button:disabled{opacity:.5;cursor:default}
+button.danger{background:var(--bad-bg);color:var(--bad-text);border-color:var(--bad-text)}
 .bottom{padding:10px 14px;border-top:0.5px solid var(--border);display:flex;justify-content:flex-end}
 .empty{color:var(--text-2);font-size:12px;padding:20px 4px;text-align:center}
 @keyframes spin{to{transform:rotate(360deg)}}

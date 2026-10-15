@@ -1,7 +1,7 @@
 (() => {
   "use strict";
   const MAX_CALLS = 40;
-  const VISIBLE_MS = 2000, HIDDEN_MS = 15000;
+  const VISIBLE_MS = 2000, HIDDEN_MS = 15000, TRASH_ARM_MS = 5000;
   const STATES = {
     queued: ["Queued", "accent"], running: ["Running", "accent"], awaiting_approval: ["Needs review", "warn"],
     applying: ["Applying", "accent"], restoring: ["Restoring", "accent"], applied: ["Applied", "ok"],
@@ -211,21 +211,27 @@
       jobs = Array.isArray(data.jobs) ? data.jobs : [];
     } catch (e) { failure = e; }
     if (mine !== seq) return;  // a newer poll (or the refresh after an action) owns the screen and the timer
-    if (failure) {
-      const e = failure;
-      showStatus(e.kind === "no-key" ? "Paste your API key in the Web UI under Settings → General, then reopen this panel."
-        : e.kind === "down" ? "Agents server isn't running. Start the servers from the launcher."
-        : e.kind === "forbidden" ? "The API key was refused. Copy it again from the launcher and paste it in Settings → General."
-        : "Couldn't load jobs: " + e.message);
-      lastSig = null;
-      postCounts(0, 0);  // don't leave a stale number on the Jobs button
-    } else {
-      showStatus("");
-      const sig = signature(jobs);
-      if (!busy && sig !== lastSig) {
-        lastSig = sig;
-        render(jobs);
+    try {
+      if (failure) {
+        const e = failure;
+        showStatus(e.kind === "no-key" ? "Paste your API key in the Web UI under Settings → General, then reopen this panel."
+          : e.kind === "down" ? "Agents server isn't running. Start the servers from the launcher."
+          : e.kind === "forbidden" ? "The API key was refused. Copy it again from the launcher and paste it in Settings → General."
+          : "Couldn't load jobs: " + e.message);
+        lastSig = null;
+        postCounts(0, 0);  // don't leave a stale number on the Jobs button
+      } else {
+        showStatus("");
+        const sig = signature(jobs);
+        if (!busy && sig !== lastSig) {
+          lastSig = sig;
+          render(jobs);
+        }
       }
+    } catch (e) {
+      // A render bug must not stop the polling below.
+      lastSig = null;
+      showStatus("Couldn't show jobs: " + e.message);
     }
     timer = setTimeout(refresh, visible ? VISIBLE_MS : HIDDEN_MS);
   }
@@ -234,8 +240,26 @@
     closeBtn.hidden = false;
     closeBtn.addEventListener("click", () => window.parent.postMessage({type: "agent-jobs-close"}, location.origin));
   }
-  $("empty-trash").addEventListener("click", () => act("trash/empty",
-    "Permanently delete everything in the agent trash? Jobs whose files are in there can no longer be restored."));
+  // Emptying the trash is permanent, so it takes two clicks: the first only arms the button for a few seconds.
+  // (window.confirm would put the default on OK, so Enter would delete.)
+  const trashBtn = $("empty-trash");
+  let trashTimer = null;
+  const disarmTrash = () => {
+    clearTimeout(trashTimer);
+    trashTimer = null;
+    trashBtn.textContent = "Empty trash";
+    trashBtn.classList.remove("danger");
+  };
+  trashBtn.addEventListener("click", () => {
+    if (trashTimer === null) {
+      trashBtn.textContent = "Confirm empty trash";
+      trashBtn.classList.add("danger");
+      trashTimer = setTimeout(disarmTrash, TRASH_ARM_MS);
+      return;
+    }
+    disarmTrash();
+    act("trash/empty");
+  });
   window.addEventListener("message", (e) => {
     if (e.origin !== location.origin || e.source !== window.parent) return;
     const d = e.data || {};
