@@ -47,7 +47,8 @@ The existing `POST /jobs/{id}/{apply|reject|restore|queue}` routes are unchanged
 
 - **Panel files:** serves `/agent-jobs` (the panel page) and `/agent-jobs/<file>` from the repo's `panel/` folder. Only known file names are served; anything else returns 404.
 - **API pass-through:** passes `/agent-jobs/api/<rest>` to `http://127.0.0.1:8002/<rest>`, but only for `GET jobs`, `POST jobs/<id>/<action>` and `POST trash/empty`. It forwards the browser's `Authorization` header unchanged and sets `Host: 127.0.0.1:8002`. It **never adds a key itself**. If the agents server is down, it replies 502 with a short message.
-- **Script injection:** for `GET /` and `/index.html` (the Web UI page), it asks llama-server for an uncompressed page (no `Accept-Encoding`). It then inserts `<script src="/agent-jobs/inject.js"></script>` before the last `</body>` (or at the end if there's none), fixes `Content-Length`, and sends `Cache-Control: no-store`. A pure function does the insertion so it can be unit-tested. Every other path is relayed exactly as today.
+- **Script injection:** for `GET /` and `/index.html` (the Web UI page), it asks llama-server for the page with `Accept-Encoding: gzip` (llama-server serves this page *only* gzipped; without gzip it answers 415 — verified 2026-10-14) and decompresses it with `gzip`. It then inserts `<script src="/agent-jobs/inject.js"></script>` before the last `</body>` (or at the end if there's none), sends it uncompressed with a fixed `Content-Length` and `Cache-Control: no-store`, and drops the `ETag`. A non-200 reply passes through untouched. A pure function does the insertion so it can be unit-tested. Every other path is relayed exactly as today.
+- **Panel files carry `Cross-Origin-Embedder-Policy: require-corp`** (plus COOP same-origin and CORP same-origin), because the Web UI page sends COEP `require-corp`, and a browser blocks an embedded page that doesn't match.
 
 ### Panel files (`panel/`)
 
@@ -74,11 +75,14 @@ Remove the Jobs pane, `job_actions`, the `_refresh_jobs` polling, the review dia
 - A rebinding page reaching `:8080` can't use `/agent-jobs/api` without the key, and the agents server's Host check still applies after the proxy rewrites Host.
 - Step text and plan paths are shown with `textContent` and never as HTML.
 
-## Risks to check before building
+## Risks (checked 2026-10-14 on build 9776)
 
-- Whether the Web UI's page sets a Content-Security-Policy that blocks the same-origin script or frame. Check the live page's headers and `<meta>` tags.
-- Whether the Web UI's service worker caches `index.html`. Registration failed in earlier runs; confirm, and rely on `Cache-Control: no-store` regardless.
-- Whether llama-server serves the page compressed even when the request has no `Accept-Encoding`.
+- **CSP:** none, neither in a header nor in a `<meta>` tag.
+- **Service worker:** `sw.js` exists but only handles `message` events, with no fetch handler, so it never caches or intercepts pages.
+- **Compression:** gzip-only, as described under Proxy.
+- **Browser cache:** the page is sent with `Cache-Control: public, max-age=31536000, immutable`. The proxy now sends `no-store`, but a browser that already cached the old page needs one hard refresh (Ctrl+F5). The README says so.
+- **COEP:** the page sends `require-corp`; the panel files match it.
+- **Empty trash:** it now runs inside the agents server under one lock shared with apply and restore. That closes the race with a restore started from chat, which was a deferred pass-2 item.
 
 ## Testing
 
