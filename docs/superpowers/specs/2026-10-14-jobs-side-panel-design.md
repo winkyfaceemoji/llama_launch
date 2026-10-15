@@ -52,11 +52,11 @@ The existing `POST /jobs/{id}/{apply|reject|restore|queue}` routes are unchanged
 
 ### Panel files (`panel/`)
 
-- **`inject.js`:** adds a fixed **Jobs** button at the top right with a count of running plus needs-review jobs, and a 360 px right-side frame showing `/agent-jobs` that slides in and out. The open state is remembered in `localStorage` under `agentJobsPanelOpen`. Everything it adds sits in its own root element with prefixed class names, so it can't clash with the Web UI's styles.
+- **`inject.js`:** adds a fixed **Jobs** button at the top right with a count of running plus needs-review jobs, and a 360 px right-side frame showing `/agent-jobs` that slides in and out. The open state is remembered in `localStorage` under `agentJobsPanelOpen`. Everything it adds sits in its own root element with prefixed class names, so it can't clash with the Web UI's styles. The button sits at `z-index` 40 and the frame at 39, under the Web UI's modal dialogs (z-50). On the Web UI's Settings pages (`location.hash` starting `#/settings`) both are hidden, without touching the saved open state; leaving Settings brings back whatever was open or closed.
 - **`index.html`, `panel.css`, `panel.js`:** the panel itself.
   - It reads the API key from the Web UI's saved settings: `localStorage["LlamaUi.config"].apiKey`. The frame has the same origin, so it can.
   - It polls `GET /agent-jobs/api/jobs` every 2 s, but only while visible.
-  - It draws cards per the mockup. Approve, Reject, Restore and Queue steps post to the routes, and their buttons are disabled while a call is in flight. Restore and Empty trash ask for confirmation first; Empty trash defaults to No and says it's permanent.
+  - It draws cards per the mockup. Approve, Reject, Restore and Queue steps post to the routes, and their buttons are disabled while a call is in flight. Restore asks for confirmation with `window.confirm`. Empty trash takes two clicks: the first turns the button into a red "Confirm empty trash" for 5 seconds, a second click within that time sends the request, and otherwise it reverts (so Enter can't delete the trash in one press).
   - It shows each route's `message` after an action.
   - It tells the inject script the job counts (`postMessage` to the same origin only) for the button's badge.
 - **States the panel handles:**
