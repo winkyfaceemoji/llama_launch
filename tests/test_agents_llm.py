@@ -19,8 +19,6 @@ class Fake(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         SEEN["auth"], SEEN["body"] = self.headers.get("Authorization"), body
         p = SEEN["path"] = self.path
-        if p.startswith("/jobs/"):
-            return self._reply(200, "application/json", json.dumps({"ok": True, "message": "done " + p}).encode())
         if "/fail" in p:
             return self._reply(500, "text/plain", b"model not loaded")
         if "/sse" in p:
@@ -102,19 +100,6 @@ class HttpTests(unittest.TestCase):
             llm.mcp_call("empty", "search", {}, url=self.base + "/servers/{server}/mcp")
         self.assertIn("unexpected reply from empty/search", str(cm.exception))
 
-    def test_agents_action_posts_with_key(self):
-        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
-            f.write("k123\n")
-        try:
-            msg = llm.agents_action("apply", "20261014-000000-abcd", base=self.base, key_file=f.name)
-        finally:
-            os.unlink(f.name)
-        self.assertEqual(msg, "done /jobs/20261014-000000-abcd/apply")
-        self.assertEqual(SEEN["auth"], "Bearer k123")
-
-    def test_agents_action_refuses_unknown_actions(self):
-        with self.assertRaises(ValueError):
-            llm.agents_action("delete", "20261014-000000-abcd", base=self.base)
 
 
 class CheckRequestTests(unittest.TestCase):

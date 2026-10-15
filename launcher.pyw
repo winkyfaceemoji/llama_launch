@@ -86,7 +86,7 @@ import secrets
 import threading
 import urllib.request
 import time
-from agents import jobs as agent_jobs, paths as agent_paths, plans as agent_plans, llm as agent_llm
+from agents import jobs as agent_jobs, paths as agent_paths, llm as agent_llm
 
 
 # ── System tray bootstrap (pystray + Pillow)
@@ -141,7 +141,7 @@ H_CONFIG    = 270    # height of the main config view
 H_SETTINGS      = 419   # settings dialog, UVX collapsed
 H_SETTINGS_UVX  = 509   # settings dialog, UVX expanded
 W_SETTINGS      = 460   # settings dialog width
-H_RUNNING   = 970   # height of the running/log view
+H_RUNNING   = 750   # height of the running/log view
 
 
 # ============================================================
@@ -277,31 +277,6 @@ def remove_stale_agents_entry(config):
     # The agents server used to run inside mcp-proxy from config.json's mcpServers.
     # The launcher starts it itself now (ADR 0007), so drop that old entry.
     return config.get("mcpServers", {}).pop("agents", None) is not None
-
-
-def empty_trash_refusal(jobs, busy):
-    # Why Empty trash must wait, or None. A running apply or restore moves files
-    # into or out of the trash; deleting under it loses them for good.
-    if busy:
-        return "An approval or restore from this pane is still running. Wait for it to finish."
-    moving = [f"{j['id']} ({j['state']})" for j in jobs if j.get("state") in ("applying", "restoring")]
-    if moving:
-        return "These jobs are still moving files:\n" + "\n".join(moving) + "\nWait for them to finish."
-    return None
-
-
-def job_actions(job, has_result, has_applied_log, has_steps):
-    # Which Jobs-pane buttons apply to this job.
-    actions = set()
-    if has_result:
-        actions.add("open")
-    if job["state"] == "awaiting_approval":
-        actions.add("review")
-    if job["state"] in ("applied", "failed") and has_applied_log:
-        actions.add("restore")
-    if job["kind"] == "plan" and job["state"] == "done" and has_steps and not job.get("steps_queued"):
-        actions.add("queue")
-    return actions
 
 
 def health_status(exit_codes, health):
@@ -1030,7 +1005,6 @@ class CommandLauncherGUI:
         self._agents_proc  = None
         self._polling      = False
         self._launch_time  = None
-        self._agents_busy  = False
 
         self.master.columnconfigure(0, weight=1)
 
@@ -1160,32 +1134,6 @@ class CommandLauncherGUI:
             txt.pack(side="left", fill="both", expand=True)
             return frame, txt
 
-        # Jobs pane: agent jobs read straight from their job folders (ADR 0006).
-        jobs_frame = tk.Frame(self.log_pane, bg=BG)
-        jobs_hdr = tk.Frame(jobs_frame, bg=BG)
-        jobs_hdr.pack(fill="x", pady=(0, 4))
-        tk.Frame(jobs_hdr, bg=ACCENT, width=3).pack(side="left", fill="y")
-        tk.Label(jobs_hdr, text="Agent jobs", font=FONT_LABEL, fg=TEXT_MUT, bg=BG).pack(side="left", padx=(8, 0), pady=4)
-        self._job_buttons = {}
-        for key, label in (("open", "Open result"), ("review", "Approve / Reject…"),
-                           ("restore", "Restore"), ("queue", "Queue steps")):
-            b = small_btn(jobs_hdr, label, lambda k=key: self._job_action(k))
-            b.pack(side="left", padx=(8, 0))
-            self._job_buttons[key] = b
-        small_btn(jobs_hdr, "Empty trash", self._empty_trash).pack(side="right")
-        jobs_body = tk.Frame(jobs_frame, bg=BG)
-        jobs_body.pack(fill="both", expand=True)
-        self._jobs_tree = ttk.Treeview(jobs_body, columns=("kind", "state", "what"), show="headings", height=5)
-        jobs_sb = ttk.Scrollbar(jobs_body, orient="vertical", command=self._jobs_tree.yview)
-        self._jobs_tree.configure(yscrollcommand=jobs_sb.set)
-        jobs_sb.pack(side="right", fill="y")
-        for col, width in (("kind", 80), ("state", 130), ("what", 400)):
-            self._jobs_tree.heading(col, text=col)
-            self._jobs_tree.column(col, width=width, stretch=(col == "what"))
-        self._jobs_tree.pack(side="left", fill="both", expand=True)
-        self._jobs_tree.bind("<<TreeviewSelect>>", lambda e: self._update_job_buttons())
-        self.log_pane.add(jobs_frame, stretch="always", minsize=120)
-
         llama_frame,  self.llama_log  = _make_log_pane(self._llama_label_var)
         uvx_frame,    self.uvx_log    = _make_log_pane(self._uvx_label_var)
         proxy_frame,  self.proxy_log  = _make_log_pane(self._proxy_label_var)
@@ -1282,8 +1230,6 @@ class CommandLauncherGUI:
         self._kill_all()
         self._stop_health_poll()
         self._stop_elapsed()
-        if hasattr(self, "_jobs_after_id"):
-            self.master.after_cancel(self._jobs_after_id)
         self.master.resizable(False, False)
         self.master.grid_rowconfigure(6, weight=0)
         self.status_bar.grid_remove()
@@ -1519,177 +1465,6 @@ class CommandLauncherGUI:
         self.master.destroy()
 
 
-    # ── Jobs pane ─────────────────────────────────────────────
-    # Reads job files directly, but every state change (apply, reject,
-    # restore, queue) goes through the agents server's key-checked routes.
-
-    def _jobs_store(self):
-        return agent_jobs.JobStore(self.agent_policy.jobs_dir)
-
-    def _selected_job(self):
-        sel = self._jobs_tree.selection()
-        if not sel:
-            return None
-        try:
-            return self._jobs_store().get(sel[0])
-        except Exception:
-            return None  # unknown id or unreadable file: nothing to act on
-
-    def _refresh_jobs(self):
-        if self._launch_time is None:
-            return  # not running
-        try:
-            self._fill_jobs()
-        except Exception:
-            pass  # a polling failure must never break the Tk loop
-        finally:
-            self._jobs_after_id = self.master.after(2000, self._refresh_jobs)
-
-    def _fill_jobs(self):
-        # Update the tree in place so selection and scroll position survive each poll.
-        if self._agents_error:
-            rows = [("agents-unavailable", ("", "unavailable", f"Agents unavailable: {self._agents_error}"))]
-        else:
-            rows = []
-            for job in self._jobs_store().list()[:50]:
-                try:
-                    what = ", ".join(str(v) for v in job["args"].values())
-                    state = job["state"] + (f" ({job['note']})" if job.get("note") else "")
-                    rows.append((job["id"], (job["kind"], state, what)))
-                except Exception:
-                    continue  # skip a job whose record is unreadable
-        wanted = {iid for iid, _ in rows}
-        for iid in self._jobs_tree.get_children():
-            if iid not in wanted:
-                self._jobs_tree.delete(iid)
-        for index, (iid, values) in enumerate(rows):
-            if self._jobs_tree.exists(iid):
-                if tuple(str(v) for v in self._jobs_tree.item(iid, "values")) != tuple(str(v) for v in values):
-                    self._jobs_tree.item(iid, values=values)
-                if self._jobs_tree.index(iid) != index:
-                    self._jobs_tree.move(iid, "", index)
-            else:
-                self._jobs_tree.insert("", index, iid=iid, values=values)
-        self._update_job_buttons()
-
-    def _update_job_buttons(self):
-        allowed = set()
-        try:
-            job = None if self._agents_busy else self._selected_job()
-            if job is not None:
-                store = self._jobs_store()
-                has_steps = store.has(job["id"], "steps.json") and bool(store.read_json(job["id"], "steps.json"))
-                allowed = job_actions(job, store.has(job["id"], "result.md"),
-                                      store.has(job["id"], "applied.json"), has_steps)
-        except Exception:
-            allowed = set()
-        for key, b in self._job_buttons.items():
-            b.config(state=tk.NORMAL if key in allowed else tk.DISABLED)
-
-    def _call_agents(self, action, job_id):
-        # The agents server owns job state; go through it so approvals can't race.
-        # Plans are approved only here, where the full plan is shown (ADR 0007).
-        if self._agents_busy:
-            return
-        self._agents_busy = True
-        self._update_job_buttons()
-        timeout = 900 if action in ("apply", "restore") else 120
-
-        def done(msg):
-            self._agents_busy = False
-            self._update_job_buttons()
-            messagebox.showinfo("Agent job", msg)
-
-        def work():
-            try:
-                msg = agent_llm.agents_action(action, job_id, timeout=timeout)
-            except Exception as e:
-                msg = f"The agents server returned an error: {e}"
-            self.master.after(0, lambda: done(msg))
-        threading.Thread(target=work, daemon=True).start()
-
-    def _job_action(self, key):
-        job = self._selected_job()
-        if job is None:
-            return
-        if key == "open":
-            try:
-                os.startfile(self._jobs_store().path(job["id"], "result.md"))
-            except (OSError, ValueError) as e:
-                messagebox.showerror("Open result", f"Couldn't open the result:\n{e}")
-        elif key == "review":
-            self._review_plan(job)
-        elif key == "restore":
-            if messagebox.askyesno("Restore", "Put every file this job moved or removed back where it was?"):
-                self._call_agents("restore", job["id"])
-        elif key == "queue":
-            self._call_agents("queue", job["id"])
-
-    def _review_plan(self, job):
-        store = self._jobs_store()
-        try:
-            ops = store.read_json(job["id"], "plan.json")
-            review = store.read_text(job["id"], "review.md") if store.has(job["id"], "review.md") else ""
-            lines = [f"Goal: {job['args'].get('goal', '')}", f"Folder: {job['args'].get('folder', '')}", ""]
-            for i, op in enumerate(ops, 1):
-                if op["op"] == "move":
-                    lines.append(f"{i:>3}. move    {op['src']}\n          → {op['dst']}")
-                elif op["op"] == "remove":
-                    lines.append(f"{i:>3}. remove  {op['path']}   (to trash, restorable)")
-                else:
-                    lines.append(f"{i:>3}. mkdir   {op['path']}")
-        except (OSError, ValueError, KeyError, TypeError) as e:
-            messagebox.showerror("Review plan", f"Couldn't read this job's plan:\n{e}")
-            return
-        dlg = tk.Toplevel(self.master)
-        dlg.title(f"Plan {job['id']}")
-        dlg.configure(bg=BG)
-        dlg.geometry("820x560")
-        dlg.grab_set()
-        text = tk.Text(dlg, font=FONT_LOG, bg=BG_INPUT, fg=TEXT_PRI, relief="flat", wrap="none")
-        sb = ttk.Scrollbar(dlg, orient="vertical", command=text.yview)
-        hsb = ttk.Scrollbar(dlg, orient="horizontal", command=text.xview)
-        text.configure(yscrollcommand=sb.set, xscrollcommand=hsb.set)
-        lines += ["", "── Local review ──", review]
-        text.insert("1.0", "\n".join(lines))
-        text.config(state=tk.DISABLED)
-        row = tk.Frame(dlg, bg=BG)
-        row.pack(side="bottom", fill="x", padx=12, pady=12)
-        hsb.pack(side="bottom", fill="x")
-        sb.pack(side="right", fill="y")
-        text.pack(side="left", fill="both", expand=True)
-        flat_btn(row, f"Approve all {len(ops)}", lambda: (dlg.destroy(), self._call_agents("apply", job["id"]))).pack(side="left")
-        small_btn(row, "Reject", lambda: (dlg.destroy(), self._call_agents("reject", job["id"]))).pack(side="left", padx=8)
-        small_btn(row, "Close", dlg.destroy).pack(side="right")
-
-    def _empty_trash_refusal(self):
-        try:
-            jobs = self._jobs_store().list()
-        except Exception as e:
-            return f"Couldn't check whether a job is still moving files:\n{e}"
-        return empty_trash_refusal(jobs, self._agents_busy)
-
-    def _empty_trash(self):
-        why = self._empty_trash_refusal()
-        if why:
-            messagebox.showwarning("Empty trash", why)
-            return
-        if messagebox.askyesno("Empty trash",
-                               f"Permanently delete everything in {self.agent_policy.trash_dir}?\n"
-                               "Jobs whose files are in there can no longer be restored.",
-                               default="no"):
-            why = self._empty_trash_refusal()  # chat may have started a restore meanwhile
-            if why:
-                messagebox.showwarning("Empty trash", why)
-                return
-            try:
-                n = agent_plans.empty_trash(self.agent_policy)
-            except OSError as e:
-                messagebox.showerror("Empty trash", f"Couldn't empty the trash:\n{e}")
-                return
-            messagebox.showinfo("Empty trash", f"Deleted {n} job folders from the trash.")
-
-
     # ── Process management ────────────────────────────────────
 
     def _free_port(self, cmd, default_port, widget):
@@ -1885,7 +1660,6 @@ class CommandLauncherGUI:
 
             self._start_health_poll()
             self._start_elapsed()
-            self._refresh_jobs()
 
 
         except Exception as e:

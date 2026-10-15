@@ -121,47 +121,5 @@ class RemoveStaleAgentsEntryTests(unittest.TestCase):
         self.assertFalse(launcher.remove_stale_agents_entry({"mcpServers": {"fetch": {}}}))
 
 
-class EmptyTrashRefusalTests(unittest.TestCase):
-    def job(self, state, job_id="20261014-000000-abcd"):
-        return {"id": job_id, "kind": "organize", "state": state, "args": {}, "note": ""}
-
-    def test_allowed_when_nothing_is_moving_files(self):
-        jobs = [self.job(s) for s in ("applied", "failed", "restored", "awaiting_approval", "running", "done")]
-        self.assertIsNone(launcher.empty_trash_refusal(jobs, busy=False))
-        self.assertIsNone(launcher.empty_trash_refusal([], busy=False))
-
-    def test_refused_while_a_job_applies_or_restores(self):
-        for state in ("applying", "restoring"):
-            msg = launcher.empty_trash_refusal([self.job("done", "20261014-000000-0000"),
-                                                self.job(state, "20261014-000000-ffff")], busy=False)
-            self.assertIsNotNone(msg)
-            self.assertIn("20261014-000000-ffff", msg)
-            self.assertIn(state, msg)
-
-    def test_refused_while_the_pane_has_a_call_in_flight(self):
-        self.assertIsNotNone(launcher.empty_trash_refusal([], busy=True))
-
-
-class JobActionsTests(unittest.TestCase):
-    def job(self, kind, state, **extra):
-        return dict({"id": "20261014-000000-abcd", "kind": kind, "state": state, "args": {}, "note": ""}, **extra)
-
-    def test_awaiting_plan_can_be_reviewed(self):
-        self.assertEqual(launcher.job_actions(self.job("organize", "awaiting_approval"), True, False, False),
-                         {"open", "review"})
-
-    def test_applied_or_partly_applied_can_be_restored(self):
-        self.assertIn("restore", launcher.job_actions(self.job("organize", "applied"), True, True, False))
-        self.assertIn("restore", launcher.job_actions(self.job("organize", "failed"), True, True, False))
-        self.assertNotIn("restore", launcher.job_actions(self.job("organize", "failed"), True, False, False))
-
-    def test_plan_steps_queue_once(self):
-        self.assertIn("queue", launcher.job_actions(self.job("plan", "done"), True, False, True))
-        self.assertNotIn("queue", launcher.job_actions(self.job("plan", "done", steps_queued=True), True, False, True))
-
-    def test_running_job_has_nothing(self):
-        self.assertEqual(launcher.job_actions(self.job("research", "running"), False, False, False), set())
-
-
 if __name__ == "__main__":
     unittest.main()

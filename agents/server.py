@@ -123,7 +123,7 @@ def request_folder_access(path: str) -> str:
         return f"Not added: {e}"
 
 
-# Approval routes for the Jobs pane, which shows the full plan. Applying is not an MCP tool:
+# Approval routes for the jobs panel, which shows the full plan. Applying is not an MCP tool:
 # a chat prompt shows only the job ID, so approving there would approve an unseen plan.
 ACTIONS = {
     "apply": lambda job_id: runner.approve(job_id, ctx),

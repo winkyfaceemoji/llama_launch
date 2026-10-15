@@ -56,6 +56,7 @@ llama_launch/
 ├── launcher.pyw          # the application
 ├── proxy.py              # system prompt injection proxy (port 8080 → 8081)
 ├── agents/               # agents server (server.py, port 8002) and the job, plan and path code it uses
+├── panel/                # the jobs panel the proxy adds to the Web UI (served at /agent-jobs)
 ├── config.json           # all settings: models folder, presets, system prompt, MCP servers
 ├── api_key.txt           # llama-server API key, created on first run (keep private)
 ├── agent_folders.json    # folders agents may read and organise (created when you add one)
@@ -91,7 +92,7 @@ Click **Launch Server**. The window switches to the running view, which shows:
 - **Status bar** — server health (`● online`, `● loading model`, `● offline`, or `● <process> exited (code N)` if one of the four crashed, for example `● agents server exited (code 1)`), uptime counter, and an **Auto-scroll** toggle.
 - **Agent API** — the direct llama-server address for agents (`http://127.0.0.1:8081/v1`). Click it to copy.
 - **API key** — click **click to copy** to put the key on the clipboard. The key itself is never shown.
-- **Jobs pane and three log panes** — agent jobs (top), then live output from `llama-server`, the UVX proxy (with the agents server's lines, marked `[agents]`), and the system prompt proxy. Drag the dividers to resize. The llama-server pane header shows the active model name and PID.
+- **Three log panes** — live output from `llama-server`, the UVX proxy (with the agents server's lines, marked `[agents]`), and the system prompt proxy. Drag the dividers to resize. The llama-server pane header shows the active model name and PID.
 
 If a port the launcher needs (8080, 8081, 8001 or 8002) is still held by a leftover llama-server, proxy or agents server from an earlier run, the launcher stops it first. If any other program holds 8080, 8081 or 8001, the launch is cancelled and the llama-server log pane names that program and its PID. If another program holds 8002, only the agents server is skipped, and the UVX pane says why.
 
@@ -172,29 +173,39 @@ Agents must send the [API key](#api-key) as `Authorization: Bearer <key>`. In mo
 The chat model in the Web UI can start background jobs that run on your local model (ADR 0007):
 
 - **research** a topic: a cited Markdown report. It can search and fetch web pages, but cannot read your files.
-- **plan** a goal: a step-by-step plan, plus follow-up jobs you can queue from the Jobs pane. It also has web access and no access to your files, so it can only name a folder in a follow-up if your goal gives its path.
-- **organize** a folder: a list of proposed moves, renames, new folders and removals, checked by a local review pass. It can read your listed folders but has no web access. **Nothing changes until you approve it in the launcher's Jobs pane.**
+- **plan** a goal: a step-by-step plan, plus follow-up jobs you can queue from the [Jobs panel](#jobs-panel). It also has web access and no access to your files, so it can only name a folder in a follow-up if your goal gives its path.
+- **organize** a folder: a list of proposed moves, renames, new folders and removals, checked by a local review pass. It can read your listed folders but has no web access. **Nothing changes until you approve it in the Web UI's [Jobs panel](#jobs-panel).**
 
 ### Setup (once)
 
 1. Launch the server. The launcher starts the agents server itself on port `8002`. The first launch takes a little longer while `uv` installs the `mcp` package; the UVX pane shows its progress on lines marked `[agents]`.
 2. In the Web UI's **MCP Servers** page, add `http://127.0.0.1:8002/mcp` and switch on **Use llama-server proxy**, as for the other servers (see [MCP web UI setup](#mcp-web-ui-setup)). If you added the old `http://127.0.0.1:8001/servers/agents/mcp` before, delete it.
 3. In the launcher, open **⚙ Settings → Agent folders → Manage…** and add the local folders agents may read and organise. The chat model can also ask for a folder with `request_folder_access`; approving that tool call adds it.
+4. Paste your [API key](#api-key) into the Web UI under **Settings → General** if you haven't. The Jobs panel uses it to talk to the agents server.
 
 Leave the Web UI's per-tool confirmation on for `organize`, `restore`, `queue_steps` and `request_folder_access`, and check that it really asks before each of them (no "always allow"). That confirmation is your approval for those calls: `organize` reads your listed folders into its report, `restore` moves files, `queue_steps` starts the jobs a plan proposed, and `request_folder_access` widens what agents can read.
 
-**Plans are approved only in the launcher's Jobs pane**, which shows every operation and the review. The chat model can't apply a plan; it has no `apply` tool.
+**Plans are approved only in the Web UI's Jobs panel**, which shows every operation and the review. The chat model can't apply a plan; it has no `apply` tool.
 
 ### What agents can and can't touch
 
 - **Write:** only `Documents\agent-sandbox`. Each job has a folder in `agent-sandbox\jobs\` with its `result.md` (and `plan.json` / `review.md` for organise jobs).
 - **Read:** the folders you listed, plus the sandbox. Network drives are never read or changed. The launcher's own folder (`api_key.txt`, `config.json`) is off limits even if a parent folder is listed.
-- **Changes to your files** happen only when you approve an organise plan in the Jobs pane, and only inside the folder that job was asked to organise (a listed folder or one inside it), never that folder itself or a listed folder itself. A plan is refused if its operations overlap, if it moves a file to another drive, removes files on a different drive from `Documents`, or uses anything but plain paths (no `:`, wildcards or reserved names like `NUL`). Each step is checked again just before it runs, and a step that no longer fits stops the apply.
+- **Changes to your files** happen only when you approve an organise plan in the Jobs panel, and only inside the folder that job was asked to organise (a listed folder or one inside it), never that folder itself or a listed folder itself. A plan is refused if its operations overlap, if it moves a file to another drive, removes files on a different drive from `Documents`, or uses anything but plain paths (no `:`, wildcards or reserved names like `NUL`). Each step is checked again just before it runs, and a step that no longer fits stops the apply.
 - **Removals** move files to `agent-sandbox\trash\<job>\<step>\<drive>\<path>`. **Restore** puts a whole job back, skipping anything that now has a new file at its old path. **Empty trash** deletes all trash for good, without following links out of the folder.
 
-### Jobs pane
+### Jobs panel
 
-The running view lists the 50 most recent agent jobs. Select one to **Open result**, **Approve / Reject…** a plan (shows every operation and the review; this is the only place a plan can be approved), **Restore** an applied plan, or **Queue steps** from a plan job. **Empty trash** asks first, and refuses while a job is still applying or restoring. The pane sends its actions to the agents server, which owns job state, so the pane and the chat can't act on a job at the same time.
+Click **Jobs** at the top right of the Web UI to open a 360 px panel beside the chat (**Close** in its header shuts it; the button shows how many jobs are running or waiting for review). Jobs are listed newest first, and the panel refreshes every 2 seconds while open.
+
+- **Each card** shows the job's title, its state, the steps it has taken so far (the latest is marked while it runs), a count of steps against the 40-call limit with the minutes elapsed, and any note. Finished jobs with nothing to do collapse to one line; click one to expand it.
+- **Approve / Reject** appear on a job waiting for review. The card shows the full plan, every move, new folder and removal, plus the local review, and the button says how many changes you are approving. This is the only place a plan can be approved.
+- **Restore** puts back everything an applied (or part-applied) plan moved or removed. **Queue** starts the follow-up jobs a plan job proposed.
+- **Empty trash** at the bottom deletes all trash for good, after asking. It is refused while any job is applying or restoring, including a restore started from chat.
+
+The panel talks to the agents server through the proxy, with your Web UI API key, so the panel and the chat can't act on a job at the same time. If it says the agents server isn't running, start the servers from the launcher.
+
+After updating the launcher, press Ctrl+F5 once in the Web UI so the browser drops its cached copy of the page.
 
 ### Limits
 
@@ -262,7 +273,7 @@ The card then shows the server name, **Connected**, and the number of tools avai
 
 Neither MCP server sends CORS headers, so with **Use llama-server proxy** off the browser blocks the connection; with it on, the Web UI reaches them through llama-server's `/cors-proxy`, which needs the API key. Missing CORS headers don't stop DNS rebinding, where a web page points its own host name at `127.0.0.1`:
 
-- The agents server checks every request's `Host` (and `Origin`, when sent) and answers only `127.0.0.1` and `localhost`, so a rebound page is refused. Its approval routes, used by the Jobs pane, also require the API key.
+- The agents server checks every request's `Host` (and `Origin`, when sent) and answers only `127.0.0.1` and `localhost`, so a rebound page is refused. Its approval routes, used by the Jobs panel, also require the API key.
 - The UVX proxy on `8001` has no such check, so a rebound page can still reach fetch and ddg-search.
 
 ---
