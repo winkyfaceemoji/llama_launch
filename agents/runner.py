@@ -247,8 +247,11 @@ ORGANIZE_PROMPT = (
 
 REVIEW_PROMPT = (
     "You review a file-organising plan before a person approves it. The goal was: {goal}\n"
-    "List every operation that looks wrong, risky, or unrelated to the goal, especially removals, "
-    "with its number and the reason. If everything looks right, say so in one line.")
+    "First, list every remove operation by number and say whether the goal explicitly asked to remove that "
+    "file. A remove the goal didn't ask for is a problem. Removing most or all files is always worth a "
+    "warning, even when asked, so say plainly how many files would be removed. Then list any other operation "
+    "that looks wrong, risky, or unrelated to the goal, with its number and the reason. Only if there are no "
+    "removes and nothing else is wrong, say in one line that the plan looks right.")
 
 
 def _steps(job, ctx):

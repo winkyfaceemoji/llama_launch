@@ -88,6 +88,28 @@ class PanelApiTests(unittest.TestCase):
         self.store.update(p["id"], steps_queued=True)
         self.assertEqual({j["id"]: j for j in panel_api.jobs_payload(self.store)}[p["id"]]["queue_count"], 0)
 
+    def _awaiting(self, removes):
+        for n in ("a.pdf", "b.pdf", "c.txt", "d.jpg"):
+            open(os.path.join(self.dl, n), "w").close()
+        job = self.store.create("organize", {"folder": self.dl, "goal": "g"})
+        ops = [{"op": "remove", "path": os.path.join(self.dl, n)} for n in removes]
+        self.store.write_json(job["id"], "plan.json", ops or [{"op": "mkdir", "path": os.path.join(self.dl, "X")}])
+        self.store.update(job["id"], state="awaiting_approval")
+        return panel_api.jobs_payload(self.store)[0]
+
+    def test_no_warnings_without_removals(self):
+        self.assertEqual(self._awaiting([])["warnings"], [])
+
+    def test_warns_when_a_plan_removes_files(self):
+        warnings = self._awaiting(["c.txt"])["warnings"]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("Removes 1 file", warnings[0])
+
+    def test_warns_louder_when_a_plan_removes_most_of_the_folder(self):
+        warnings = self._awaiting(["a.pdf", "b.pdf", "c.txt"])["warnings"]
+        self.assertIn("Removes 3 files", warnings[0])
+        self.assertIn("more than half", warnings[1])
+
     def test_payload_survives_a_corrupt_plan(self):
         job = self.store.create("organize", {"folder": self.dl, "goal": "g"})
         with open(self.store.path(job["id"], "plan.json"), "w") as f:

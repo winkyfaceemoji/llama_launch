@@ -16,6 +16,31 @@ def _title(job):
     return str(args.get("topic") or args.get("goal") or job.get("kind", ""))
 
 
+def _count_files(path):
+    # Files at or under path, never following links or junctions.
+    if os.path.isfile(path):
+        return 1
+    n = 0
+    for d, dirs, files in os.walk(path):
+        dirs[:] = [x for x in dirs if not os.path.islink(os.path.join(d, x)) and not plans._is_link(os.path.join(d, x))]
+        n += len(files)
+    return n
+
+
+def removal_warnings(plan, folder):
+    """Fixed-rule warnings for a plan awaiting approval; the model's review is not enough on its own."""
+    removes = [op["path"] for op in plan or [] if isinstance(op, dict) and op.get("op") == "remove" and isinstance(op.get("path"), str)]
+    if not removes:
+        return []
+    removed = sum(_count_files(p) for p in removes)
+    noun = "file" if removed == 1 else "files"
+    warnings = [f"Removes {removed} {noun}. They go to the agent trash and can be restored until you empty it."]
+    total = _count_files(folder) if folder and os.path.isdir(folder) else 0
+    if total and removed * 2 > total:
+        warnings.append(f"This removes more than half of the files in the folder ({removed} of {total}).")
+    return warnings
+
+
 def jobs_payload(store, limit=50):
     out = []
     newest_first = store.list()
@@ -42,6 +67,10 @@ def jobs_payload(store, limit=50):
                 item["review"] = store.read_text(jid, "review.md") if store.has(jid, "review.md") else ""
             except OSError:
                 item["review"] = ""
+            try:
+                item["warnings"] = removal_warnings(item["plan"], (job.get("args") or {}).get("folder"))
+            except OSError:
+                item["warnings"] = []
         out.append(item)
     return out
 
