@@ -35,3 +35,4 @@ Tkinter launcher (`launcher.pyw`) that starts llama-server, the system prompt pr
 - [0007](docs/adr/0007-agents-server-standalone.md) Agents server runs standalone on 8002 with rebinding protection; plans are approved only in the Jobs UI (supersedes 0006: sandbox writes, plan-approve-apply, per-job trash)
 - [0008](docs/adr/0008-jobs-panel-in-web-ui.md) The proxy injects a jobs panel into the Web UI; the launcher's Jobs pane is gone
 - [0009](docs/adr/0009-separate-approval-key.md) The jobs panel uses its own approval key; llama API key holders can't approve plans
+- [0010](docs/adr/0010-one-model-for-chat-and-agents.md) One model serves chat and agent jobs; no separate agent model, no chat priority
