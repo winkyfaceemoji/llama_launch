@@ -399,7 +399,8 @@ WINGET_ID = "ggml.llamacpp"
 def parse_build(text):
     # "b11636", "Version: b11636" or "version: 9776 (ac4105d68)" -> 11636 / 9776.
     # Matches any line, since llama-server prints device lines before its version.
-    m = re.search(r"^\s*(?:b|version:\s*b?)(\d+)\b", text, re.IGNORECASE | re.MULTILINE)
+    # Newer builds print "version: 0.6.0-dev (build 11636, commit ...)": the build wins.
+    m = re.search(r"\(build (\d+)\b", text, re.IGNORECASE) or re.search(r"^\s*(?:b|version:\s*b?)(\d+)\b", text, re.IGNORECASE | re.MULTILINE)
     return int(m.group(1)) if m else None
 
 

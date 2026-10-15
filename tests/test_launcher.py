@@ -138,6 +138,9 @@ class ParseBuildTests(unittest.TestCase):
         self.assertEqual(launcher.parse_build("b11636"), 11636)
         self.assertEqual(launcher.parse_build("version: 9776 (ac4105d68)"), 9776)
         self.assertEqual(launcher.parse_build("Version: b11636"), 11636)
+        # Newer builds (b11636) print a semantic version first; the build number is in brackets.
+        self.assertEqual(launcher.parse_build(
+            "version: 0.6.0-dev (build 11636, commit 529ac893e)\r\nbuilt with Clang 20.1.8 for Windows x86_64\r\n"), 11636)
 
     def test_anything_else_is_none(self):
         for text in ("b", "", "version: abc"):
