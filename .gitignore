@@ -4,3 +4,4 @@ config.json
 api_key.txt
 agent_folders.json
 __pycache__/
+eval/results/
