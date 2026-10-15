@@ -201,7 +201,7 @@ Click **Jobs** at the top right of the Web UI to open a 360 px panel beside the 
 - **Each card** shows the job's title, its state, the steps it has taken so far (the latest is marked while it runs), a count of steps against the 40-call limit with the minutes elapsed, and any note. Finished jobs with nothing to do collapse to one line; click one to expand it.
 - **Approve / Reject** appear on a job waiting for review. The card shows the full plan, every move, new folder and removal, plus the local review, and the button says how many changes you are approving. This is the only place a plan can be approved.
 - **Restore** puts back everything an applied (or part-applied) plan moved or removed. **Queue** starts the follow-up jobs a plan job proposed.
-- **Empty trash** at the bottom deletes all trash for good. Click it once and it turns red and reads **Confirm empty trash**; click again within 5 seconds to go ahead, or wait and it reverts. It is refused while any job is applying or restoring, including a restore started from chat.
+- **Empty trash** at the bottom deletes all trash for good. Click it once and it turns red and reads **Confirm empty trash**; click again (a click within the first 0.4 seconds is ignored, so a double-click doesn't count) within 5 seconds to go ahead, or wait and it reverts. It is refused while any job is applying or restoring, including a restore started from chat.
 
 The panel talks to the agents server through the proxy, with your Web UI API key, so the panel and the chat can't act on a job at the same time. If it says the agents server isn't running, start the servers from the launcher.
 

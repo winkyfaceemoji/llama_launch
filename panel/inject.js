@@ -67,7 +67,17 @@
     apply();
   };
   btn.addEventListener("click", () => setOpen(!open));
-  window.addEventListener("hashchange", apply);
+  // The Web UI navigates with history.pushState/replaceState, which fire no event, so also watch the address.
+  // (Patching history instead would break the Web UI's router if it ever compares the functions.)
+  let lastHref = location.href;
+  const routeChanged = () => {
+    if (location.href === lastHref) return;
+    lastHref = location.href;
+    apply();
+  };
+  window.addEventListener("hashchange", routeChanged);
+  window.addEventListener("popstate", routeChanged);
+  setInterval(routeChanged, 300);
   frame.addEventListener("load", tell);
   window.addEventListener("message", (e) => {
     if (e.origin !== location.origin || e.source !== frame.contentWindow) return;

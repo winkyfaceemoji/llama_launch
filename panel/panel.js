@@ -1,7 +1,7 @@
 (() => {
   "use strict";
   const MAX_CALLS = 40;
-  const VISIBLE_MS = 2000, HIDDEN_MS = 15000, TRASH_ARM_MS = 5000;
+  const VISIBLE_MS = 2000, HIDDEN_MS = 15000, TRASH_ARM_MS = 5000, TRASH_CONFIRM_DELAY_MS = 400;
   const STATES = {
     queued: ["Queued", "accent"], running: ["Running", "accent"], awaiting_approval: ["Needs review", "warn"],
     applying: ["Applying", "accent"], restoring: ["Restoring", "accent"], applied: ["Applied", "ok"],
@@ -243,7 +243,7 @@
   // Emptying the trash is permanent, so it takes two clicks: the first only arms the button for a few seconds.
   // (window.confirm would put the default on OK, so Enter would delete.)
   const trashBtn = $("empty-trash");
-  let trashTimer = null;
+  let trashTimer = null, trashArmedAt = 0;
   const disarmTrash = () => {
     clearTimeout(trashTimer);
     trashTimer = null;
@@ -255,8 +255,10 @@
       trashBtn.textContent = "Confirm empty trash";
       trashBtn.classList.add("danger");
       trashTimer = setTimeout(disarmTrash, TRASH_ARM_MS);
+      trashArmedAt = Date.now();
       return;
     }
+    if (Date.now() - trashArmedAt < TRASH_CONFIRM_DELAY_MS) return;  // a double-click or a held Enter is not a confirmation
     disarmTrash();
     act("trash/empty");
   });
