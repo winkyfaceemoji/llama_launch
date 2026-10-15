@@ -3,17 +3,18 @@
   const OPEN_KEY = "agentJobsPanelOpen";
   const css = `
 #ajp-root{all:initial}
-#ajp-root .ajp-btn{position:fixed;top:10px;right:12px;z-index:2147483000;display:flex;align-items:center;gap:6px;
+#ajp-root .ajp-btn{position:fixed;top:10px;right:12px;z-index:40;display:flex;align-items:center;gap:6px;
   font:500 13px/1 system-ui,-apple-system,"Segoe UI",sans-serif;padding:7px 11px;border-radius:8px;cursor:pointer;
   background:var(--ajp-surface);color:var(--ajp-text);border:0.5px solid var(--ajp-border)}
 #ajp-root .ajp-badge{min-width:16px;padding:1px 5px;border-radius:8px;font-size:11px;text-align:center;
   background:var(--ajp-warn-bg);color:var(--ajp-warn-text)}
 #ajp-root .ajp-badge[hidden]{display:none}
-#ajp-root .ajp-frame{position:fixed;top:0;right:0;width:360px;max-width:100vw;height:100vh;z-index:2147482999;
+#ajp-root .ajp-frame{position:fixed;top:0;right:0;width:360px;max-width:100vw;height:100vh;z-index:39;
   border:0;border-left:0.5px solid var(--ajp-border);background:var(--ajp-bg);transform:translateX(100%);
   visibility:hidden;transition:transform .18s ease-out,visibility 0s linear .18s}
 #ajp-root.ajp-open .ajp-frame{transform:none;visibility:visible;transition:transform .18s ease-out,visibility 0s}
 #ajp-root.ajp-open .ajp-btn{right:372px}
+#ajp-root.ajp-away .ajp-btn,#ajp-root.ajp-away .ajp-frame{display:none}
 @media (max-width:479px){#ajp-root.ajp-open .ajp-btn{display:none}}
 #ajp-root{color-scheme:light dark;--ajp-bg:#faf9f5;--ajp-surface:#ffffff;--ajp-text:#1f1e1d;--ajp-border:rgba(31,30,29,.18);
   --ajp-warn-bg:#faeeda;--ajp-warn-text:#633806}
@@ -44,15 +45,20 @@
 
   let open = false;
   try { open = localStorage.getItem(OPEN_KEY) === "1"; } catch (e) {}
+  // The Web UI's Settings pages are routed with the hash; the panel would sit on top of them, so it steps aside.
+  // This never touches the saved open state, so leaving Settings brings back exactly what was there.
+  const onSettings = () => location.hash.startsWith("#/settings");
   const tell = () => {
-    try { frame.contentWindow.postMessage({type: "agent-jobs-visible", visible: open}, location.origin); } catch (e) {}
+    try { frame.contentWindow.postMessage({type: "agent-jobs-visible", visible: open && !onSettings()}, location.origin); } catch (e) {}
   };
   const apply = () => {
+    const away = onSettings(), shown = open && !away;
     root.classList.toggle("ajp-open", open);
+    root.classList.toggle("ajp-away", away);
     btn.setAttribute("aria-expanded", String(open));
     // A closed panel is only slid off-screen, so keep it out of the tab order and the accessibility tree.
-    frame.inert = !open;
-    if (open) frame.removeAttribute("aria-hidden"); else frame.setAttribute("aria-hidden", "true");
+    frame.inert = !shown;
+    if (shown) frame.removeAttribute("aria-hidden"); else frame.setAttribute("aria-hidden", "true");
     tell();
   };
   const setOpen = (value) => {
@@ -61,6 +67,7 @@
     apply();
   };
   btn.addEventListener("click", () => setOpen(!open));
+  window.addEventListener("hashchange", apply);
   frame.addEventListener("load", tell);
   window.addEventListener("message", (e) => {
     if (e.origin !== location.origin || e.source !== frame.contentWindow) return;
