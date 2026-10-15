@@ -30,9 +30,10 @@ Tkinter launcher (`launcher.pyw`) that starts llama-server, the system prompt pr
 - [0001](docs/adr/0001-auto-preset-uses-fit.md) Auto preset leaves `-c`/`-ngl` to llama-server's `--fit` instead of per-model tuned presets
 - [0002](docs/adr/0002-revert-show-all-presets.md) Reverted: show-all-presets dropdown with model-tagged auto-select
 - [0003](docs/adr/0003-no-context-shift-or-swa-full.md) `--context-shift` and `--swa-full` stay off
-- [0004](docs/adr/0004-proxy-injects-date-only.md) Proxy injects the date only; exact time comes from `--tools get_datetime`
+- [0004](docs/adr/0004-proxy-injects-date-only.md) Proxy injects the date only (the time source is now 0011)
 - [0005](docs/adr/0005-api-key-and-no-mcp-cors.md) API key on llama-server; MCP proxy sends no CORS headers
 - [0007](docs/adr/0007-agents-server-standalone.md) Agents server runs standalone on 8002 with rebinding protection; plans are approved only in the Jobs UI (supersedes 0006: sandbox writes, plan-approve-apply, per-job trash)
 - [0008](docs/adr/0008-jobs-panel-in-web-ui.md) The proxy injects a jobs panel into the Web UI; the launcher's Jobs pane is gone
 - [0009](docs/adr/0009-separate-approval-key.md) The jobs panel uses its own approval key; llama API key holders can't approve plans
 - [0010](docs/adr/0010-one-model-for-chat-and-agents.md) One model serves chat and agent jobs; no separate agent model, no chat priority
+- [0011](docs/adr/0011-time-from-mcp-server.md) Exact time comes from the `time` MCP server; the Auto preset passes no `--tools`

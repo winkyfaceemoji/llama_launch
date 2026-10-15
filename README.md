@@ -144,16 +144,16 @@ Presets are stored in `config.json` under the `"presets"` key. Each preset has:
 ### The Auto preset
 
 ```
-llama-server -m "{model}" --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 --webui-mcp-proxy --tools get_datetime --port 8081
+llama-server -m "{model}" --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 --webui-mcp-proxy --port 8081
 ```
 
 Auto deliberately leaves context size (`-c`) and GPU layers (`-ngl`) unset. llama-server's `--fit` (on by default) then picks the largest context that fits in free VRAM, keeping a 1 GB margin. The chosen context size appears in the llama-server log pane. Auto always exists, is pre-selected for every model, and can't be deleted.
 
 Avoid adding `-c` or `-ngl` to a preset unless you mean to: setting either turns off `--fit` for that value, and a context that doesn't fit will spill out of VRAM and run far slower.
 
-`--context-shift` and `--swa-full` are left off: when a chat fills the context, start a new chat. `--tools get_datetime` gives the model the exact time from your PC's clock without granting it file or shell access.
+`--context-shift` and `--swa-full` are left off: when a chat fills the context, start a new chat. Auto passes no `--tools`: llama-server's built-in tools now only read, write and run things on your PC. The exact time comes from the `time` MCP server instead (see [MCP servers](#mcp-servers)).
 
-Never use `--tools all` (or `--agent`): it includes `exec_shell_command` and `write_file`, which any web page could then call.
+Never add `--tools` (any of them) or `--agent` to a preset: they include `exec_shell_command` and `write_file`, which any web page could then call.
 
 The launcher adds `--api-key-file` to every preset's command, so you don't need to put it in your own presets.
 
@@ -287,7 +287,7 @@ The API key lives in its own file, `api_key.txt`, not in `config.json`.
 
 ## MCP web UI setup
 
-The UVX proxy serves each MCP server from `config.json` at `http://127.0.0.1:8001/servers/<name>/mcp`, where `<name>` is its key under `mcpServers` (`fetch`, `ddg-search`, ...). The agents server is separate, at `http://127.0.0.1:8002/mcp`.
+The UVX proxy serves each MCP server from `config.json` at `http://127.0.0.1:8001/servers/<name>/mcp`, where `<name>` is its key under `mcpServers` (`fetch`, `ddg-search`, `time`, ...). `time` gives the model the exact time and converts between timezones. The agents server is separate, at `http://127.0.0.1:8002/mcp`.
 
 Set the [API key](#api-key) in the Web UI first, then for each server:
 
@@ -300,7 +300,7 @@ The card then shows the server name, **Connected**, and the number of tools avai
 Neither MCP server sends CORS headers, so with **Use llama-server proxy** off the browser blocks the connection; with it on, the Web UI reaches them through llama-server's `/cors-proxy`, which needs the API key. Missing CORS headers don't stop DNS rebinding, where a web page points its own host name at `127.0.0.1`:
 
 - The agents server checks every request's `Host` (and `Origin`, when sent) and answers only `127.0.0.1` and `localhost`, so a rebound page is refused. Its approval routes, used by the Jobs panel, also require the approval key. The panel's routes on the proxy (`/agent-jobs`) do the same Host check themselves, since the proxy rewrites Host before the agents server sees it.
-- The UVX proxy on `8001` has no such check, so a rebound page can still reach fetch and ddg-search.
+- The UVX proxy on `8001` has no such check, so a rebound page can still reach fetch, ddg-search and time.
 
 ---
 

@@ -63,6 +63,13 @@ class LoadPresetsTests(unittest.TestCase):
         self.assertEqual(presets[launcher.AUTO_PRESET], {"command": launcher.AUTO_COMMAND, "models": []})
         self.assertEqual(next(iter(presets)), launcher.AUTO_PRESET)
 
+    def test_auto_preset_enables_no_built_in_tools(self):
+        # b11636 dropped get_datetime and refuses to start with it; its remaining
+        # built-in tools read, write and run things. The time comes from MCP (ADR 0011).
+        self.assertNotIn("--tools", launcher.AUTO_COMMAND)
+        self.assertEqual(launcher._DEFAULT_CONFIG["mcpServers"]["time"],
+                         {"command": "uvx", "args": ["mcp-server-time"]})
+
 
 class ResolveUvxCommandTests(unittest.TestCase):
     def test_substitutes_config_path(self):

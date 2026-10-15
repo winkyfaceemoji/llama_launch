@@ -1,6 +1,6 @@
 # 0004. Proxy injects the date only
 
-Status: Accepted
+Status: Accepted; the time part is superseded by 0011 (b11636 removed `get_datetime`)
 
 ## Context
 

@@ -173,22 +173,25 @@ AGENT_API_URL = "http://127.0.0.1:8081/v1"
 # Leaves -c and -ngl unset so llama-server's --fit picks the largest context
 # that fits in free VRAM. --context-shift and --swa-full stay off (both are
 # off by default): a full chat stops instead of silently dropping messages.
+# No --tools: newer builds only offer file, shell and OS tools, and refuse to
+# start with an unknown one. The time comes from the time MCP server (ADR 0011).
 AUTO_PRESET = "Auto (fit to VRAM)"
 AUTO_COMMAND = (
     'llama-server -m "{model}" --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 '
-    '--webui-mcp-proxy --tools get_datetime --port 8081'
+    '--webui-mcp-proxy --port 8081'
 )
 
 _DEFAULT_CONFIG = {
     "mcpServers": {
         "fetch":      {"command": "uvx", "args": ["mcp-server-fetch"]},
         "ddg-search": {"command": "uvx", "args": ["duckduckgo-mcp-server"]},
+        "time":       {"command": "uvx", "args": ["mcp-server-time"]},
     },
     "system_prompt": (
         "The current date is provided at the top of every message. "
         "Treat it as ground truth — do not estimate or assume the date from training memory.\n\n"
         "You have real-time web access via two MCP tools: ddg-search and fetch, "
-        "plus a built-in get_datetime tool.\n\n"
+        "plus a time MCP tool for the exact current time.\n\n"
         "TOOL USAGE RULES:\n"
         "1. For any question involving facts, current events, people, software versions, prices, "
         "or anything that may have changed — use ddg-search BEFORE generating a response. "
@@ -196,7 +199,7 @@ _DEFAULT_CONFIG = {
         "2. Your training data is outdated. If search results conflict with your training knowledge, "
         "always trust the search results. Never override web results with what you think you know.\n"
         "3. If a search result requires more detail, use fetch to read the full page content.\n"
-        "4. Use get_datetime only when you need the exact current time.\n"
+        "4. Use the time tool only when you need the exact current time.\n"
         "5. Do not explain your tool usage to the user. Execute tools silently and respond based on what you find."
     ),
     "llama_dir": "",
