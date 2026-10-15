@@ -11,10 +11,11 @@
 #ajp-root .ajp-badge[hidden]{display:none}
 #ajp-root .ajp-frame{position:fixed;top:0;right:0;width:360px;max-width:100vw;height:100vh;z-index:2147482999;
   border:0;border-left:0.5px solid var(--ajp-border);background:var(--ajp-bg);transform:translateX(100%);
-  transition:transform .18s ease-out}
-#ajp-root.ajp-open .ajp-frame{transform:none}
+  visibility:hidden;transition:transform .18s ease-out,visibility 0s linear .18s}
+#ajp-root.ajp-open .ajp-frame{transform:none;visibility:visible;transition:transform .18s ease-out,visibility 0s}
 #ajp-root.ajp-open .ajp-btn{right:372px}
-#ajp-root{--ajp-bg:#faf9f5;--ajp-surface:#ffffff;--ajp-text:#1f1e1d;--ajp-border:rgba(31,30,29,.18);
+@media (max-width:479px){#ajp-root.ajp-open .ajp-btn{display:none}}
+#ajp-root{color-scheme:light dark;--ajp-bg:#faf9f5;--ajp-surface:#ffffff;--ajp-text:#1f1e1d;--ajp-border:rgba(31,30,29,.18);
   --ajp-warn-bg:#faeeda;--ajp-warn-text:#633806}
 @media (prefers-color-scheme:dark){#ajp-root{--ajp-bg:#262624;--ajp-surface:#30302e;--ajp-text:#faf9f5;
   --ajp-border:rgba(250,249,245,.18);--ajp-warn-bg:#633806;--ajp-warn-text:#faeeda}}`;
@@ -49,21 +50,31 @@
   const apply = () => {
     root.classList.toggle("ajp-open", open);
     btn.setAttribute("aria-expanded", String(open));
+    // A closed panel is only slid off-screen, so keep it out of the tab order and the accessibility tree.
+    frame.inert = !open;
+    if (open) frame.removeAttribute("aria-hidden"); else frame.setAttribute("aria-hidden", "true");
     tell();
   };
-  btn.addEventListener("click", () => {
-    open = !open;
+  const setOpen = (value) => {
+    open = value;
     try { localStorage.setItem(OPEN_KEY, open ? "1" : "0"); } catch (e) {}
     apply();
-  });
+  };
+  btn.addEventListener("click", () => setOpen(!open));
   frame.addEventListener("load", tell);
   window.addEventListener("message", (e) => {
     if (e.origin !== location.origin || e.source !== frame.contentWindow) return;
     const d = e.data || {};
+    if (d.type === "agent-jobs-close") {
+      setOpen(false);
+      btn.focus();
+      return;
+    }
     if (d.type !== "agent-jobs-counts") return;
     const n = (d.running | 0) + (d.review | 0);
     badge.textContent = String(n);
     badge.hidden = n === 0;
+    btn.setAttribute("aria-label", n ? `Agent jobs, ${n} ${n === 1 ? "needs" : "need"} attention` : "Agent jobs");
   });
   apply();
 })();

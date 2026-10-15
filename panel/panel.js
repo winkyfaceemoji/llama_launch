@@ -10,9 +10,12 @@
   };
   const ACTIVE = new Set(["queued", "running", "applying", "restoring"]);
   const $ = (id) => document.getElementById(id);
-  const list = $("jobs"), statusEl = $("status"), flashEl = $("flash"), summary = $("summary");
+  const list = $("jobs"), statusEl = $("status"), flashEl = $("flash"), summary = $("summary"), closeBtn = $("close");
   const embedded = window.parent !== window;
-  let visible = !embedded, busy = false, timer = null, expanded = new Set(), lastJobs = [];
+  let visible = !embedded, busy = false, timer = null, flashTimer = null, seq = 0, lastSig = null;
+  let expanded = new Set(), lastJobs = [];
+  // Rebuilt on every render: what the user may be reading or focused on, keyed so it can be put back.
+  const planBoxes = new Map(), focusables = new Map();
 
   function el(tag, cls, text) {
     const n = document.createElement(tag);
@@ -20,6 +23,10 @@
     if (text !== undefined) n.textContent = String(text);
     return n;
   }
+
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  // Paths come from the model; a newline in one must not draw a fake line in the plan box.
+  const clean = (s) => String(s).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ");
 
   function apiKey() {
     try { return String(JSON.parse(localStorage.getItem("LlamaUi.config") || "{}").apiKey || "").trim(); }
@@ -46,9 +53,10 @@
   }
 
   function flash(text) {
+    clearTimeout(flashTimer);
     flashEl.textContent = text;
     flashEl.hidden = !text;
-    if (text) setTimeout(() => { if (flashEl.textContent === text) flashEl.hidden = true; }, 8000);
+    if (text) flashTimer = setTimeout(() => { flashEl.hidden = true; }, 8000);
   }
 
   function minutes(job) {
@@ -59,17 +67,18 @@
 
   function describeOp(op, i) {
     const n = String(i + 1).padStart(3);
-    if (op && op.op === "move") return `${n} move    ${op.src}\n          → ${op.dst}`;
-    if (op && op.op === "remove") return `${n} remove  ${op.path}   (to trash, restorable)`;
-    if (op && op.op === "mkdir") return `${n} mkdir   ${op.path}`;
-    return `${n} ?       ${JSON.stringify(op)}`;
+    if (op && op.op === "move") return `${n} move    ${clean(op.src)}\n          → ${clean(op.dst)}`;
+    if (op && op.op === "remove") return `${n} remove  ${clean(op.path)}   (to trash, restorable)`;
+    if (op && op.op === "mkdir") return `${n} mkdir   ${clean(op.path)}`;
+    return `${n} ?       ${clean(JSON.stringify(op))}`;
   }
 
-  function button(text, onClick) {
+  function button(text, key, onClick) {
     const b = el("button", "", text);
     b.type = "button";
     b.disabled = busy;
     b.addEventListener("click", onClick);
+    focusables.set(key, b);
     return b;
   }
 
@@ -85,6 +94,7 @@
       flash(e.kind === "down" ? "Agents server isn't running." : e.kind === "forbidden" ? "The API key was refused." : e.message);
     } finally {
       busy = false;
+      lastSig = null;  // the busy render disabled the buttons; the next poll must draw them again
       refresh();
     }
   }
@@ -105,77 +115,125 @@
   function card(job) {
     const [label, tone] = STATES[job.state] || [job.state, "neutral"];
     const finished = !ACTIVE.has(job.state) && job.state !== "awaiting_approval" && !job.can_restore && !job.queue_count;
-    const c = el("article", "card" + (job.state === "awaiting_approval" ? " review" : "") + (finished && !expanded.has(job.id) ? " compact" : ""));
-    const head = el("div", "head");
-    head.append(el("span", "kind"), el("span", "title", job.title || job.kind), el("span", "chip " + tone, label));
-    c.append(head);
+    const title = job.title || job.kind;
     if (finished && !expanded.has(job.id)) {
+      const c = el("button", "card compact");
+      c.type = "button";
       c.title = "Show details";
+      c.setAttribute("aria-expanded", "false");
+      c.append(el("span", "kind"), el("span", "title", title), el("span", "chip " + tone, label));
       c.addEventListener("click", () => { expanded.add(job.id); render(lastJobs); });
+      focusables.set(`${job.id}:expand`, c);
       return c;
     }
+    const c = el("article", "card" + (job.state === "awaiting_approval" ? " review" : ""));
+    const head = el("div", "head");
+    head.append(el("span", "kind"), el("span", "title", title), el("span", "chip " + tone, label));
+    c.append(head);
     if (job.steps && job.steps.length) c.append(stepsList(job));
     if (ACTIVE.has(job.state) || job.step_count) {
-      c.append(el("div", "meta", `${job.step_count} of ${MAX_CALLS} steps · ${minutes(job)}`));
+      c.append(el("div", "meta", `${job.step_count} of ${MAX_CALLS} ${job.step_count === 1 ? "step" : "steps"} · ${minutes(job)}`));
     }
     if (job.note) c.append(el("div", "note", job.note));
     if (job.state === "awaiting_approval") {
+      const a = el("div", "actions");
       if (Array.isArray(job.plan)) {
-        c.append(el("div", "plan", job.plan.map(describeOp).join("\n")));
+        const box = el("div", "plan", job.plan.map(describeOp).join("\n"));
+        planBoxes.set(job.id, box);
+        c.append(box);
         if (job.review) c.append(el("div", "review-text", "Review: " + job.review.trim()));
-        const a = el("div", "actions");
-        a.append(button(`Approve ${job.plan.length} changes`, () => act(`jobs/${job.id}/apply`)),
-                 button("Reject", () => act(`jobs/${job.id}/reject`)));
-        c.append(a);
+        a.append(button(`Approve ${plural(job.plan.length, "change", "changes")}`, `${job.id}:apply`, () => act(`jobs/${job.id}/apply`)));
       } else {
         c.append(el("div", "note", "The plan file couldn't be read, so it can't be approved here."));
+        if (job.review) c.append(el("div", "review-text", "Review: " + job.review.trim()));
       }
+      a.append(button("Reject", `${job.id}:reject`, () => act(`jobs/${job.id}/reject`)));
+      c.append(a);
     }
     if (job.can_restore) {
       const a = el("div", "actions");
-      a.append(button("Restore", () => act(`jobs/${job.id}/restore`,
+      a.append(button("Restore", `${job.id}:restore`, () => act(`jobs/${job.id}/restore`,
         "Put every file this job moved or removed back where it was?")));
       c.append(a);
     }
     if (job.queue_count) {
       const a = el("div", "actions");
-      a.append(button(`Queue ${job.queue_count} follow-up jobs`, () => act(`jobs/${job.id}/queue`)));
+      a.append(button(`Queue ${plural(job.queue_count, "follow-up job", "follow-up jobs")}`, `${job.id}:queue`,
+        () => act(`jobs/${job.id}/queue`)));
       c.append(a);
     }
     return c;
   }
 
+  function postCounts(running, review) {
+    if (embedded) window.parent.postMessage({type: "agent-jobs-counts", running, review}, location.origin);
+  }
+
   function render(jobs) {
     lastJobs = jobs;
+    // A rebuild must not undo what the user is doing: keep the list and plan scroll positions and the focused button.
+    const listTop = list.scrollTop;
+    const planScroll = new Map();
+    planBoxes.forEach((box, id) => planScroll.set(id, [box.scrollTop, box.scrollLeft]));
+    let focusKey = null;
+    focusables.forEach((node, key) => { if (node === document.activeElement) focusKey = key; });
+    planBoxes.clear();
+    focusables.clear();
     list.replaceChildren();
     if (!jobs.length) {
-      list.append(el("div", "empty", "No agent jobs yet. Ask the chat to research, plan or organise something."));
+      list.append(el("div", "empty", "No agent jobs yet. Ask the chat to research, plan or organize something."));
     } else {
       jobs.forEach((j) => list.append(card(j)));
     }
+    list.scrollTop = listTop;
+    planBoxes.forEach((box, id) => {
+      const s = planScroll.get(id);
+      if (s) { box.scrollTop = s[0]; box.scrollLeft = s[1]; }
+    });
+    const again = focusKey && focusables.get(focusKey);
+    if (again && !again.disabled) again.focus();
     const running = jobs.filter((j) => ACTIVE.has(j.state)).length;
     const review = jobs.filter((j) => j.state === "awaiting_approval").length;
     summary.textContent = [running && `${running} running`, review && `${review} to review`].filter(Boolean).join(" · ");
     $("empty-trash").disabled = busy;
-    if (embedded) window.parent.postMessage({type: "agent-jobs-counts", running, review}, location.origin);
+    postCounts(running, review);
   }
+
+  // What the screen shows, so an unchanged poll doesn't rebuild it. Elapsed minutes of live jobs are part of it.
+  const signature = (jobs) => JSON.stringify(jobs) + "|" + jobs.filter((j) => ACTIVE.has(j.state)).map(minutes).join(",");
 
   async function refresh() {
     clearTimeout(timer);
+    const mine = ++seq;
+    let jobs = null, failure = null;
     try {
       const data = await api("GET", "jobs");
-      showStatus("");
-      if (!busy) render(Array.isArray(data.jobs) ? data.jobs : []);
-    } catch (e) {
+      jobs = Array.isArray(data.jobs) ? data.jobs : [];
+    } catch (e) { failure = e; }
+    if (mine !== seq) return;  // a newer poll (or the refresh after an action) owns the screen and the timer
+    if (failure) {
+      const e = failure;
       showStatus(e.kind === "no-key" ? "Paste your API key in the Web UI under Settings → General, then reopen this panel."
         : e.kind === "down" ? "Agents server isn't running. Start the servers from the launcher."
         : e.kind === "forbidden" ? "The API key was refused. Copy it again from the launcher and paste it in Settings → General."
         : "Couldn't load jobs: " + e.message);
+      lastSig = null;
+      postCounts(0, 0);  // don't leave a stale number on the Jobs button
+    } else {
+      showStatus("");
+      const sig = signature(jobs);
+      if (!busy && sig !== lastSig) {
+        lastSig = sig;
+        render(jobs);
+      }
     }
-    clearTimeout(timer);  // overlapping refreshes (action, visibility change) must not leave two poll loops running
     timer = setTimeout(refresh, visible ? VISIBLE_MS : HIDDEN_MS);
   }
 
+  if (embedded) {
+    closeBtn.hidden = false;
+    closeBtn.addEventListener("click", () => window.parent.postMessage({type: "agent-jobs-close"}, location.origin));
+  }
   $("empty-trash").addEventListener("click", () => act("trash/empty",
     "Permanently delete everything in the agent trash? Jobs whose files are in there can no longer be restored."));
   window.addEventListener("message", (e) => {

@@ -104,6 +104,8 @@ class Handler(BaseHTTPRequestHandler):
                                ("Cross-Origin-Embedder-Policy", "require-corp"),
                                ("Cross-Origin-Opener-Policy", "same-origin"),
                                ("Cross-Origin-Resource-Policy", "same-origin"),
+                               ("Content-Security-Policy", "frame-ancestors 'self'"),  # only our own Web UI page may frame the panel
+                               ("X-Frame-Options", "SAMEORIGIN"),
                                ("X-Content-Type-Options", "nosniff")])
 
     def _panel_api(self, target):

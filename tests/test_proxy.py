@@ -170,6 +170,8 @@ class ProxyIntegrationTests(unittest.TestCase):
         self.assertEqual(r.status, 200)
         self.assertEqual(r.getheader("Cross-Origin-Embedder-Policy"), "require-corp")
         self.assertEqual(r.getheader("Cross-Origin-Resource-Policy"), "same-origin")
+        self.assertEqual(r.getheader("Content-Security-Policy"), "frame-ancestors 'self'")
+        self.assertEqual(r.getheader("X-Frame-Options"), "SAMEORIGIN")
         r, _ = self.get("GET", "/agent-jobs/../proxy.py")
         self.assertEqual(r.status, 404)
         r, _ = self.get("GET", "/agent-jobs/secret.txt")
