@@ -515,6 +515,136 @@ def wait_healthy(base, timeout):
         time.sleep(1)
 
 
+# probe_server's check names, failed together when the server never got healthy.
+_PROBE_CHECKS = ("chat with key", "chat without key", "tools without key", "cors-proxy without key")
+_CHECK_PORT = 18081  # the build check's spare port; the real servers keep 8081
+_MARKS = {True: "✓", False: "✗", None: "–"}
+
+
+class UpdateRunner:
+    # Runs WinGet and the build check from a background thread. report(line) is the
+    # only output: every WinGet line and every check result. No tkinter in here;
+    # run and popen are injectable so tests never touch WinGet, the GPU or ports.
+    # config.json's previous_build is the GUI's job.
+
+    def __init__(self, report, run=subprocess.run, popen=subprocess.Popen):
+        self._report, self._run, self._popen = report, run, popen
+
+    def _text(self, args, timeout, **kw):
+        # (exit code, combined output); decoded so an odd byte can't raise.
+        r = self._run(args, capture_output=True, text=True, encoding="utf-8",
+                      errors="replace", timeout=timeout, **kw)
+        return r.returncode, (r.stdout or "") + (r.stderr or "")
+
+    def _winget(self, action, build=None):
+        # Runs an upgrade or install, reporting its output; returns an error or None.
+        try:
+            code, out = self._text(winget_args(action, build), 1800)
+        except Exception as e:
+            return f"WinGet {action} failed ({e})."
+        for line in out.splitlines():
+            if line.strip():
+                self._report(line)
+        return f"WinGet {action} failed (exit {code})." if code else None
+
+    def _version(self):
+        try:
+            return parse_build(self._text("llama-server --version", 60, shell=True)[1])
+        except Exception:
+            return None
+
+    def check(self):
+        # (installed, newest) when WinGet lists a newer build; None when the build
+        # is current or anything goes wrong, so the GUI shows nothing.
+        try:
+            code, out = self._text(winget_args("list"), 60)
+        except Exception:
+            return None
+        found = parse_winget_list(out) if code == 0 else None
+        return found if found and found[1] is not None else None
+
+    def build_check(self, expected, model_path, mmproj, key_file):
+        # The spec's five checks, in order, as [(name, ok, detail)] for check_verdict.
+        results = []
+
+        def add(name, ok, detail):
+            results.append((name, ok, detail))
+            self._report(f"{_MARKS[ok]} {name} — {detail if ok is not None else f'skipped ({detail})'}")
+
+        version = self._version()
+        add("version", version == expected,
+            str(version) if version == expected else f"{version}, expected {expected}")
+        later = ("health",) + _PROBE_CHECKS + ("context (--fit)",)
+        if not model_path:
+            for name in later:
+                add(name, None, "no last model")
+            return results
+
+        with open(key_file, encoding="utf-8") as f:
+            key = f.read().strip()
+        cmd = build_launch_command(AUTO_COMMAND, model_path, mmproj, key_file)
+        assert " --port 8081" in cmd
+        cmd = cmd.replace(" --port 8081", f" --port {_CHECK_PORT}")
+        base = f"http://127.0.0.1:{_CHECK_PORT}"
+        proc = self._popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           text=True, encoding="utf-8", errors="replace")
+        n_ctx = []
+
+        def reader():
+            # Keeps draining the pipe (see the launcher rule) and keeps the context line.
+            try:
+                for line in proc.stdout:
+                    if not n_ctx and re.search(r"\bn_ctx\s*=", line):
+                        n_ctx.append(line.strip())
+            except Exception:
+                pass
+        thread = threading.Thread(target=reader, daemon=True)
+        thread.start()
+        try:
+            healthy = wait_healthy(base, 300)
+            add("health", healthy, "ok" if healthy else "not ok within 300 s")
+            if healthy:
+                for result in probe_server(base, key):
+                    add(*result)
+            else:
+                for name in _PROBE_CHECKS:
+                    add(name, False, "server never became healthy")
+        finally:
+            # shell=True makes proc.pid cmd.exe; /T takes llama-server with it.
+            self._run(f"taskkill /F /T /PID {proc.pid}", shell=True, capture_output=True)
+            thread.join(5)
+        add("context (--fit)", bool(n_ctx), n_ctx[0] if n_ctx else "no n_ctx line in the log")
+        return results
+
+    def update(self, previous, newest, model_path, mmproj, key_file):
+        # WinGet upgrade, then the build check; a failed check rolls back to previous.
+        # Returns (passed, message).
+        error = self._winget("upgrade")
+        if error:
+            return False, error
+        try:
+            results = self.build_check(newest, model_path, mmproj, key_file)
+        except Exception as e:
+            results = [("build check", False, str(e) or type(e).__name__)]
+        passed, message = check_verdict(results)
+        if passed:
+            return True, message
+        ok, rolled = self.rollback(previous)
+        if ok:
+            return False, f"{message} Rolled back to b{previous}."
+        return False, f"{message} Roll back to b{previous} also failed: {rolled}"
+
+    def rollback(self, build):
+        # Reinstalls build through WinGet and confirms llama-server reports it.
+        error = self._winget("install", build)
+        if error:
+            return False, error
+        version = self._version()
+        if version != build:
+            return False, f"llama-server reports {version} after the install, expected {build}."
+        return True, f"Rolled back to b{build}."
+
+
 # ============================================================
 # SECTION 4 — THEME & SHARED UI HELPERS
 # ============================================================

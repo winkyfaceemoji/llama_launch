@@ -1,8 +1,10 @@
 import importlib.machinery
 import importlib.util
 import os
+import subprocess
 import tempfile
 import unittest
+from unittest import mock
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -223,6 +225,178 @@ class CheckVerdictTests(unittest.TestCase):
         results = [("version", True, "11636"), ("health", None, "no model"), ("context", None, "no model")]
         self.assertEqual(launcher.check_verdict(results),
                          (True, "Build check passed. Skipped: health, context."))
+
+
+class _FakeProc:
+    pid = 4242
+
+    def __init__(self, lines):
+        self.stdout = iter(lines)
+
+
+class UpdateRunnerTests(unittest.TestCase):
+    # Fake run/popen: no WinGet, no GPU, no ports.
+    LIST_NEWER = ("Name      Id            Version Available Source\r\n"
+                  "------------------------------------------------\r\n"
+                  "llama.cpp ggml.llamacpp b9776   b11636    winget\r\n")
+    LIST_CURRENT = ("Name      Id            Version Source\r\n"
+                    "--------------------------------------\r\n"
+                    "llama.cpp ggml.llamacpp b11636  winget\r\n")
+    PROBE_PASS = [("chat with key", True, "'hi'"), ("chat without key", True, "HTTP 401"),
+                  ("tools without key", True, "HTTP 401"), ("cors-proxy without key", True, "HTTP 404")]
+    PROBE_LEAKY = [("chat with key", True, "'hi'"), ("chat without key", False, "HTTP 200"),
+                   ("tools without key", True, "HTTP 401"), ("cors-proxy without key", True, "HTTP 404")]
+    KILL = "taskkill /F /T /PID 4242"
+    INSTALL_9776 = ["winget", "install", "--id", "ggml.llamacpp", "--exact", "--source", "winget",
+                    "--disable-interactivity", "--version", "b9776", "--force",
+                    "--silent", "--accept-package-agreements", "--accept-source-agreements"]
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.key_file = os.path.join(self.dir.name, "api_key.txt")
+        with open(self.key_file, "w", encoding="utf-8") as f:
+            f.write("secret-key\n")
+        self.reported, self.calls, self.popened = [], [], []
+        self.exit_codes = {"list": 0, "upgrade": 0, "install": 0}
+        self.list_output = self.LIST_NEWER
+        self.versions = [11636]          # successive `llama-server --version` answers
+        self.server_log = ["load_tensors: offloaded 49/49 layers to GPU\n",
+                           "llama_context: n_ctx         = 32768\n"]
+        self.runner = launcher.UpdateRunner(self.reported.append, run=self.fake_run, popen=self.fake_popen)
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def fake_run(self, args, **kw):
+        self.calls.append(args)
+        if isinstance(args, list) and args[0] == "winget":
+            action = args[1]
+            if isinstance(self.exit_codes[action], Exception):
+                raise self.exit_codes[action]
+            out = self.list_output if action == "list" else f"winget {action} line\r\n"
+            return subprocess.CompletedProcess(args, self.exit_codes[action], out, "")
+        if "--version" in args:
+            return subprocess.CompletedProcess(args, 0, f"version: {self.versions.pop(0)} (ac4105d68)\n", "")
+        return subprocess.CompletedProcess(args, 0, "", "")  # taskkill
+
+    def fake_popen(self, cmd, **kw):
+        self.popened.append(cmd)
+        return _FakeProc(self.server_log)
+
+    def patched(self, healthy=True, probe=None):
+        return (mock.patch.object(launcher, "wait_healthy", return_value=healthy),
+                mock.patch.object(launcher, "probe_server", return_value=probe or self.PROBE_PASS))
+
+    # check()
+
+    def test_check_finds_newer_build(self):
+        self.assertEqual(self.runner.check(), (9776, 11636))
+
+    def test_check_is_none_when_current(self):
+        self.list_output = self.LIST_CURRENT
+        self.assertIsNone(self.runner.check())
+
+    def test_check_is_none_on_winget_error(self):
+        self.exit_codes["list"] = FileNotFoundError("winget")
+        self.assertIsNone(self.runner.check())
+
+    def test_check_is_none_on_error_message(self):
+        self.list_output = "No installed package found matching input criteria.\r\n"
+        self.assertIsNone(self.runner.check())
+
+    # build_check()
+
+    def test_build_check_passes_on_spare_port(self):
+        wait, probe = self.patched()
+        with wait as w, probe as p:
+            results = self.runner.build_check(11636, "C:\\m\\a.gguf", None, self.key_file)
+        self.assertEqual(results, [("version", True, "11636"), ("health", True, "ok")]
+                         + self.PROBE_PASS
+                         + [("context (--fit)", True, "llama_context: n_ctx         = 32768")])
+        self.assertIn("--port 18081", self.popened[0])
+        self.assertNotIn("--port 8081", self.popened[0])
+        w.assert_called_once_with("http://127.0.0.1:18081", 300)
+        p.assert_called_once_with("http://127.0.0.1:18081", "secret-key")
+        self.assertIn(self.KILL, self.calls)
+        self.assertIn("✓ version — 11636", self.reported)
+
+    def test_wrong_version_fails(self):
+        self.versions = [9776]
+        results = self.runner.build_check(11636, "", None, self.key_file)
+        self.assertEqual(results[0], ("version", False, "9776, expected 11636"))
+
+    def test_unhealthy_server_fails_remaining_checks(self):
+        wait, probe = self.patched(healthy=False)
+        with wait, probe as p:
+            results = self.runner.build_check(11636, "C:\\m\\a.gguf", None, self.key_file)
+        p.assert_not_called()
+        self.assertEqual(results[1], ("health", False, "not ok within 300 s"))
+        self.assertEqual(results[2], ("chat with key", False, "server never became healthy"))
+        self.assertIn(self.KILL, self.calls)
+
+    def test_no_model_skips_server_checks(self):
+        results = self.runner.build_check(11636, "", None, self.key_file)
+        self.assertEqual(results, [("version", True, "11636")]
+                         + [(name, None, "no last model") for name in
+                            ("health", "chat with key", "chat without key", "tools without key",
+                             "cors-proxy without key", "context (--fit)")])
+        self.assertEqual(self.popened, [])
+        self.assertIn("– health — skipped (no last model)", self.reported)
+        self.assertTrue(launcher.check_verdict(results)[0])
+
+    def test_process_killed_when_wait_healthy_raises(self):
+        with mock.patch.object(launcher, "wait_healthy", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                self.runner.build_check(11636, "C:\\m\\a.gguf", None, self.key_file)
+        self.assertIn(self.KILL, self.calls)
+
+    # update() and rollback()
+
+    def test_upgrade_failure_skips_build_check(self):
+        self.exit_codes["upgrade"] = 1
+        self.assertEqual(self.runner.update(9776, 11636, "C:\\m\\a.gguf", None, self.key_file),
+                         (False, "WinGet upgrade failed (exit 1)."))
+        self.assertEqual(self.popened, [])
+        self.assertNotIn(self.INSTALL_9776, self.calls)
+        self.assertIn("winget upgrade line", self.reported)
+
+    def test_update_passes(self):
+        wait, probe = self.patched()
+        with wait, probe:
+            self.assertEqual(self.runner.update(9776, 11636, "C:\\m\\a.gguf", None, self.key_file),
+                             (True, "Build check passed."))
+        self.assertNotIn(self.INSTALL_9776, self.calls)
+
+    def test_failed_check_rolls_back_to_previous_build(self):
+        self.versions = [11636, 9776]
+        wait, probe = self.patched(probe=self.PROBE_LEAKY)
+        with wait, probe:
+            result = self.runner.update(9776, 11636, "C:\\m\\a.gguf", None, self.key_file)
+        self.assertEqual(result, (False, "Build check failed: chat without key (HTTP 200). "
+                                         "Rolled back to b9776."))
+        self.assertIn(self.INSTALL_9776, self.calls)
+
+    def test_failed_roll_back_is_reported(self):
+        self.exit_codes["install"] = 1
+        wait, probe = self.patched(probe=self.PROBE_LEAKY)
+        with wait, probe:
+            result = self.runner.update(9776, 11636, "C:\\m\\a.gguf", None, self.key_file)
+        self.assertEqual(result, (False, "Build check failed: chat without key (HTTP 200). "
+                                         "Roll back to b9776 also failed: WinGet install failed (exit 1)."))
+
+    def test_build_check_error_still_rolls_back(self):
+        self.versions = [11636, 9776]
+        with mock.patch.object(launcher, "wait_healthy", side_effect=RuntimeError("boom")):
+            result = self.runner.update(9776, 11636, "C:\\m\\a.gguf", None, self.key_file)
+        self.assertEqual(result, (False, "Build check failed: build check (boom). Rolled back to b9776."))
+        self.assertIn(self.KILL, self.calls)
+
+    def test_rollback_confirms_version(self):
+        self.versions = [11636]
+        self.assertEqual(self.runner.rollback(9776),
+                         (False, "llama-server reports 11636 after the install, expected 9776."))
+        self.versions = [9776]
+        self.assertEqual(self.runner.rollback(9776), (True, "Rolled back to b9776."))
 
 
 if __name__ == "__main__":
