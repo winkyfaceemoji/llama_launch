@@ -18,12 +18,34 @@ SEEN = {}
 class FakeLlama(BaseHTTPRequestHandler):
     def do_GET(self):
         SEEN["llama_headers"] = dict(self.headers)
-        if self.path.startswith("/broken"):
+        if "broken" in self.path:
             body, status = b"Error: gzip is not supported by this browser", 415
             self.send_response(status)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            return
+        if "badgzip" in self.path:
+            body = b"this is not gzip data"
+            self.send_response(200)
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if "corruptgzip" in self.path or "shortbody" in self.path:
+            body = gzip.compress(PAGE)
+            body = body[:12] + bytes([255]) * 20 if "corruptgzip" in self.path else body
+            self.send_response(200)
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(body) + (50 if "shortbody" in self.path else 0)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if "If-None-Match" in self.headers:
+            self.send_response(304)
+            self.send_header("ETag", '"abc"')
+            self.end_headers()
             return
         body = gzip.compress(PAGE)
         self.send_response(200)
@@ -120,9 +142,28 @@ class ProxyIntegrationTests(unittest.TestCase):
         self.assertIn("gzip", SEEN["llama_headers"].get("Accept-Encoding", ""))
 
     def test_webui_page_error_is_relayed_untouched(self):
+        r, body = self.get("GET", "/?broken")  # path "/" routes through _webui_page
+        self.assertEqual(r.status, 415)
+        self.assertEqual(body, b"Error: gzip is not supported by this browser")
+        self.assertNotIn(TAG, body)
+
+    def test_other_path_error_is_relayed_untouched(self):
         r, body = self.get("GET", "/broken")
         self.assertEqual(r.status, 415)
         self.assertNotIn(TAG, body)
+
+    def test_webui_page_ignores_conditional_and_range_headers(self):
+        for h in ("If-None-Match", "If-Modified-Since", "If-Match", "If-Unmodified-Since", "If-Range", "Range"):
+            SEEN.pop("llama_headers", None)
+            r, body = self.get("GET", "/", {h: '"abc"'})
+            self.assertEqual(r.status, 200, h)
+            self.assertIn(TAG, body, h)
+            self.assertNotIn(h.lower(), {k.lower() for k in SEEN["llama_headers"]}, h)
+
+    def test_webui_page_bad_gzip_is_502(self):
+        for q in ("badgzip", "corruptgzip", "shortbody"):
+            r, _ = self.get("GET", "/?" + q)
+            self.assertEqual(r.status, 502, q)
 
     def test_panel_files_served_with_coep(self):
         r, body = self.get("GET", "/agent-jobs")

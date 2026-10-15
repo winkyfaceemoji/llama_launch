@@ -16,3 +16,4 @@ paths: proxy.py
 - **Panel files under `/agent-jobs` carry `Cross-Origin-Embedder-Policy: require-corp`** (plus CORP `same-origin`). The Web UI page sends COEP, so anything embedded in it must send it too or the browser blocks it. Only names in `PANEL_FILES` are served from `panel/`; everything else under `/agent-jobs` is 404.
 - **The panel API is an allow-list** (`api_target`): `GET jobs`, `POST jobs/<id>/<apply|reject|restore|queue>`, `POST trash/empty`. Anything else under `/agent-jobs/api/` is 404 and never reaches the agents server.
 - **The proxy never adds a key.** It forwards only the browser's own `Authorization` to the agents server, with `Host: 127.0.0.1:<agents port>`; the panel reads the key the Web UI stores. A down agents server gives 502 JSON.
+- **The page fetch drops `If-*` and `Range` request headers.** Otherwise a reload sends the browser's `If-None-Match`, llama-server answers 304, and the browser keeps its cached untagged page.

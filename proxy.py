@@ -1,4 +1,4 @@
-import gzip, http.client, json, os, re, sys
+import gzip, http.client, json, os, re, sys, zlib
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
@@ -28,6 +28,10 @@ _API = [
 _DROP_PAGE_HEADERS = ("content-encoding", "content-length", "transfer-encoding", "etag", "cache-control", "last-modified")
 
 
+_DROP_REQUEST_HEADERS = ("host", "accept-encoding", "if-none-match", "if-modified-since", "if-match",
+                         "if-unmodified-since", "if-range", "range")
+
+
 def inject_script(html):
     """Insert the jobs-panel script tag before the last </body>, or append it."""
     i = html.lower().rfind(b"</body>")
@@ -53,17 +57,21 @@ def _load():
 
 class Handler(BaseHTTPRequestHandler):
     def _send(self, status, body, headers):
-        self.send_response(status)
-        for k, v in headers:
-            self.send_header(k, v)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(body)
+        try:
+            self.send_response(status)
+            for k, v in headers:
+                self.send_header(k, v)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(body)
+        except (ConnectionAbortedError, BrokenPipeError, ConnectionResetError):
+            pass  # client went away
 
     def _webui_page(self):
         # llama-server only serves this page gzipped (no gzip -> 415), so ask for gzip, unpack, add our tag.
-        hdrs = {k: v for k, v in self.headers.items() if k.lower() not in ("host", "accept-encoding")}
+        # Conditional and range headers are dropped: a 304 or 206 would hand the browser its cached untagged copy.
+        hdrs = {k: v for k, v in self.headers.items() if k.lower() not in _DROP_REQUEST_HEADERS}
         hdrs["Accept-Encoding"] = "gzip"
         conn = http.client.HTTPConnection("127.0.0.1", _UP, timeout=30)
         try:
@@ -129,7 +137,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.command in ("GET", "HEAD") and path in WEBUI_PAGES:
             try:
                 return self._webui_page()
-            except (OSError, ValueError, EOFError) as e:  # EOFError/ValueError: a bad gzip body
+            except (OSError, ValueError, EOFError, zlib.error, http.client.HTTPException) as e:  # bad gzip or short body
                 return self._send(502, str(e).encode(), [("Content-Type", "text/plain")])
 
         cl = self.headers.get("Content-Length")
