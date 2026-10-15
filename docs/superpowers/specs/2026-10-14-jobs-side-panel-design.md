@@ -24,7 +24,7 @@ See and act on agent jobs from a panel on the right of the llama Web UI chat, st
 | Tool | Step text |
 |---|---|
 | `web_search` | `Searched "<query>"` |
-| `fetch_url` | `Read <host><path>` (cut to 80 characters) |
+| `fetch_url` | `Read <host><path>` (cut to 80 characters; never the URL's `user:password@`) |
 | `list_dir` | `Looked in <folder name>` |
 | `read_file` | `Read <file name>` |
 | `write_file` | `Wrote <file name>` |
@@ -38,7 +38,7 @@ See and act on agent jobs from a panel on the right of the llama Web UI chat, st
 
 Both routes are guarded by the existing `llm.check_request` (loopback Host plus API key):
 
-- **`GET /jobs`** returns JSON for the 50 most recent jobs. Each job has `id`, `kind`, `state`, `note`, `title` (topic, goal, or folder plus goal), `created`, `updated`, `step_count`, and `steps` (the last 5). For a job awaiting approval it adds `plan` (the full operation list) and `review` (the full review text). The JSON is built by a pure function in a stdlib module so it can be unit-tested.
+- **`GET /jobs`** returns JSON for up to 50 jobs, newest first: every job awaiting approval or in progress (queued, running, applying, restoring) is always included, and the most recent others fill the rest. Each job has `id`, `kind`, `state`, `note`, `title` (topic, goal, or folder plus goal), `created`, `updated`, `step_count`, and `steps` (the last 5). For a job awaiting approval it adds `plan` (the full operation list) and `review` (the full review text). The JSON is built by a pure function in a stdlib module so it can be unit-tested.
 - **`POST /trash/empty`** empties the trash and returns `{"ok": bool, "message": str}`. It's refused while any job is `applying` or `restoring`, using the same helper the launcher uses today.
 
 The existing `POST /jobs/{id}/{apply|reject|restore|queue}` routes are unchanged.
@@ -46,7 +46,7 @@ The existing `POST /jobs/{id}/{apply|reject|restore|queue}` routes are unchanged
 ### Proxy (`proxy.py`)
 
 - **Panel files:** serves `/agent-jobs` (the panel page) and `/agent-jobs/<file>` from the repo's `panel/` folder. Only known file names are served; anything else returns 404.
-- **API pass-through:** passes `/agent-jobs/api/<rest>` to `http://127.0.0.1:8002/<rest>`, but only for `GET jobs`, `POST jobs/<id>/<action>` and `POST trash/empty`. It forwards the browser's `Authorization` header unchanged and sets `Host: 127.0.0.1:8002`. It **never adds a key itself**. If the agents server is down, it replies 502 with a short message.
+- **API pass-through:** passes `/agent-jobs/api/<rest>` to `http://127.0.0.1:8002/<rest>`, but only for `GET jobs`, `POST jobs/<id>/<action>` and `POST trash/empty`. It refuses every `/agent-jobs` request (page, files and API) with 403 unless `Host` is exactly `127.0.0.1:<proxy port>` or `localhost:<proxy port>`. It forwards the browser's `Authorization` header unchanged and sets `Host: 127.0.0.1:8002`. It **never adds a key itself**. If the agents server is down, it replies 502 with a short message.
 - **Script injection:** for `GET /` and `/index.html` (the Web UI page), it asks llama-server for the page with `Accept-Encoding: gzip` (llama-server serves this page *only* gzipped; without gzip it answers 415 — verified 2026-10-14) and decompresses it with `gzip`. It then inserts `<script src="/agent-jobs/inject.js"></script>` before the last `</body>` (or at the end if there's none), sends it uncompressed with a fixed `Content-Length` and `Cache-Control: no-store`, and drops the `ETag`. A non-200 reply passes through untouched. A pure function does the insertion so it can be unit-tested. Every other path is relayed exactly as today.
 - **Panel files carry `Cross-Origin-Embedder-Policy: require-corp`** (plus COOP same-origin and CORP same-origin), because the Web UI page sends COEP `require-corp`, and a browser blocks an embedded page that doesn't match.
 
@@ -72,7 +72,7 @@ Remove the Jobs pane, `job_actions`, the `_refresh_jobs` polling, the review dia
 ## Security
 
 - The panel never sees or stores a key beyond what the Web UI already stores. The proxy never adds one. The agents server checks the key and a loopback Host on every panel request.
-- A rebinding page reaching `:8080` can't use `/agent-jobs/api` without the key, and the agents server's Host check still applies after the proxy rewrites Host.
+- The proxy rewrites Host before the agents server sees it, so the proxy does the Host check itself: a rebinding page reaching `:8080` gets 403 on everything under `/agent-jobs`, and still can't use `/agent-jobs/api` without the key.
 - Step text and plan paths are shown with `textContent` and never as HTML.
 
 ## Risks (checked 2026-10-14 on build 9776)

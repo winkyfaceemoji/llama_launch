@@ -115,6 +115,7 @@ class ProxyIntegrationTests(unittest.TestCase):
         proxy._UP = cls.llama.server_port
         proxy._AGENTS = cls.agents.server_port
         cls.proxy = serve(proxy.Handler)
+        proxy._LISTEN = cls.proxy.server_port
 
     @classmethod
     def tearDownClass(cls):
@@ -198,6 +199,29 @@ class ProxyIntegrationTests(unittest.TestCase):
         r, _ = self.get("POST", "/agent-jobs/api/mcp")
         self.assertEqual(r.status, 404)
         self.assertNotIn("agents", SEEN)
+
+    def test_panel_refuses_a_foreign_host(self):
+        for path in ("/agent-jobs", "/agent-jobs/panel.js", "/agent-jobs/api/jobs", "/agent-jobs/nothing"):
+            for host in ("evil.example", f"evil.example:{proxy._LISTEN}", "127.0.0.1", f"127.0.0.1:{proxy._LISTEN + 1}",
+                         f"127.0.0.1.evil.example:{proxy._LISTEN}"):
+                SEEN.pop("agents", None)
+                r, _ = self.get("GET", path, {"Host": host, "Authorization": "Bearer k"})
+                self.assertEqual(r.status, 403, (path, host))
+                self.assertNotIn("agents", SEEN, (path, host))
+
+    def test_panel_accepts_the_proxys_own_host(self):
+        for host in (f"127.0.0.1:{proxy._LISTEN}", f"localhost:{proxy._LISTEN}", f"LOCALHOST:{proxy._LISTEN}"):
+            SEEN.pop("agents", None)
+            r, _ = self.get("GET", "/agent-jobs/api/jobs", {"Host": host, "Authorization": "Bearer k"})
+            self.assertEqual(r.status, 200, host)
+            self.assertIn("agents", SEEN, host)
+            r, _ = self.get("GET", "/agent-jobs", {"Host": host})
+            self.assertEqual(r.status, 200, host)
+
+    def test_other_routes_do_not_check_host(self):
+        r, body = self.get("GET", "/", {"Host": "evil.example"})
+        self.assertEqual(r.status, 200)
+        self.assertIn(TAG, body)
 
     def test_api_returns_502_when_agents_server_down(self):
         saved = proxy._AGENTS

@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 _SP = ""
 _UP = 8081
 _AGENTS = 8002  # agents server; argv[3] overrides
+_LISTEN = 8080  # this proxy's own port; the panel only answers requests addressed to it
 
 PANEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel")
 PANEL_FILES = {
@@ -128,6 +129,9 @@ class Handler(BaseHTTPRequestHandler):
     def _relay(self):
         path = urlsplit(self.path).path
         if path.startswith("/agent-jobs"):
+            # The agents server only sees the Host we rewrite, so refuse a rebound page's Host here.
+            if (self.headers.get("Host") or "").lower() not in (f"127.0.0.1:{_LISTEN}", f"localhost:{_LISTEN}"):
+                return self._send(403, b'{"ok": false, "message": "Forbidden host."}', [("Content-Type", "application/json")])
             if path.startswith("/agent-jobs/api/"):
                 target = api_target(self.command, path)
                 if target is None:
@@ -221,6 +225,7 @@ if __name__ == "__main__":
     listen = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
     _UP    = int(sys.argv[2]) if len(sys.argv) > 2 else 8081
     _AGENTS = int(sys.argv[3]) if len(sys.argv) > 3 else 8002
+    _LISTEN = listen
 
     _SP = _load()
     print(f"system prompt: {'loaded' if _SP else 'none'}", flush=True)
