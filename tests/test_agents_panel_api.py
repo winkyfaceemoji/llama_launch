@@ -1,8 +1,10 @@
+import itertools
 import os
 import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agents import jobs, panel_api, paths, plans, runner
@@ -19,6 +21,7 @@ class PanelApiTests(unittest.TestCase):
         self.policy.add_folder(self.dl)
         self.store = jobs.JobStore(self.policy.jobs_dir)
         self.ctx = runner.Context(self.policy, self.store, None, None)
+        self.counter = itertools.count()
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -34,7 +37,31 @@ class PanelApiTests(unittest.TestCase):
         self.assertEqual(out[r["id"]]["step_count"], 7)
         self.assertEqual(out[r["id"]]["steps"], ["s2", "s3", "s4", "s5", "s6"])
         self.assertNotIn("plan", out[r["id"]])
+        self.store.update(r["id"], state="done")
+        self.store.update(o["id"], state="done")
         self.assertEqual(len(panel_api.jobs_payload(self.store, limit=1)), 1)
+
+    def make(self, kind, args, state, created):
+        # Job ids are second-resolution plus 4 random hex digits; 60 jobs in a test would sometimes collide.
+        with mock.patch.object(jobs.secrets, "token_hex", side_effect=lambda n: f"{next(self.counter):04x}"):
+            job = self.store.create(kind, args)
+        return self.store.update(job["id"], state=state, created=created)
+
+    def test_payload_keeps_awaiting_and_active_jobs_past_the_limit(self):
+        awaiting = self.make("organize", {"folder": self.dl, "goal": "old"}, "awaiting_approval", 1)
+        running = self.make("research", {"topic": "slow"}, "running", 2)
+        done = [self.make("research", {"topic": f"t{i}"}, "done", 100 + i)["id"] for i in range(60)]
+        ids = [j["id"] for j in panel_api.jobs_payload(self.store, limit=50)]
+        self.assertEqual(len(ids), 50)
+        self.assertIn(awaiting["id"], ids)
+        self.assertIn(running["id"], ids)
+        self.assertEqual(ids[:48], done[::-1][:48])  # the 48 newest others, newest first
+        self.assertEqual(ids[48:], [running["id"], awaiting["id"]])
+
+    def test_payload_with_only_pinned_jobs_beyond_limit_returns_them_all(self):
+        for i in range(3):
+            self.make("research", {"topic": f"r{i}"}, "running", i)
+        self.assertEqual(len(panel_api.jobs_payload(self.store, limit=2)), 3)
 
     def test_payload_includes_full_plan_only_when_awaiting(self):
         job = self.store.create("organize", {"folder": self.dl, "goal": "g"})

@@ -4,6 +4,8 @@ import os
 from . import plans, runner
 
 MOVING = ("applying", "restoring")
+# Never cut from the list: a plan waiting for approval is only approvable here, and live jobs are being watched.
+ALWAYS_LISTED = ("awaiting_approval", "queued", "running", "applying", "restoring")
 
 
 def _title(job):
@@ -16,7 +18,11 @@ def _title(job):
 
 def jobs_payload(store, limit=50):
     out = []
-    for job in store.list()[:limit]:
+    newest_first = store.list()
+    pinned = [j["id"] for j in newest_first if j.get("state") in ALWAYS_LISTED]
+    others = [j["id"] for j in newest_first if j.get("state") not in ALWAYS_LISTED]
+    keep = set(pinned) | set(others[:max(0, limit - len(pinned))])
+    for job in (j for j in newest_first if j["id"] in keep):
         jid, state = job["id"], job.get("state")
         count, steps = store.read_steps(jid, last=5)
         item = {k: job.get(k) for k in ("id", "kind", "state", "note", "created", "updated")}
