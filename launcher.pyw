@@ -138,6 +138,7 @@ FONT_LOG    = ("Cascadia Code", 10)
 W           = 480
 H_SETUP     = 280    # height of the first-run setup screen
 H_CONFIG    = 270    # height of the main config view
+H_NOTICE    = 66     # added while the llama.cpp update notice shows
 H_SETTINGS      = 419   # settings dialog, UVX collapsed
 H_SETTINGS_UVX  = 509   # settings dialog, UVX expanded
 W_SETTINGS      = 460   # settings dialog width
@@ -1115,6 +1116,67 @@ class FoldersDialog(tk.Toplevel):
             self._refresh()
 
 
+class UpdateDialog(tk.Toplevel):
+    # Progress of a WinGet job (update or roll back). job(report) runs in a
+    # background thread and returns (ok, message); its report lines reach the
+    # log through after(0, ...). Close stays disabled until the job ends.
+    def __init__(self, parent, title, job, on_done=None):
+        super().__init__(parent)
+        self.title(title)
+        self.configure(bg=BG)
+        self.geometry(f"{W_SETTINGS}x360")
+        self.protocol("WM_DELETE_WINDOW", self._close)
+        self.grab_set()
+        self._on_done = on_done
+        self._working = True
+        section_label(self, title.upper()).pack(fill="x", padx=20, pady=(20, 6))
+        border = tk.Frame(self, bg=BORDER, padx=1, pady=1)
+        border.pack(fill="both", expand=True, padx=20)
+        self._log = tk.Text(border, font=FONT_LOG, bg=BG_INPUT, fg=TEXT_PRI, height=10,
+                            relief="flat", state=tk.DISABLED, wrap="word")
+        sb = ttk.Scrollbar(border, orient="vertical", command=self._log.yview)
+        self._log.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self._log.pack(side="left", fill="both", expand=True)
+        self._status = tk.Label(self, text="Working… this can take a few minutes.",
+                                font=FONT_SMALL, fg=TEXT_SEC, bg=BG,
+                                wraplength=W_SETTINGS - 40, justify="left")
+        self._status.pack(padx=20, anchor="w", pady=(10, 0))
+        row = tk.Frame(self, bg=BG)
+        row.pack(fill="x", padx=20, pady=(10, 20))
+        self._close_btn = small_btn(row, "Close", self._close, state=tk.DISABLED)
+        self._close_btn.pack(side="right")
+        threading.Thread(target=self._work, args=(job,), daemon=True).start()
+
+    def report(self, line):
+        # Called from the job's thread.
+        self.after(0, self._append, line)
+
+    def _append(self, line):
+        self._log.config(state=tk.NORMAL)
+        self._log.insert("end", line + "\n")
+        self._log.see("end")
+        self._log.config(state=tk.DISABLED)
+
+    def _work(self, job):
+        try:
+            ok, message = job(self.report)
+        except Exception as e:  # Close must never stay disabled
+            ok, message = False, str(e) or type(e).__name__
+        self.after(0, self._finish, ok, message)
+
+    def _finish(self, ok, message):
+        self._working = False
+        self._status.config(text=message, fg=TEXT_PRI)
+        self._close_btn.config(state=tk.NORMAL)
+        if self._on_done:
+            self._on_done(ok)
+
+    def _close(self):
+        if not self._working:
+            self.destroy()
+
+
 # ============================================================
 # SECTION 8 — MAIN APPLICATION WINDOW
 # CommandLauncherGUI manages the full window lifecycle:
@@ -1280,9 +1342,17 @@ class CommandLauncherGUI:
         small_btn(hdr, "⚙ Settings", self._open_settings,
                   color="#13141f", fg=TEXT_MUT).pack(side="right", padx=16, pady=14)
 
-        # ── Row 1: Model selector
+        # ── Row 1: llama.cpp update notice (hidden until the startup check finds a newer build)
+        self._notice, notice_card = card(self.master)
+        self._notice_label = tk.Label(notice_card, font=FONT_SMALL, fg=TEXT_PRI, bg=BG_PANEL,
+                                      wraplength=320, justify="left")
+        self._notice_label.pack(side="left", padx=12, pady=8)
+        self._update_btn = small_btn(notice_card, "Update", self._start_update, color=ACCENT, fg=BG)
+        self._update_btn.pack(side="right", padx=12, pady=8)
+
+        # ── Row 2: Model selector
         self.model_outer, model_card = card(self.master)
-        self.model_outer.grid(row=1, column=0, padx=16, pady=(12, 6), sticky="ew")
+        self.model_outer.grid(row=2, column=0, padx=16, pady=(12, 6), sticky="ew")
         model_card.grid_columnconfigure(1, weight=1)
 
         section_label(model_card, "MODEL").grid(row=0, column=0, sticky="w", padx=(12, 6), pady=10)
@@ -1294,9 +1364,9 @@ class CommandLauncherGUI:
 
         self._refresh_models(init=True)
 
-        # ── Row 2: Preset selector
+        # ── Row 3: Preset selector
         self.preset_outer, preset_card = card(self.master)
-        self.preset_outer.grid(row=2, column=0, padx=16, pady=(0, 6), sticky="ew")
+        self.preset_outer.grid(row=3, column=0, padx=16, pady=(0, 6), sticky="ew")
         preset_card.grid_columnconfigure(1, weight=1)
 
         section_label(preset_card, "PRESET").grid(row=0, column=0, sticky="w", padx=(12, 6), pady=10)
@@ -1311,7 +1381,7 @@ class CommandLauncherGUI:
         small_btn(preset_btns, "Delete", self._delete_preset,
                   color=BG_PANEL, fg=DANGER).pack(side="left")
 
-        # ── Row 3: Launch Server button
+        # ── Row 4: Launch Server button
         self.run_button = tk.Button(
             self.master, text="Launch Server",
             command=self.run_commands,
@@ -1320,10 +1390,10 @@ class CommandLauncherGUI:
             font=("Segoe UI", 12, "bold"), relief="flat", bd=0,
             pady=14, cursor="hand2",
         )
-        self.run_button.grid(row=3, column=0,
+        self.run_button.grid(row=4, column=0,
                              sticky="ew", padx=16, pady=(6, 8))
 
-        # ── Row 6: Status bar (hidden until running state)
+        # ── Row 5: Status bar (hidden until running state)
         self.status_bar = tk.Frame(self.master, bg=BG_PANEL)
 
         # Left: health dot
@@ -1433,6 +1503,8 @@ class CommandLauncherGUI:
         # Set up system tray icon if available
         self._setup_tray()
 
+        threading.Thread(target=self._check_for_update, daemon=True).start()
+
 
     # ── Settings ─────────────────────────────────────────────
 
@@ -1457,10 +1529,46 @@ class CommandLauncherGUI:
         )
 
 
+    # ── llama.cpp updates ─────────────────────────────────────
+
+    def _check_for_update(self):
+        # Background thread, once per start. WinGet or network errors show nothing.
+        found = UpdateRunner(lambda line: None).check()
+        if found:
+            self.master.after(0, self._show_update_notice, *found)
+
+    def _show_update_notice(self, installed, newest):
+        self._update_builds = (installed, newest)
+        self._notice_label.config(text=f"llama.cpp b{newest} is out (you have b{installed}). "
+                                       "Updating accepts the package's terms.")
+        self._notice.grid(row=1, column=0, padx=16, pady=(12, 0), sticky="ew")
+        # Windows locks a running llama-server.exe, so no updates while running.
+        running = bool(self.exit_btn.winfo_manager())
+        self._update_btn.config(state=tk.DISABLED if running else tk.NORMAL)
+        if not running:
+            self._resize_config()
+
+    def _start_update(self):
+        installed, newest = self._update_builds
+        self.config["previous_build"] = f"b{installed}"
+        save_config(self.config)
+        model_path, mmproj = self._models.get(self.model_var.get(), (None, None))
+        UpdateDialog(self.master, f"Update to b{newest}",
+                     lambda report: UpdateRunner(report).update(
+                         installed, newest, model_path, mmproj, API_KEY_FILE),
+                     on_done=self._update_done)
+
+    def _update_done(self, ok):
+        if ok:
+            self._notice.grid_remove()
+            self._resize_config()
+
+
     # ── Window sizing ─────────────────────────────────────────
 
     def _resize_config(self):
-        self.master.geometry(f"{W}x{H_CONFIG}")
+        extra = H_NOTICE if self._notice.winfo_manager() else 0
+        self.master.geometry(f"{W}x{H_CONFIG + extra}")
 
     def _set_open_browser(self, open_browser):
         self._open_browser = open_browser
@@ -1486,13 +1594,14 @@ class CommandLauncherGUI:
         # Hide config widgets and show the status bar, two log panes + exit button.
         for w in (self.model_outer, self.preset_outer, self.run_button):
             w.grid_remove()
-        self.status_bar.grid(row=4, column=0,
+        self._update_btn.config(state=tk.DISABLED)
+        self.status_bar.grid(row=5, column=0,
                              sticky="ew", padx=16, pady=(10, 0))
-        self.api_bar.grid(row=5, column=0, sticky="ew", padx=16, pady=(6, 0))
-        self.master.grid_rowconfigure(6, weight=1)
-        self.log_pane.grid(row=6, column=0,
+        self.api_bar.grid(row=6, column=0, sticky="ew", padx=16, pady=(6, 0))
+        self.master.grid_rowconfigure(7, weight=1)
+        self.log_pane.grid(row=7, column=0,
                            sticky="nsew", padx=16, pady=(6, 6))
-        self.exit_btn.grid(row=7, column=0,
+        self.exit_btn.grid(row=8, column=0,
                            sticky="ew", padx=16, pady=(0, 14))
         self.master.resizable(True, True)
         self.master.geometry(f"{W}x{H_RUNNING}")
@@ -1503,7 +1612,7 @@ class CommandLauncherGUI:
         self._kill_all()
         self._stop_elapsed()
         self.master.resizable(False, False)
-        self.master.grid_rowconfigure(6, weight=0)
+        self.master.grid_rowconfigure(7, weight=0)
         self.status_bar.grid_remove()
         self.api_bar.grid_remove()
         self.log_pane.grid_remove()
@@ -1514,6 +1623,7 @@ class CommandLauncherGUI:
         self._proxy_label_var.set("System Prompt Proxy")
         for w in (self.model_outer, self.preset_outer, self.run_button):
             w.grid()
+        self._update_btn.config(state=tk.NORMAL)
         self._resize_config()
 
 
