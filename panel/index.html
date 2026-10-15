@@ -1,1 +1,22 @@
-<!doctype html><title>Agent jobs</title>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent jobs</title>
+<link rel="stylesheet" href="/agent-jobs/panel.css">
+</head>
+<body>
+<header class="top">
+  <h1>Agent jobs</h1>
+  <span id="summary" class="muted"></span>
+</header>
+<div id="status" class="status" hidden></div>
+<div id="flash" class="flash" hidden></div>
+<main id="jobs" class="jobs" aria-live="polite"></main>
+<footer class="bottom">
+  <button id="empty-trash" type="button">Empty trash</button>
+</footer>
+<script src="/agent-jobs/panel.js"></script>
+</body>
+</html>
