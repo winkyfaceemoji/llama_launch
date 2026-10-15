@@ -188,7 +188,7 @@ Agents must send the [API key](#api-key) as `Authorization: Bearer <key>`. In mo
 The chat model in the Web UI can start background jobs that run on your local model (ADR 0007):
 
 - **research** a topic: a cited Markdown report. It can search and fetch web pages, but cannot read your files. It may only cite pages it actually read; a report that still cites unread pages gets a warning line at the top.
-- **plan** a goal: a step-by-step plan, plus follow-up jobs you can queue from the [Jobs panel](#jobs-panel). It also has web access and no access to your files, so it can only name a folder in a follow-up if your goal gives its path.
+- **plan** a goal: a step-by-step plan, plus follow-up jobs you can queue from the [Jobs panel](#jobs-panel). It also has web access and no access to your files, so it can only name a folder in a follow-up if your goal gives its path. Like research, it may only cite pages it read.
 - **organize** a folder: a list of proposed moves, renames, new folders and removals, checked by a local review pass. It can read your listed folders but has no web access. **Nothing changes until you approve it in the Web UI's [Jobs panel](#jobs-panel).**
 
 ### Setup (once)

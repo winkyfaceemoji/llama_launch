@@ -285,6 +285,22 @@ class JobKindTests(unittest.TestCase):
         self.assertEqual(self.store.read_json(job["id"], "steps.json"), steps[:2])
         self.assertEqual(self.store.get(job["id"])["state"], "done")
 
+    def test_plan_citing_unread_pages_is_sent_back_to_read_them(self):
+        job = self.start("plan", {"goal": "g"})
+        chat = Script(call("web_search", {"query": "q"}), final("1. Use https://x.test/a"),
+                      call("fetch_url", {"url": "https://x.test/a"}), final("1. Use https://x.test/a"))
+        runner.run_job(job, self.ctx(chat))
+        self.assertIn("https://x.test/a", chat.seen[2][0][-1]["content"])
+        got = self.store.get(job["id"])
+        self.assertEqual((got["state"], got["note"]), ("done", ""))
+        self.assertEqual(self.store.read_text(job["id"], "result.md"), "1. Use https://x.test/a")
+
+    def test_plan_that_keeps_citing_unread_pages_is_flagged(self):
+        job = self.start("plan", {"goal": "g"})
+        runner.run_job(job, self.ctx(Script(*[final("1. Use https://x.test/a")] * 3)))
+        self.assertIn("https://x.test/a", self.store.get(job["id"])["note"])
+        self.assertTrue(self.store.read_text(job["id"], "result.md").startswith("> "))
+
     def organize(self, ops):
         job = self.start("organize", {"folder": self.dl, "goal": "tidy"})
         chat = Script(call("propose_plan", {"operations": ops}), final("summary"), final("looks fine"))

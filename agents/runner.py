@@ -254,7 +254,8 @@ RESEARCH_PROMPT = (
     "Cite a URL you read with fetch_url for every claim, and say where sources disagree.")
 
 PLAN_PROMPT = (
-    "You plan projects. Research as needed, then write a Markdown plan with numbered steps. You cannot look "
+    "You plan projects. Research as needed, then write a Markdown plan with numbered steps. Cite only pages you "
+    "read with fetch_url; search results are only leads. You cannot look "
     "inside the user's own folders. Before your final answer, call propose_steps once with follow-up jobs "
     "worth running, each either "
     '{"kind": "research", "topic": "..."} or {"kind": "organize", "folder": "<absolute path>", "goal": "..."}. '
@@ -284,9 +285,9 @@ def _steps(job, ctx):
     return lambda text: ctx.store.append_step(job["id"], text)
 
 
-def run_research(job, ctx):
-    # A small model writes the report from search snippets and cites pages it never opened, so the report may
-    # cite only pages fetch_url read; enforced here, not just asked for in the prompt.
+def _source_check(job, ctx, must_read):
+    """A small model writes from search snippets and cites pages it never opened, so a web job's answer may cite
+    only pages fetch_url read; enforced here, not just asked for in the prompt. Returns on_fetch, check, finish."""
     read = set()
 
     def unread(text):
@@ -294,30 +295,40 @@ def run_research(job, ctx):
 
     def check(text):
         missing = unread(text)
-        if read and not missing:
+        if not missing and (read or not must_read):
             return None
         ctx.store.append_step(job["id"], "Sent back to read its sources")
         if missing:
-            return ("Your report cites pages you have not read: " + ", ".join(missing[:10]) + ". Search results "
-                    "are only leads. Read the pages you rely on with fetch_url, then rewrite the report citing only "
+            return ("Your answer cites pages you have not read: " + ", ".join(missing[:10]) + ". Search results "
+                    "are only leads. Read the pages you rely on with fetch_url, then rewrite the answer citing only "
                     "pages you read, and drop any claim they don't confirm.")
         return ("You have not read any page yet. Search results are only leads: read the most relevant sources "
                 "with fetch_url, then write the report from what they say.")
 
-    tools = web_tools(ctx.mcp_call, on_fetch=lambda url: read.add(_same_page(url))) + sandbox_tools(ctx.policy)
+    def finish(text, stop):
+        """The text to save and the job note."""
+        if stop:
+            ctx.store.append_step(job["id"], f"Stopped: {stop}")
+        notes = [stop] if stop else []
+        missing = unread(text)
+        if missing:
+            notes.append("cites pages it never read: " + ", ".join(missing[:10]))
+            text = f"> Warning: this cites pages the agent never read: {', '.join(missing)}\n\n{text}"
+        elif must_read and not read:
+            notes.append("read no sources")
+        return text, "; ".join(notes)
+
+    return (lambda url: read.add(_same_page(url))), check, finish
+
+
+def run_research(job, ctx):
+    on_fetch, check, finish = _source_check(job, ctx, must_read=True)
+    tools = web_tools(ctx.mcp_call, on_fetch) + sandbox_tools(ctx.policy)
     text, stop = run_agent(ctx.chat, RESEARCH_PROMPT, job["args"]["topic"], tools, on_step=_steps(job, ctx),
                            check=check)
-    if stop:
-        ctx.store.append_step(job["id"], f"Stopped: {stop}")
-    notes = [stop] if stop else []
-    missing = unread(text)
-    if missing:
-        notes.append("cites pages it never read: " + ", ".join(missing[:10]))
-        text = f"> Warning: this report cites pages the agent never read: {', '.join(missing)}\n\n{text}"
-    elif not read:
-        notes.append("read no sources")
+    text, note = finish(text, stop)
     ctx.store.write_text(job["id"], "result.md", text)
-    ctx.store.update(job["id"], state="done", note="; ".join(notes))
+    ctx.store.update(job["id"], state="done", note=note)
 
 
 def run_plan(job, ctx):
@@ -330,15 +341,17 @@ def run_plan(job, ctx):
         saved[:] = good
         return f"saved {len(good)} follow-up jobs"
 
+    # A plan needn't read anything, but any page it cites must have been read.
+    on_fetch, check, finish = _source_check(job, ctx, must_read=False)
     steps_param = {"steps": {"type": "array", "items": {"type": "object"}}}
-    tools = web_tools(ctx.mcp_call) + sandbox_tools(ctx.policy) + [
+    tools = web_tools(ctx.mcp_call, on_fetch) + sandbox_tools(ctx.policy) + [
         tool("propose_steps", "Save follow-up jobs for the user to queue.", steps_param, ["steps"], propose_steps)]
-    text, stop = run_agent(ctx.chat, PLAN_PROMPT, job["args"]["goal"], tools, on_step=_steps(job, ctx))
-    if stop:
-        ctx.store.append_step(job["id"], f"Stopped: {stop}")
+    text, stop = run_agent(ctx.chat, PLAN_PROMPT, job["args"]["goal"], tools, on_step=_steps(job, ctx),
+                           check=check)
+    text, note = finish(text, stop)
     ctx.store.write_text(job["id"], "result.md", text)
     ctx.store.write_json(job["id"], "steps.json", saved)
-    ctx.store.update(job["id"], state="done", note=stop)
+    ctx.store.update(job["id"], state="done", note=note)
 
 
 def run_organize(job, ctx):
