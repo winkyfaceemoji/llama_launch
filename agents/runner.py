@@ -239,6 +239,9 @@ ORGANIZE_PROMPT = (
     "once with the full list of operations, using absolute paths:\n"
     '{{"op": "mkdir", "path": ...}}, {{"op": "move", "src": ..., "dst": ...}} (also for renames), '
     '{{"op": "remove", "path": ...}} (goes to a trash the user can restore).\n'
+    "A move's dst is the item's full new path, not just the folder. Example for {folder}\\a.pdf:\n"
+    '{{"op": "mkdir", "path": "{folder}\\\\PDFs"}}, '
+    '{{"op": "move", "src": "{folder}\\\\a.pdf", "dst": "{folder}\\\\PDFs\\\\a.pdf"}}\n'
     "Nothing runs until the user approves. If propose_plan reports errors, fix them and call it again. "
     "Finish with a short summary of the plan.")
 
@@ -287,6 +290,7 @@ def run_organize(job, ctx):
     proposed = []
 
     def propose_plan(operations):
+        operations = plans.expand_folder_destinations(operations)
         errors = plans.validate_plan(operations, ctx.policy, root=folder)
         if errors:
             proposed[:] = []  # an earlier plan must not survive under a summary of this one

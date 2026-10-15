@@ -143,6 +143,15 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(os.listdir(self.policy.trash_dir), [])
 
     # R1: no operation may depend on another, except through mkdir parents.
+    def test_overlap_error_says_how_to_write_the_path(self):
+        # The stress test showed a 14B model repeating the same overlap for 8 attempts; the
+        # message must name the fix, not just the rule.
+        ops = [{"op": "move", "src": self.p("a.pdf"), "dst": self.p("x")},
+               {"op": "move", "src": self.p("b.tmp"), "dst": self.p("x")}]
+        error = plans.validate_plan(ops, self.policy)[0]
+        self.assertIn("full new path", error)
+        self.assertIn(r"<folder>\<file name>", error)
+
     def test_r1_overlapping_operations_are_rejected(self):
         touch(self.p("D", "f"), "f")
         touch(self.p("D", "g"), "g")

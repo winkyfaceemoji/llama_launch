@@ -60,6 +60,29 @@ def _path_problem(op, policy):
     return None
 
 
+def expand_folder_destinations(ops):
+    """Rewrite moves whose dst names a folder (made earlier in the plan, or existing) to folder\\<name>.
+
+    Small models write "move a.pdf into PDFs" as dst=...\\PDFs, which validation must refuse
+    (it would overlap the mkdir, or land on an existing folder). The saved plan, which the user
+    approves, gets the explicit file path instead.
+    """
+    if not isinstance(ops, list):
+        return ops
+    made, out = set(), []
+    for op in ops:
+        if isinstance(op, dict) and op.get("op") == "mkdir" and isinstance(op.get("path"), str):
+            made.add(_key(op["path"].rstrip("\\/")))
+        if (isinstance(op, dict) and op.get("op") == "move"
+                and isinstance(op.get("src"), str) and isinstance(op.get("dst"), str)):
+            dst = op["dst"].rstrip("\\/")
+            src = op["src"].rstrip("\\/")
+            if dst and _key(dst) != _key(src) and (_key(dst) in made or os.path.isdir(dst)):
+                op = {**op, "dst": os.path.join(dst, os.path.basename(src))}
+        out.append(op)
+    return out
+
+
 def validate_plan(ops, policy, root=None):
     # root: the job's folder; every path must be strictly inside it.
     if not isinstance(ops, list) or not ops:
@@ -94,7 +117,9 @@ def validate_plan(ops, policy, root=None):
                     continue
                 parent_ok = was_mkdir and p != q and _within(p, q) and (op["op"] == "mkdir" or k == "dst")
                 if not parent_ok:
-                    overlap = f"{i}: overlaps operation {j} ({op[k]}); each operation must touch its own paths"
+                    overlap = (f"{i}: overlaps operation {j} ({op[k]}); each operation must touch its own paths. "
+                               r"To put a file in a folder, give dst as its full new path, <folder>\<file name>; "
+                               "never move or remove the same path twice")
                     break
             if overlap:
                 break

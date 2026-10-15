@@ -233,6 +233,20 @@ class JobKindTests(unittest.TestCase):
         runner.run_job(job, self.ctx(chat))
         return job["id"]
 
+    def test_organize_expands_a_folder_destination_to_the_file_path(self):
+        # Small models write "move a.pdf into PDFs" as dst=...\PDFs; the saved plan must say ...\PDFs\a.pdf.
+        pdfs = os.path.join(self.dl, "PDFs")
+        job_id = self.organize([{"op": "mkdir", "path": pdfs},
+                                {"op": "move", "src": os.path.join(self.dl, "a.pdf"), "dst": pdfs}])
+        self.assertEqual(self.store.get(job_id)["state"], "awaiting_approval")
+        self.assertEqual(self.store.read_json(job_id, "plan.json")[1]["dst"], os.path.join(pdfs, "a.pdf"))
+
+    def test_organize_expands_an_existing_folder_destination(self):
+        old = os.path.join(self.dl, "Old")
+        os.makedirs(old)
+        job_id = self.organize([{"op": "move", "src": os.path.join(self.dl, "a.pdf"), "dst": old + "\\"}])
+        self.assertEqual(self.store.read_json(job_id, "plan.json")[0]["dst"], os.path.join(old, "a.pdf"))
+
     def test_organize_waits_for_approval_with_review(self):
         job_id = self.organize([{"op": "remove", "path": os.path.join(self.dl, "a.pdf")}])
         self.assertEqual(self.store.get(job_id)["state"], "awaiting_approval")
