@@ -604,7 +604,8 @@ class UpdateRunner:
             # and the last few lines, which say why a server that never got healthy failed.
             try:
                 for line in proc.stdout:
-                    if not n_ctx and re.search(r"\bn_ctx\s*=", line):
+                    # b9776 logs "n_ctx = N"; b11636 only "n_ctx_slot = N" at its default verbosity.
+                    if not n_ctx and re.search(r"\bn_ctx(_slot)?\s*=", line):
                         n_ctx.append(line.strip())
                     last[:] = (last + [line.rstrip()])[-5:]
             except Exception:

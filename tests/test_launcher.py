@@ -333,6 +333,15 @@ class UpdateRunnerTests(unittest.TestCase):
         self.assertIn(self.KILL, self.calls)
         self.assertIn("✓ version — 11636", self.reported)
 
+    def test_context_line_of_newer_builds_counts(self):
+        # b11636 hides "new slot, n_ctx = ..." (trace level); its info line says n_ctx_slot.
+        line = "0.00.512.004 I srv  load_model: initializing, n_slots = 4, n_ctx_slot = 32768, kv_unified = 'true'"
+        self.server_log = [line + "\n"]
+        wait, probe = self.patched()
+        with wait, probe:
+            results = self.runner.build_check(11636, "C:\\m\\a.gguf", None, self.key_file)
+        self.assertEqual(results[-1], ("context (--fit)", True, line))
+
     def test_wrong_version_fails(self):
         self.versions = [9776]
         results = self.runner.build_check(11636, "", None, self.key_file)
