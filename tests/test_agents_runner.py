@@ -285,6 +285,18 @@ class JobKindTests(unittest.TestCase):
         self.assertEqual(self.store.read_json(job["id"], "steps.json"), steps[:2])
         self.assertEqual(self.store.get(job["id"])["state"], "done")
 
+    def test_web_jobs_get_todays_date_and_organize_does_not(self):
+        # Agent jobs bypass the proxy's date line; R1 on 2026-10-15 dated a release "October 15, 2023".
+        with mock.patch.object(runner, "_today", return_value="Thursday, October 15, 2026"):
+            for kind, args in (("research", {"topic": "t"}), ("plan", {"goal": "g"})):
+                _, chat = self.read_attempt(kind, args, call("noop", {}))
+                self.assertTrue(chat.seen[0][0][0]["content"].startswith(
+                    "Current date: Thursday, October 15, 2026\n\n"), kind)
+            job = self.start("organize", {"folder": self.dl, "goal": "tidy"})
+            chat = Script(final("nothing to do"))
+            runner.run_job(job, self.ctx(chat))
+            self.assertNotIn("Current date", chat.seen[0][0][0]["content"])
+
     def test_plan_citing_unread_pages_is_sent_back_to_read_them(self):
         job = self.start("plan", {"goal": "g"})
         chat = Script(call("web_search", {"query": "q"}), final("1. Use https://x.test/a"),

@@ -4,6 +4,7 @@ import os
 import re
 import threading
 import time
+from datetime import datetime
 from urllib.parse import urlsplit, urlunsplit
 
 from . import plans
@@ -281,6 +282,16 @@ REVIEW_PROMPT = (
     "removes and nothing else is wrong, say in one line that the plan looks right.")
 
 
+def _today():
+    return datetime.now().strftime("%A, %B %d, %Y")
+
+
+def _dated(prompt):
+    """Web jobs call llama-server directly, so they miss the proxy's date line and guess the year of dated pages.
+    Date only, as in the proxy (ADR 0004)."""
+    return f"Current date: {_today()}\n\n{prompt}"
+
+
 def _steps(job, ctx):
     return lambda text: ctx.store.append_step(job["id"], text)
 
@@ -324,7 +335,7 @@ def _source_check(job, ctx, must_read):
 def run_research(job, ctx):
     on_fetch, check, finish = _source_check(job, ctx, must_read=True)
     tools = web_tools(ctx.mcp_call, on_fetch) + sandbox_tools(ctx.policy)
-    text, stop = run_agent(ctx.chat, RESEARCH_PROMPT, job["args"]["topic"], tools, on_step=_steps(job, ctx),
+    text, stop = run_agent(ctx.chat, _dated(RESEARCH_PROMPT), job["args"]["topic"], tools, on_step=_steps(job, ctx),
                            check=check)
     text, note = finish(text, stop)
     ctx.store.write_text(job["id"], "result.md", text)
@@ -346,7 +357,7 @@ def run_plan(job, ctx):
     steps_param = {"steps": {"type": "array", "items": {"type": "object"}}}
     tools = web_tools(ctx.mcp_call, on_fetch) + sandbox_tools(ctx.policy) + [
         tool("propose_steps", "Save follow-up jobs for the user to queue.", steps_param, ["steps"], propose_steps)]
-    text, stop = run_agent(ctx.chat, PLAN_PROMPT, job["args"]["goal"], tools, on_step=_steps(job, ctx),
+    text, stop = run_agent(ctx.chat, _dated(PLAN_PROMPT), job["args"]["goal"], tools, on_step=_steps(job, ctx),
                            check=check)
     text, note = finish(text, stop)
     ctx.store.write_text(job["id"], "result.md", text)
