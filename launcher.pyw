@@ -279,12 +279,13 @@ def remove_stale_agents_entry(config):
     return config.get("mcpServers", {}).pop("agents", None) is not None
 
 
-def health_status(exit_codes, health):
+def health_status(exit_codes, health, shown=()):
     # exit_codes: {process name: return code, or None while running}.
     # health: "ok", "loading" or "offline", from llama-server's /health.
+    # shown: optional processes whose exit was already shown once; they no longer hide llama's status.
     # Returns (status text, level) where level is ok / warn / error / idle.
     for name, code in exit_codes.items():
-        if code is not None:
+        if code is not None and name not in shown:
             return f"● {name} exited (code {code})", "error"
     if health == "ok":
         return "● online", "ok"
@@ -1227,8 +1228,8 @@ class CommandLauncherGUI:
 
     def _exit_running_state(self):
         # Kill both processes, then restore the config view.
+        self._stop_health_poll()  # first, so the kills below aren't reported as an agents crash
         self._kill_all()
-        self._stop_health_poll()
         self._stop_elapsed()
         self.master.resizable(False, False)
         self.master.grid_rowconfigure(6, weight=0)
@@ -1385,6 +1386,7 @@ class CommandLauncherGUI:
         self._polling = True
         def poll_loop():
             browser_opened = False
+            shown = set()  # the agents server is optional: its crash shows for one poll, then llama's status returns
             colors = {"ok": SUCCESS, "warn": "#f7c948", "error": DANGER, "idle": TEXT_MUT}
             while self._polling:
                 try:
@@ -1400,7 +1402,12 @@ class CommandLauncherGUI:
                 procs = {"llama-server": self._llama_proc, "UVX proxy": self._uvx_proc,
                          "prompt proxy": self._proxy_proc, "agents server": self._agents_proc}
                 codes = {n: p.poll() for n, p in procs.items() if p is not None}
-                text, level = health_status(codes, health)
+                text, level = health_status(codes, health, shown)
+                agents_code = codes.get("agents server")
+                if agents_code is not None and "agents server" not in shown and self._polling:
+                    shown.add("agents server")
+                    note = f"[agents] exited (code {agents_code}); agent jobs and the Jobs panel are off until the next launch"
+                    self.master.after(0, lambda n=note: self._append_log(self.uvx_log, n))
                 if level == "ok" and not browser_opened and self._open_browser:
                     browser_opened = True
                     self.master.after(0, lambda: webbrowser.open("http://127.0.0.1:8080/"))
@@ -1559,7 +1566,7 @@ class CommandLauncherGUI:
 
     def _start_agents_server(self):
         # Optional (ADR 0007): any failure is logged and the launch carries on.
-        # A crash after start shows in the status bar as "agents server exited".
+        # A crash after start shows once in the status bar as "agents server exited", then in the log.
         if self._agents_error:
             self._append_log(self.uvx_log, f"[agents] not started: {self._agents_error}")
             return

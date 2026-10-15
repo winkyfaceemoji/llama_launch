@@ -84,6 +84,16 @@ class HealthStatusTests(unittest.TestCase):
     def test_offline_when_unreachable(self):
         self.assertEqual(launcher.health_status(self.RUNNING, "offline"), ("● offline", "idle"))
 
+    def test_an_exit_already_shown_gives_way_to_llama_status(self):
+        # The agents server is optional: its crash is shown once, then llama's status comes back.
+        codes = dict(self.RUNNING, **{"agents server": 1})
+        self.assertEqual(launcher.health_status(codes, "ok", shown={"agents server"}), ("● online", "ok"))
+
+    def test_a_shown_exit_never_hides_another_crash(self):
+        codes = dict(self.RUNNING, **{"agents server": 1, "UVX proxy": 2})
+        self.assertEqual(launcher.health_status(codes, "ok", shown={"agents server"}),
+                         ("● UVX proxy exited (code 2)", "error"))
+
 
 class PortOwnershipTests(unittest.TestCase):
     NETSTAT = (
