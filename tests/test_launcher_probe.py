@@ -116,6 +116,12 @@ class LoadingServerTests(FakeServerTest):
         self.assertFalse(launcher.wait_healthy(self.base, 2))
         self.assertLess(time.monotonic() - start, 4)
 
+    def test_wait_healthy_stops_when_the_server_exits(self):
+        # A build that crashes on start must not make the check sit out the whole timeout.
+        start = time.monotonic()
+        self.assertFalse(launcher.wait_healthy(self.base, 30, alive=lambda: False))
+        self.assertLess(time.monotonic() - start, 4)
+
 
 class NoServerTests(unittest.TestCase):
     def test_connection_error_fails_every_check(self):

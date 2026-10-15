@@ -236,6 +236,9 @@ class _FakeProc:
     def __init__(self, lines):
         self.stdout = iter(lines)
 
+    def poll(self):
+        return None  # still running
+
 
 class UpdateRunnerTests(unittest.TestCase):
     # Fake run/popen: no WinGet, no GPU, no ports.
@@ -318,7 +321,7 @@ class UpdateRunnerTests(unittest.TestCase):
                          + [("context (--fit)", True, "llama_context: n_ctx         = 32768")])
         self.assertIn("--port 18081", self.popened[0])
         self.assertNotIn("--port 8081", self.popened[0])
-        w.assert_called_once_with("http://127.0.0.1:18081", 300)
+        w.assert_called_once_with("http://127.0.0.1:18081", 300, alive=mock.ANY)
         p.assert_called_once_with("http://127.0.0.1:18081", "secret-key")
         self.assertIn(self.KILL, self.calls)
         self.assertIn("✓ version — 11636", self.reported)
@@ -333,7 +336,7 @@ class UpdateRunnerTests(unittest.TestCase):
         with wait, probe as p:
             results = self.runner.build_check(11636, "C:\\m\\a.gguf", None, self.key_file)
         p.assert_not_called()
-        self.assertEqual(results[1], ("health", False, "not ok within 300 s"))
+        self.assertEqual(results[1], ("health", False, "not ok (server exited or 300 s passed)"))
         self.assertEqual(results[2], ("chat with key", False, "server never became healthy"))
         self.assertIn(self.KILL, self.calls)
 
@@ -393,6 +396,8 @@ class UpdateRunnerTests(unittest.TestCase):
             result = self.runner.update(9776, 11636, "C:\\m\\a.gguf", None, self.key_file)
         self.assertEqual(result, (False, "Build check failed: build check (boom). Rolled back to b9776."))
         self.assertIn(self.KILL, self.calls)
+        # The dialog's log must show the error too, not only the status line.
+        self.assertIn("✗ build check — boom", self.reported)
 
     def test_rollback_confirms_version(self):
         self.versions = [11636]

@@ -503,10 +503,11 @@ def probe_server(base, key, origin="http://evil.example", timeout=10):
     return results
 
 
-def wait_healthy(base, timeout):
-    # Polls /health once a second until {"status": "ok"}; False at timeout.
+def wait_healthy(base, timeout, alive=lambda: True):
+    # Polls /health once a second until {"status": "ok"}; False at timeout, or as
+    # soon as alive() says the server process has exited.
     deadline = time.monotonic() + timeout
-    while True:
+    while alive():
         try:
             status, body = _http(base + "/health", 2)
             if status == 200 and json.loads(body).get("status") == "ok":
@@ -516,6 +517,7 @@ def wait_healthy(base, timeout):
         if time.monotonic() >= deadline:
             return False
         time.sleep(1)
+    return False
 
 
 # probe_server's check names, failed together when the server never got healthy.
@@ -592,25 +594,30 @@ class UpdateRunner:
         base = f"http://127.0.0.1:{_CHECK_PORT}"
         proc = self._popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                            text=True, encoding="utf-8", errors="replace")
-        n_ctx = []
+        n_ctx, last = [], []
 
         def reader():
-            # Keeps draining the pipe (see the launcher rule) and keeps the context line.
+            # Keeps draining the pipe (see the launcher rule), keeps the context line
+            # and the last few lines, which say why a server that never got healthy failed.
             try:
                 for line in proc.stdout:
                     if not n_ctx and re.search(r"\bn_ctx\s*=", line):
                         n_ctx.append(line.strip())
+                    last[:] = (last + [line.rstrip()])[-5:]
             except Exception:
                 pass
         thread = threading.Thread(target=reader, daemon=True)
         thread.start()
         try:
-            healthy = wait_healthy(base, 300)
-            add("health", healthy, "ok" if healthy else "not ok within 300 s")
+            healthy = wait_healthy(base, 300, alive=lambda: proc.poll() is None)
+            add("health", healthy, "ok" if healthy else "not ok (server exited or 300 s passed)")
             if healthy:
                 for result in probe_server(base, key):
                     add(*result)
             else:
+                thread.join(2)
+                for line in last:
+                    self._report(f"  llama-server: {line}")
                 for name in _PROBE_CHECKS:
                     add(name, False, "server never became healthy")
         finally:
@@ -639,6 +646,7 @@ class UpdateRunner:
             results = self.build_check(expected, model_path, mmproj, key_file)
         except Exception as e:
             results = [("build check", False, str(e) or type(e).__name__)]
+            self._report(f"{_MARKS[False]} build check — {results[0][2]}")
         return check_verdict(results)
 
     def rollback_and_check(self, build, model_path, mmproj, key_file):
