@@ -1,10 +1,15 @@
 """Agent loop, the three job kinds, and plan approval. Standard library only."""
 import json
 import os
+import threading
 import time
 from urllib.parse import urlsplit
 
 from . import plans
+
+# Held while plan files move (apply, restore) and while the trash is emptied, so Empty trash
+# can never delete files an apply or restore is moving, wherever that was started.
+FILE_MOVES = threading.Lock()
 
 MAX_CALLS = 40
 MAX_SECONDS = 20 * 60
@@ -325,10 +330,11 @@ def approve(job_id, ctx):
         ctx.store.update(job_id, state="awaiting_approval", note="files changed since the plan was made")
         return "Not applied; the plan no longer matches the files:\n" + "\n".join(errors)
     try:
-        # The log is saved after every operation, so a crash still leaves something Restore can use.
-        log, error = plans.apply_plan(ops, job_id, ctx.policy,
-                                      on_step=lambda done: ctx.store.write_json(job_id, "applied.json", done))
-        ctx.store.write_json(job_id, "applied.json", log)
+        with FILE_MOVES:
+            # The log is saved after every operation, so a crash still leaves something Restore can use.
+            log, error = plans.apply_plan(ops, job_id, ctx.policy,
+                                          on_step=lambda done: ctx.store.write_json(job_id, "applied.json", done))
+            ctx.store.write_json(job_id, "applied.json", log)
     except Exception as e:
         ctx.store.update(job_id, state="failed", note=f"apply failed: {type(e).__name__}: {e}")
         return f"Apply failed: {type(e).__name__}: {e}. Restore undoes the completed steps."
@@ -355,7 +361,8 @@ def undo(job_id, ctx):
     except (KeyError, ValueError) as e:
         return f"Not restored: {e}"
     try:
-        skipped = plans.restore(ctx.store.read_json(job_id, "applied.json"))
+        with FILE_MOVES:
+            skipped = plans.restore(ctx.store.read_json(job_id, "applied.json"))
     except Exception as e:
         ctx.store.update(job_id, state="failed", note=f"restore failed: {type(e).__name__}: {e}; try Restore again")
         return f"Restore failed: {type(e).__name__}: {e}. You can try Restore again."

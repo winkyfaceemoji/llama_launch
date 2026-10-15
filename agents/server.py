@@ -5,7 +5,7 @@
 """Agents MCP server (ADR 0007). The launcher starts it with `uv run --script agents/server.py`.
 
 Serves MCP at http://127.0.0.1:8002/mcp with DNS-rebinding protection, plus key-checked
-approval routes for the launcher's Jobs pane. Never run a second copy while the launcher is
+routes for the jobs panel in the Web UI (job list, approvals, Empty trash). Never run a second copy while the launcher is
 running: starting up cancels unfinished jobs, including ones the live server is applying.
 """
 import argparse
@@ -19,7 +19,7 @@ from mcp.server.mcpserver import MCPServer  # noqa: E402
 from mcp.server.transport_security import TransportSecuritySettings  # noqa: E402
 from starlette.responses import JSONResponse  # noqa: E402
 
-from agents import jobs, llm, paths, runner  # noqa: E402
+from agents import jobs, llm, panel_api, paths, runner  # noqa: E402
 
 PORT = llm.AGENTS_PORT  # --port replaces it; the approval routes check Host against it
 
@@ -38,13 +38,13 @@ MAX_FILE_CHARS = 8000  # per file in job_result; keeps big plans out of the chat
 server = MCPServer("agents", instructions=(
     "Background jobs on the user's PC. Tools return a job ID at once; check progress with job_status "
     "and read output with job_result. organize only proposes a plan; the user reviews and approves it "
-    "in the launcher's Jobs pane, never in chat."))
+    "in the jobs panel in the Web UI, never in chat."))
 
 
 def _start(kind, args):
     job = store.create(kind, args)
     worker.submit(job["id"])
-    return f"Started {kind} job {job['id']}. Check it with job_status; the user can also watch the launcher's Jobs pane."
+    return f"Started {kind} job {job['id']}. Check it with job_status; the user can also watch the jobs panel in the Web UI."
 
 
 @server.tool()
@@ -149,6 +149,21 @@ async def job_action(request):
         return JSONResponse({"ok": False, "message": "Unknown action."}, status_code=404)
     message = await anyio.to_thread.run_sync(fn, request.path_params["job_id"])
     return JSONResponse({"ok": True, "message": message})
+
+
+@server.custom_route("/jobs", methods=["GET"])
+async def jobs_list(request):
+    if not llm.check_request(request.headers, PORT, _key()):
+        return JSONResponse({"ok": False, "message": "Forbidden."}, status_code=403)
+    data = await anyio.to_thread.run_sync(panel_api.jobs_payload, store)
+    return JSONResponse({"ok": True, "jobs": data})
+
+
+@server.custom_route("/trash/empty", methods=["POST"])
+async def trash_empty(request):
+    if not llm.check_request(request.headers, PORT, _key()):
+        return JSONResponse({"ok": False, "message": "Forbidden."}, status_code=403)
+    return JSONResponse(await anyio.to_thread.run_sync(panel_api.empty_trash, ctx))
 
 
 def main():
