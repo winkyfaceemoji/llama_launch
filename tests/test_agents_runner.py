@@ -212,11 +212,69 @@ class JobKindTests(unittest.TestCase):
 
     def test_research_writes_report(self):
         job = self.start("research", {"topic": "llama"})
-        chat = Script(call("web_search", {"query": "llama"}), final("# Report\nSources: x"))
+        chat = Script(call("web_search", {"query": "llama"}), call("fetch_url", {"url": "https://x.test/a"}),
+                      final("# Report\nSources: https://x.test/a"))
         runner.run_job(job, self.ctx(chat))
-        self.assertEqual(self.store.get(job["id"])["state"], "done")
-        self.assertIn("# Report", self.store.read_text(job["id"], "result.md"))
+        got = self.store.get(job["id"])
+        self.assertEqual((got["state"], got["note"]), ("done", ""))
+        self.assertEqual(self.store.read_text(job["id"], "result.md"), "# Report\nSources: https://x.test/a")
         self.assertIn("ddg-search/search", chat.seen[1][0][-1]["content"])
+
+    def test_research_from_snippets_only_is_sent_back_to_read_its_sources(self):
+        # Job 20261015-165707-2a6e: one search, then a report citing pages it never fetched.
+        job = self.start("research", {"topic": "latest llama.cpp release"})
+        chat = Script(call("web_search", {"query": "q"}),
+                      final("v0.7.0 ([releases](https://github.com/ggml-org/llama.cpp/releases))"),
+                      call("fetch_url", {"url": "https://github.com/ggml-org/llama.cpp/releases"}),
+                      final("b11636 ([releases](https://github.com/ggml-org/llama.cpp/releases))"))
+        runner.run_job(job, self.ctx(chat))
+        nudge = chat.seen[2][0][-1]
+        self.assertEqual(nudge["role"], "user")
+        self.assertIn("https://github.com/ggml-org/llama.cpp/releases", nudge["content"])
+        self.assertIn("fetch_url", nudge["content"])
+        got = self.store.get(job["id"])
+        self.assertEqual((got["state"], got["note"]), ("done", ""))
+        self.assertEqual(self.store.read_text(job["id"], "result.md"),
+                         "b11636 ([releases](https://github.com/ggml-org/llama.cpp/releases))")
+
+    def test_research_that_reads_nothing_is_sent_back_even_without_urls(self):
+        job = self.start("research", {"topic": "t"})
+        chat = Script(call("web_search", {"query": "q"}), final("# Report"),
+                      call("fetch_url", {"url": "https://x.test/a"}), final("# Report\nhttps://x.test/a"))
+        runner.run_job(job, self.ctx(chat))
+        self.assertIn("fetch_url", chat.seen[2][0][-1]["content"])
+        self.assertEqual(self.store.get(job["id"])["note"], "")
+
+    def test_research_that_keeps_citing_unread_pages_is_flagged(self):
+        job = self.start("research", {"topic": "t"})
+        report = "# Report\nSee https://x.test/a and https://x.test/b."
+        chat = Script(call("fetch_url", {"url": "https://x.test/a"}), *[final(report)] * 3)
+        runner.run_job(job, self.ctx(chat))
+        got = self.store.get(job["id"])
+        self.assertEqual(got["state"], "done")
+        self.assertIn("https://x.test/b", got["note"])
+        self.assertNotIn("https://x.test/a", got["note"])
+        result = self.store.read_text(job["id"], "result.md")
+        self.assertTrue(result.startswith("> "), result)  # warning first, report kept below it
+        self.assertIn("https://x.test/b", result.splitlines()[0])
+        self.assertTrue(result.endswith(report))
+
+    def test_research_citation_matching_ignores_punctuation_slash_and_fragment(self):
+        job = self.start("research", {"topic": "t"})
+        chat = Script(call("fetch_url", {"url": "HTTPS://X.test/a/"}),
+                      final("(https://x.test/a), <https://x.test/a#notes>, https://x.test/a."))
+        runner.run_job(job, self.ctx(chat))
+        self.assertEqual(self.store.get(job["id"])["note"], "")
+
+    def test_research_failed_fetch_does_not_count_as_read(self):
+        job = self.start("research", {"topic": "t"})
+
+        def mcp_call(server, tool, args):
+            raise RuntimeError("fetch failed: 404")
+        ctx = runner.Context(self.policy, self.store, Script(
+            call("fetch_url", {"url": "https://x.test/a"}), *[final("https://x.test/a")] * 3), mcp_call)
+        runner.run_job(job, ctx)
+        self.assertIn("https://x.test/a", self.store.get(job["id"])["note"])
 
     def test_plan_saves_steps(self):
         job = self.start("plan", {"goal": "g"})
@@ -269,9 +327,10 @@ class JobKindTests(unittest.TestCase):
 
     def test_research_records_steps(self):
         job = self.start("research", {"topic": "llama"})
-        runner.run_job(job, self.ctx(Script(call("web_search", {"query": "llama"}), final("# Report"))))
+        runner.run_job(job, self.ctx(Script(call("web_search", {"query": "llama"}), final("# Report"),
+                                            call("fetch_url", {"url": "https://x.test/a"}), final("# Report"))))
         count, last = self.store.read_steps(job["id"])
-        self.assertEqual(last, ['Searched "llama"'])
+        self.assertEqual(last, ['Searched "llama"', "Sent back to read its sources", "Read x.test/a"])
 
     def test_organize_records_review_step(self):
         job_id = self.organize([{"op": "remove", "path": os.path.join(self.dl, "a.pdf")}])
@@ -386,7 +445,7 @@ class JobKindTests(unittest.TestCase):
 
     def read_attempt(self, kind, args, first_call):
         job = self.start(kind, args)
-        chat = Script(first_call, final("ok"))
+        chat = Script(first_call, *[final("ok")] * (1 + runner.MAX_CHECKS))  # research sends unsourced answers back
         runner.run_job(job, self.ctx(chat))
         return job, chat
 

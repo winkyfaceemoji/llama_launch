@@ -1,9 +1,10 @@
 """Agent loop, the three job kinds, and plan approval. Standard library only."""
 import json
 import os
+import re
 import threading
 import time
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from . import plans
 
@@ -17,6 +18,8 @@ MAX_RESULT_CHARS = 6000
 CONTEXT_CHARS = 40000
 ELIDED = "[older tool result removed to save space]"
 TRUNCATED = "\n[truncated]"
+MAX_CHECKS = 2  # times a final answer can be sent back before it is accepted as is
+URL = re.compile(r"""https?://[^\s<>()\[\]{}"'`|]+""", re.IGNORECASE)
 
 
 class Context:
@@ -102,11 +105,12 @@ def _parse_args(raw):
 
 
 def run_agent(chat, system, task, tools, max_calls=MAX_CALLS, max_seconds=MAX_SECONDS, clock=time.monotonic,
-              on_step=None):
+              on_step=None, check=None, max_checks=MAX_CHECKS):
+    """check(final_text) returns None to accept a final answer, or a message that sends it back (max_checks times)."""
     schemas = [t[1] for t in tools]
     fns = {t[0]: t[2] for t in tools}
     messages = [{"role": "system", "content": system}, {"role": "user", "content": task}]
-    start, used, turns, last_text = clock(), 0, 0, ""
+    start, used, turns, checks, last_text = clock(), 0, 0, 0, ""
 
     def finish(text, reason):
         text = text or last_text
@@ -128,7 +132,12 @@ def run_agent(chat, system, task, tools, max_calls=MAX_CALLS, max_seconds=MAX_SE
             last_text = text
         requested = reply.get("tool_calls") or []
         if not requested:
-            return finish(text, "")
+            objection = check(text) if check and checks < max_checks else None
+            if not objection:
+                return finish(text, "")
+            checks += 1
+            messages += [{"role": "assistant", "content": text}, {"role": "user", "content": objection}]
+            continue
         messages.append({"role": "assistant", "content": text, "tool_calls": requested})
         timed_out, limited = clock() - start >= max_seconds, False
         for c in requested:
@@ -214,18 +223,35 @@ def sandbox_tools(policy):
     return _file_tools(policy, True)
 
 
-def web_tools(mcp_call):
+def web_tools(mcp_call, on_fetch=None):
+    """on_fetch(url) runs after each page that was read without an error."""
+    def fetch_url(url):
+        text = mcp_call("fetch", "fetch", {"url": url, "max_length": MAX_RESULT_CHARS})
+        if on_fetch:
+            on_fetch(url)
+        return text
+
     s = {"type": "string"}
     return [tool("web_search", "Search the web.", {"query": s}, ["query"],
                  lambda query: mcp_call("ddg-search", "search", {"query": query, "max_results": 8})),
-            tool("fetch_url", "Read a web page as text.", {"url": s}, ["url"],
-                 lambda url: mcp_call("fetch", "fetch", {"url": url, "max_length": MAX_RESULT_CHARS}))]
+            tool("fetch_url", "Read a web page as text.", {"url": s}, ["url"], fetch_url)]
+
+
+def _same_page(url):
+    """A URL reduced so a citation matches the page that was fetched: no trailing punctuation, slash or fragment."""
+    parts = urlsplit(url.rstrip(".,;:!?*_"))
+    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), parts.query, ""))
+
+
+def cited_urls(text):
+    return list(dict.fromkeys(_same_page(u) for u in URL.findall(text or "")))
 
 
 RESEARCH_PROMPT = (
-    "You are a careful research assistant. Use web_search and fetch_url to find primary sources "
-    "(official docs, papers, first-party pages). Then write a Markdown report: a short summary first, "
-    "then the findings, then a Sources list. Cite a source URL for every claim, and say where sources disagree.")
+    "You are a careful research assistant. Use web_search to find primary sources (official docs, papers, "
+    "first-party pages), then read them with fetch_url. Search results are only leads: never report what a "
+    "snippet says. Then write a Markdown report: a short summary first, then the findings, then a Sources list. "
+    "Cite a URL you read with fetch_url for every claim, and say where sources disagree.")
 
 PLAN_PROMPT = (
     "You plan projects. Research as needed, then write a Markdown plan with numbered steps. You cannot look "
@@ -259,12 +285,39 @@ def _steps(job, ctx):
 
 
 def run_research(job, ctx):
-    tools = web_tools(ctx.mcp_call) + sandbox_tools(ctx.policy)
-    text, stop = run_agent(ctx.chat, RESEARCH_PROMPT, job["args"]["topic"], tools, on_step=_steps(job, ctx))
+    # A small model writes the report from search snippets and cites pages it never opened, so the report may
+    # cite only pages fetch_url read; enforced here, not just asked for in the prompt.
+    read = set()
+
+    def unread(text):
+        return [u for u in cited_urls(text) if u not in read]
+
+    def check(text):
+        missing = unread(text)
+        if read and not missing:
+            return None
+        ctx.store.append_step(job["id"], "Sent back to read its sources")
+        if missing:
+            return ("Your report cites pages you have not read: " + ", ".join(missing[:10]) + ". Search results "
+                    "are only leads. Read the pages you rely on with fetch_url, then rewrite the report citing only "
+                    "pages you read, and drop any claim they don't confirm.")
+        return ("You have not read any page yet. Search results are only leads: read the most relevant sources "
+                "with fetch_url, then write the report from what they say.")
+
+    tools = web_tools(ctx.mcp_call, on_fetch=lambda url: read.add(_same_page(url))) + sandbox_tools(ctx.policy)
+    text, stop = run_agent(ctx.chat, RESEARCH_PROMPT, job["args"]["topic"], tools, on_step=_steps(job, ctx),
+                           check=check)
     if stop:
         ctx.store.append_step(job["id"], f"Stopped: {stop}")
+    notes = [stop] if stop else []
+    missing = unread(text)
+    if missing:
+        notes.append("cites pages it never read: " + ", ".join(missing[:10]))
+        text = f"> Warning: this report cites pages the agent never read: {', '.join(missing)}\n\n{text}"
+    elif not read:
+        notes.append("read no sources")
     ctx.store.write_text(job["id"], "result.md", text)
-    ctx.store.update(job["id"], state="done", note=stop)
+    ctx.store.update(job["id"], state="done", note="; ".join(notes))
 
 
 def run_plan(job, ctx):
