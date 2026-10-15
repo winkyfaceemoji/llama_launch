@@ -11,3 +11,8 @@ paths: proxy.py
 - Only `POST /v1/chat/completions` is rewritten, and it *replaces* any system message the client sent. Agents must use `:8081` directly to keep their own system prompt.
 - **Forward the `Authorization` header untouched.** The Web UI's API key travels through this proxy to llama-server (ADR 0005); stripping it makes every chat return 401.
 - `config.json` is read once at startup; edits to `system_prompt` need a relaunch.
+- **llama-server serves the Web UI page (`/`, `/index.html`) gzip-only** (no `Accept-Encoding: gzip` gets 415). The proxy asks for gzip, unpacks it and inserts the `/agent-jobs/inject.js` tag. Non-200 or other-encoding replies pass through untouched.
+- **The injected page is sent `no-store` with `ETag`, `Last-Modified` and `Content-Length` dropped.** llama-server marks it `immutable` for a year, so a cached copy would never show the tag or a later edit.
+- **Panel files under `/agent-jobs` carry `Cross-Origin-Embedder-Policy: require-corp`** (plus CORP `same-origin`). The Web UI page sends COEP, so anything embedded in it must send it too or the browser blocks it. Only names in `PANEL_FILES` are served from `panel/`; everything else under `/agent-jobs` is 404.
+- **The panel API is an allow-list** (`api_target`): `GET jobs`, `POST jobs/<id>/<apply|reject|restore|queue>`, `POST trash/empty`. Anything else under `/agent-jobs/api/` is 404 and never reaches the agents server.
+- **The proxy never adds a key.** It forwards only the browser's own `Authorization` to the agents server, with `Host: 127.0.0.1:<agents port>`; the panel reads the key the Web UI stores. A down agents server gives 502 JSON.

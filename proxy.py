@@ -1,9 +1,46 @@
-import http.client, json, os, sys
+import gzip, http.client, json, os, re, sys
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit
 
 _SP = ""
 _UP = 8081
+_AGENTS = 8002  # agents server; argv[3] overrides
+
+PANEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel")
+PANEL_FILES = {
+    "/agent-jobs": ("index.html", "text/html; charset=utf-8"),
+    "/agent-jobs/": ("index.html", "text/html; charset=utf-8"),
+    "/agent-jobs/inject.js": ("inject.js", "text/javascript; charset=utf-8"),
+    "/agent-jobs/panel.js": ("panel.js", "text/javascript; charset=utf-8"),
+    "/agent-jobs/panel.css": ("panel.css", "text/css; charset=utf-8"),
+}
+INJECT_TAG = b'<script src="/agent-jobs/inject.js"></script>'
+WEBUI_PAGES = ("/", "/index.html")
+_JOB_ID = r"\d{8}-\d{6}-[0-9a-f]{4}"
+_API = [
+    ("GET", re.compile(r"/agent-jobs/api/jobs"), lambda m: "/jobs"),
+    ("POST", re.compile(rf"/agent-jobs/api/jobs/({_JOB_ID})/(apply|reject|restore|queue)"),
+     lambda m: f"/jobs/{m.group(1)}/{m.group(2)}"),
+    ("POST", re.compile(r"/agent-jobs/api/trash/empty"), lambda m: "/trash/empty"),
+]
+# The page llama-server serves is marked immutable for a year; ours changes, so never cache it.
+_DROP_PAGE_HEADERS = ("content-encoding", "content-length", "transfer-encoding", "etag", "cache-control", "last-modified")
+
+
+def inject_script(html):
+    """Insert the jobs-panel script tag before the last </body>, or append it."""
+    i = html.lower().rfind(b"</body>")
+    return html + INJECT_TAG if i < 0 else html[:i] + INJECT_TAG + html[i:]
+
+
+def api_target(method, path):
+    """The agents-server path for an allowed panel API call, else None."""
+    for m, pattern, target in _API:
+        match = pattern.fullmatch(path)
+        if method == m and match:
+            return target(match)
+    return None
 
 
 def _load():
@@ -15,7 +52,86 @@ def _load():
 
 
 class Handler(BaseHTTPRequestHandler):
+    def _send(self, status, body, headers):
+        self.send_response(status)
+        for k, v in headers:
+            self.send_header(k, v)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _webui_page(self):
+        # llama-server only serves this page gzipped (no gzip -> 415), so ask for gzip, unpack, add our tag.
+        hdrs = {k: v for k, v in self.headers.items() if k.lower() not in ("host", "accept-encoding")}
+        hdrs["Accept-Encoding"] = "gzip"
+        conn = http.client.HTTPConnection("127.0.0.1", _UP, timeout=30)
+        try:
+            conn.request("GET", self.path, headers=hdrs)
+            r = conn.getresponse()
+            body = r.read()
+            headers = r.getheaders()
+            status = r.status
+        finally:
+            conn.close()
+        enc = (dict((k.lower(), v) for k, v in headers).get("content-encoding") or "").lower()
+        if status != 200 or enc not in ("", "gzip"):
+            out = [(k, v) for k, v in headers if k.lower() not in ("content-length", "transfer-encoding")]
+            return self._send(status, body, out)  # error pages and odd encodings pass through untouched
+        if enc == "gzip":
+            body = gzip.decompress(body)
+        out = [(k, v) for k, v in headers if k.lower() not in _DROP_PAGE_HEADERS]
+        out.append(("Cache-Control", "no-store"))
+        self._send(200, inject_script(body), out)
+
+    def _panel_file(self, path):
+        name, ctype = PANEL_FILES[path]
+        try:
+            with open(os.path.join(PANEL_DIR, name), "rb") as f:
+                body = f.read()
+        except OSError:
+            return self._send(404, b"Not found", [("Content-Type", "text/plain")])
+        # The Web UI page sends COEP require-corp; an embedded page must match it or the browser blocks it.
+        self._send(200, body, [("Content-Type", ctype), ("Cache-Control", "no-store"),
+                               ("Cross-Origin-Embedder-Policy", "require-corp"),
+                               ("Cross-Origin-Opener-Policy", "same-origin"),
+                               ("Cross-Origin-Resource-Policy", "same-origin"),
+                               ("X-Content-Type-Options", "nosniff")])
+
+    def _panel_api(self, target):
+        # Pass the browser's Authorization through unchanged; never add a key here.
+        hdrs = {"Host": f"127.0.0.1:{_AGENTS}", "Content-Length": "0"}
+        if self.headers.get("Authorization"):
+            hdrs["Authorization"] = self.headers["Authorization"]
+        conn = http.client.HTTPConnection("127.0.0.1", _AGENTS, timeout=900)  # apply and restore can take minutes
+        try:
+            conn.request(self.command, target, body=b"" if self.command == "POST" else None, headers=hdrs)
+            r = conn.getresponse()
+            body, status, ctype = r.read(), r.status, r.getheader("Content-Type", "application/json")
+        except OSError:
+            body = json.dumps({"ok": False, "message": "Agents server isn't running."}).encode()
+            return self._send(502, body, [("Content-Type", "application/json")])
+        finally:
+            conn.close()
+        self._send(status, body, [("Content-Type", ctype), ("Cache-Control", "no-store")])
+
     def _relay(self):
+        path = urlsplit(self.path).path
+        if path.startswith("/agent-jobs"):
+            if path.startswith("/agent-jobs/api/"):
+                target = api_target(self.command, path)
+                if target is None:
+                    return self._send(404, b'{"ok": false, "message": "Not found."}', [("Content-Type", "application/json")])
+                return self._panel_api(target)
+            if self.command in ("GET", "HEAD") and path in PANEL_FILES:
+                return self._panel_file(path)
+            return self._send(404, b"Not found", [("Content-Type", "text/plain")])
+        if self.command in ("GET", "HEAD") and path in WEBUI_PAGES:
+            try:
+                return self._webui_page()
+            except (OSError, ValueError, EOFError) as e:  # EOFError/ValueError: a bad gzip body
+                return self._send(502, str(e).encode(), [("Content-Type", "text/plain")])
+
         cl = self.headers.get("Content-Length")
         te = self.headers.get("Transfer-Encoding", "").lower()
         if cl is not None:
@@ -94,9 +210,10 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     listen = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
     _UP    = int(sys.argv[2]) if len(sys.argv) > 2 else 8081
+    _AGENTS = int(sys.argv[3]) if len(sys.argv) > 3 else 8002
 
     _SP = _load()
     print(f"system prompt: {'loaded' if _SP else 'none'}", flush=True)
-    print(f"proxy :{listen} -> :{_UP}", flush=True)
+    print(f"proxy :{listen} -> :{_UP} (agents :{_AGENTS})", flush=True)
 
     ThreadingHTTPServer(("127.0.0.1", listen), Handler).serve_forever()
