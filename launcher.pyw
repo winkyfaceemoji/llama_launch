@@ -534,8 +534,9 @@ class UpdateRunner:
 
     def _text(self, args, timeout, **kw):
         # (exit code, combined output); decoded so an odd byte can't raise.
+        # CREATE_NO_WINDOW: WinGet runs without a shell, so under pythonw it would flash a console.
         r = self._run(args, capture_output=True, text=True, encoding="utf-8",
-                      errors="replace", timeout=timeout, **kw)
+                      errors="replace", timeout=timeout, creationflags=subprocess.CREATE_NO_WINDOW, **kw)
         return r.returncode, (r.stdout or "") + (r.stderr or "")
 
     def _winget(self, action, build=None):
