@@ -21,6 +21,8 @@ ELIDED = "[older tool result removed to save space]"
 TRUNCATED = "\n[truncated]"
 MAX_CHECKS = 2  # times a final answer can be sent back before it is accepted as is
 URL = re.compile(r"""https?://[^\s<>()\[\]{}"'`|]+""", re.IGNORECASE)
+# Fenced blocks (an unclosed one runs to the end) and inline code: commands and config, not citations.
+CODE = re.compile(r"(```|~~~).*?(?:\1|\Z)|`[^`\n]*`", re.DOTALL)
 
 
 class Context:
@@ -245,7 +247,7 @@ def _same_page(url):
 
 
 def cited_urls(text):
-    return list(dict.fromkeys(_same_page(u) for u in URL.findall(text or "")))
+    return list(dict.fromkeys(_same_page(u) for u in URL.findall(CODE.sub(" ", text or ""))))
 
 
 RESEARCH_PROMPT = (

@@ -266,6 +266,20 @@ class JobKindTests(unittest.TestCase):
         runner.run_job(job, self.ctx(chat))
         self.assertEqual(self.store.get(job["id"])["note"], "")
 
+    def test_urls_in_code_are_not_citations(self):
+        # A plan run on 2026-10-15 was sent back twice over `git clone https://github.com/ggml-org/llama.cpp.git`.
+        text = ("Read [docs](https://x.test/a).\n```bash\ngit clone https://x.test/b.git\n```\n"
+                "Run `curl https://x.test/c` then see https://x.test/d.\n~~~\nhttps://x.test/e\n~~~\n")
+        self.assertEqual(runner.cited_urls(text), ["https://x.test/a", "https://x.test/d"])
+        self.assertEqual(runner.cited_urls("```\nhttps://x.test/a\n(unclosed fence)"), [])
+
+    def test_plan_with_a_command_url_is_not_sent_back(self):
+        job = self.start("plan", {"goal": "g"})
+        chat = Script(call("fetch_url", {"url": "https://x.test/a"}),
+                      final("1. See https://x.test/a\n```\ngit clone https://x.test/repo.git\n```"))
+        runner.run_job(job, self.ctx(chat))
+        self.assertEqual(self.store.get(job["id"])["note"], "")
+
     def test_research_failed_fetch_does_not_count_as_read(self):
         job = self.start("research", {"topic": "t"})
 
