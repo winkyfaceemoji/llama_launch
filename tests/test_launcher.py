@@ -131,5 +131,99 @@ class RemoveStaleAgentsEntryTests(unittest.TestCase):
         self.assertFalse(launcher.remove_stale_agents_entry({"mcpServers": {"fetch": {}}}))
 
 
+class ParseBuildTests(unittest.TestCase):
+    def test_real_shapes(self):
+        self.assertEqual(launcher.parse_build("b11636"), 11636)
+        self.assertEqual(launcher.parse_build("version: 9776 (ac4105d68)"), 9776)
+        self.assertEqual(launcher.parse_build("Version: b11636"), 11636)
+
+    def test_anything_else_is_none(self):
+        for text in ("b", "", "version: abc"):
+            self.assertIsNone(launcher.parse_build(text), text)
+
+
+class ParseWingetListTests(unittest.TestCase):
+    TABLE = ("Name      Id            Version Available\r\n"
+             "-----------------------------------------\r\n"
+             "llama.cpp ggml.llamacpp b9776   b11636\r\n")
+
+    def test_installed_and_available(self):
+        self.assertEqual(launcher.parse_winget_list(self.TABLE), (9776, 11636))
+
+    def test_available_empty_when_current(self):
+        table = ("Name      Id            Version\r\n"
+                 "-------------------------------\r\n"
+                 "llama.cpp ggml.llamacpp b11636\r\n")
+        self.assertEqual(launcher.parse_winget_list(table), (11636, None))
+
+    def test_no_package_is_none(self):
+        self.assertIsNone(launcher.parse_winget_list("No installed package found matching input criteria.\r\n"))
+
+    def test_row_with_extra_columns(self):
+        table = ("Name      Id            Version Available Source\r\n"
+                 "------------------------------------------------\r\n"
+                 "llama.cpp ggml.llamacpp b9776   b11636    winget\r\n")
+        self.assertEqual(launcher.parse_winget_list(table), (9776, 11636))
+
+    def test_current_build_with_source_column(self):
+        table = ("Name      Id            Version Source\r\n"
+                 "--------------------------------------\r\n"
+                 "llama.cpp ggml.llamacpp b11636  winget\r\n")
+        self.assertEqual(launcher.parse_winget_list(table), (11636, None))
+
+
+class ParseWingetShowTests(unittest.TestCase):
+    def test_real_output(self):
+        out = ("Found llama.cpp [ggml.llamacpp]\r\n"
+               "Version: b11636\r\n"
+               "Publisher: ggml\r\n"
+               "Publisher Url: https://github.com/ggml-org\r\n")
+        self.assertEqual(launcher.parse_winget_show(out), 11636)
+
+    def test_error_message_is_none(self):
+        self.assertIsNone(launcher.parse_winget_show("No package found matching input criteria.\r\n"))
+
+
+class WingetArgsTests(unittest.TestCase):
+    BASE = ["--id", "ggml.llamacpp", "--exact", "--source", "winget", "--disable-interactivity"]
+
+    def test_read_only_calls_accept_nothing(self):
+        for action in ("list", "show"):
+            self.assertEqual(launcher.winget_args(action), ["winget", action] + self.BASE)
+
+    def test_upgrade_is_silent_and_accepts_terms(self):
+        self.assertEqual(launcher.winget_args("upgrade"),
+                         ["winget", "upgrade"] + self.BASE
+                         + ["--silent", "--accept-package-agreements", "--accept-source-agreements"])
+
+    def test_install_pins_the_build(self):
+        self.assertEqual(launcher.winget_args("install", 9776),
+                         ["winget", "install"] + self.BASE
+                         + ["--version", "b9776", "--force",
+                            "--silent", "--accept-package-agreements", "--accept-source-agreements"])
+
+    def test_every_call_disables_interactivity(self):
+        for args in (launcher.winget_args("list"), launcher.winget_args("show"),
+                     launcher.winget_args("upgrade"), launcher.winget_args("install", 9776)):
+            self.assertIn("--disable-interactivity", args)
+
+
+class CheckVerdictTests(unittest.TestCase):
+    def test_all_pass(self):
+        results = [("version", True, "11636"), ("health", True, ""), ("chat with key", True, "hi")]
+        self.assertEqual(launcher.check_verdict(results), (True, "Build check passed."))
+
+    def test_second_check_fails(self):
+        results = [("version", True, "11636"), ("chat without key", False, "status 200"),
+                   ("tools without key", False, "status 200")]
+        self.assertEqual(launcher.check_verdict(results),
+                         (False, "Build check failed: chat without key (status 200)."))
+
+    def test_skipped_checks_are_listed(self):
+        results = [("version", True, "11636"), ("health", None, "no model"), ("context", None, "no model")]
+        self.assertEqual(launcher.check_verdict(results),
+                         (True, "Build check passed. Skipped: health, context."))
+
+
 if __name__ == "__main__":
     unittest.main()

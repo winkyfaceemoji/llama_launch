@@ -387,6 +387,70 @@ def preset_matches_model(preset, model_filename):
 
 
 # ============================================================
+# SECTION 3c — LLAMA.CPP UPDATES
+# ============================================================
+
+# llama.cpp's WinGet package (a portable Vulkan zip on PATH).
+WINGET_ID = "ggml.llamacpp"
+
+
+def parse_build(text):
+    # "b11636", "Version: b11636" or "version: 9776 (ac4105d68)" -> 11636 / 9776.
+    # Matches any line, since llama-server prints device lines before its version.
+    m = re.search(r"^\s*(?:b|version:\s*b?)(\d+)\b", text, re.IGNORECASE | re.MULTILINE)
+    return int(m.group(1)) if m else None
+
+
+def parse_winget_list(output):
+    # (installed, available) from `winget list`'s row for llama.cpp; available is
+    # None when the build is current. None when there's no row (an error message).
+    # Read by position after the Id, so a localized header doesn't matter.
+    for line in output.splitlines():
+        parts = line.split()
+        if WINGET_ID not in parts:
+            continue
+        rest = parts[parts.index(WINGET_ID) + 1:]
+        installed = parse_build(rest[0]) if rest else None
+        if installed is None:
+            return None
+        return installed, parse_build(rest[1]) if len(rest) > 1 else None
+    return None
+
+
+def parse_winget_show(output):
+    # Newest build from `winget show`'s "Version: bNNNN" line, or None.
+    for line in output.splitlines():
+        if line.strip().lower().startswith("version:"):
+            return parse_build(line)
+    return None
+
+
+def winget_args(action, build=None):
+    # Read-only calls (list, show) never accept terms; upgrade and install do,
+    # only after the user's click. --disable-interactivity makes a prompt fail
+    # instead of hanging.
+    args = ["winget", action, "--id", WINGET_ID, "--exact",
+            "--source", "winget", "--disable-interactivity"]
+    if action == "install":
+        args += ["--version", f"b{build}", "--force"]
+    if action in ("upgrade", "install"):
+        args += ["--silent", "--accept-package-agreements", "--accept-source-agreements"]
+    return args
+
+
+def check_verdict(results):
+    # results: ordered (check name, ok, detail); ok is None for a skipped check.
+    # Returns (passed, message) naming the first failure, or the skipped checks.
+    for name, ok, detail in results:
+        if ok is False:
+            return False, f"Build check failed: {name} ({detail})."
+    skipped = [name for name, ok, _ in results if ok is None]
+    if skipped:
+        return True, f"Build check passed. Skipped: {', '.join(skipped)}."
+    return True, "Build check passed."
+
+
+# ============================================================
 # SECTION 4 — THEME & SHARED UI HELPERS
 # ============================================================
 
