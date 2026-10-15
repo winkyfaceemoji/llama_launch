@@ -2,6 +2,7 @@
 import json
 import os
 import time
+from urllib.parse import urlsplit
 
 from . import plans
 
@@ -49,7 +50,49 @@ def _trim(messages):
             messages[i] = {**m, "content": ELIDED}
 
 
-def run_agent(chat, system, task, tools, max_calls=MAX_CALLS, max_seconds=MAX_SECONDS, clock=time.monotonic):
+def _name_of(path):
+    path = str(path or "").rstrip("\\/")
+    return os.path.basename(path) or path
+
+
+def step_text(name, args, result):
+    """One line for the jobs panel describing a finished tool call."""
+    args = args if isinstance(args, dict) else {}
+    result = str(result or "")
+    if name == "propose_plan":
+        if result.startswith("error:"):
+            lines = [l for l in result.splitlines()[1:] if l.strip()]
+            return "Plan rejected: " + (lines[0] if lines else result[len("error:"):].strip())
+        n = result.split("with ", 1)[-1].split(" ", 1)[0]
+        return f"Proposed plan: {n} changes"
+    if result.startswith("error:"):
+        return "Failed: " + result[len("error:"):].strip()
+    if name == "web_search":
+        return f'Searched "{args.get("query", "")}"'
+    if name == "fetch_url":
+        parts = urlsplit(str(args.get("url", "")))
+        return "Read " + (parts.netloc + parts.path)[:80]
+    if name == "list_dir":
+        return "Looked in " + _name_of(args.get("path"))
+    if name == "read_file":
+        return "Read " + _name_of(args.get("path"))
+    if name == "write_file":
+        return "Wrote " + _name_of(args.get("path"))
+    if name == "propose_steps":
+        return result[:1].upper() + result[1:]
+    return f"Used {name}"
+
+
+def _parse_args(raw):
+    try:
+        args = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        return {}
+    return args if isinstance(args, dict) else {}
+
+
+def run_agent(chat, system, task, tools, max_calls=MAX_CALLS, max_seconds=MAX_SECONDS, clock=time.monotonic,
+              on_step=None):
     schemas = [t[1] for t in tools]
     fns = {t[0]: t[2] for t in tools}
     messages = [{"role": "system", "content": system}, {"role": "user", "content": task}]
@@ -87,6 +130,11 @@ def run_agent(chat, system, task, tools, max_calls=MAX_CALLS, max_seconds=MAX_SE
                 fn = c.get("function") if isinstance(c, dict) else None
                 if isinstance(fn, dict) and isinstance(fn.get("name"), str):
                     result = _invoke(fns, fn["name"], fn.get("arguments"))
+                    if on_step:
+                        try:
+                            on_step(step_text(fn["name"], _parse_args(fn.get("arguments")), result))
+                        except Exception:
+                            pass  # progress lines are best-effort
                 else:
                     result = "error: malformed tool call"
             messages.append({"role": "tool", "tool_call_id": call_id, "content": result})
@@ -190,9 +238,15 @@ REVIEW_PROMPT = (
     "with its number and the reason. If everything looks right, say so in one line.")
 
 
+def _steps(job, ctx):
+    return lambda text: ctx.store.append_step(job["id"], text)
+
+
 def run_research(job, ctx):
     tools = web_tools(ctx.mcp_call) + sandbox_tools(ctx.policy)
-    text, stop = run_agent(ctx.chat, RESEARCH_PROMPT, job["args"]["topic"], tools)
+    text, stop = run_agent(ctx.chat, RESEARCH_PROMPT, job["args"]["topic"], tools, on_step=_steps(job, ctx))
+    if stop:
+        ctx.store.append_step(job["id"], f"Stopped: {stop}")
     ctx.store.write_text(job["id"], "result.md", text)
     ctx.store.update(job["id"], state="done", note=stop)
 
@@ -210,7 +264,9 @@ def run_plan(job, ctx):
     steps_param = {"steps": {"type": "array", "items": {"type": "object"}}}
     tools = web_tools(ctx.mcp_call) + sandbox_tools(ctx.policy) + [
         tool("propose_steps", "Save follow-up jobs for the user to queue.", steps_param, ["steps"], propose_steps)]
-    text, stop = run_agent(ctx.chat, PLAN_PROMPT, job["args"]["goal"], tools)
+    text, stop = run_agent(ctx.chat, PLAN_PROMPT, job["args"]["goal"], tools, on_step=_steps(job, ctx))
+    if stop:
+        ctx.store.append_step(job["id"], f"Stopped: {stop}")
     ctx.store.write_text(job["id"], "result.md", text)
     ctx.store.write_json(job["id"], "steps.json", saved)
     ctx.store.update(job["id"], state="done", note=stop)
@@ -232,7 +288,9 @@ def run_organize(job, ctx):
     # No write_file: the model must not copy listed-folder contents into the sandbox, which web-enabled jobs read.
     tools = [t for t in file_tools(ctx.policy) if t[0] != "write_file"] + [
         tool("propose_plan", "Propose the full list of file operations.", ops_param, ["operations"], propose_plan)]
-    text, stop = run_agent(ctx.chat, ORGANIZE_PROMPT.format(folder=folder), goal, tools)
+    text, stop = run_agent(ctx.chat, ORGANIZE_PROMPT.format(folder=folder), goal, tools, on_step=_steps(job, ctx))
+    if stop:
+        ctx.store.append_step(job["id"], f"Stopped: {stop}")
     ctx.store.write_text(job["id"], "result.md", text)
     if not proposed:
         ctx.store.update(job["id"], state="failed", note="no valid plan was proposed" + (f"; {stop}" if stop else ""))
@@ -240,6 +298,7 @@ def run_organize(job, ctx):
     ctx.store.write_json(job["id"], "plan.json", proposed)
     review = ctx.chat([{"role": "system", "content": REVIEW_PROMPT.format(goal=goal)},
                        {"role": "user", "content": json.dumps(proposed, indent=2)}], None)
+    ctx.store.append_step(job["id"], "Reviewed the plan")
     ctx.store.write_text(job["id"], "review.md", review.get("content") or "")
     ctx.store.update(job["id"], state="awaiting_approval", note=stop)
 

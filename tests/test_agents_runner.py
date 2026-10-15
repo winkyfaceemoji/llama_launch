@@ -156,6 +156,33 @@ class RunAgentTests(unittest.TestCase):
         self.assertIn("1 tool calls", stop)
         self.assertIn("the model gave no final answer", stop)
 
+    def test_step_text_per_tool(self):
+        st = runner.step_text
+        self.assertEqual(st("web_search", {"query": "llama.cpp"}, "results"), 'Searched "llama.cpp"')
+        self.assertEqual(st("fetch_url", {"url": "https://github.com/ggml-org/llama.cpp/releases?x=1"}, "page"),
+                         "Read github.com/ggml-org/llama.cpp/releases")
+        self.assertEqual(st("list_dir", {"path": "C:\\Users\\me\\Downloads\\"}, "a.pdf"), "Looked in Downloads")
+        self.assertEqual(st("read_file", {"path": "C:\\x\\notes.txt"}, "text"), "Read notes.txt")
+        self.assertEqual(st("write_file", {"path": "report.md", "content": "x"}, "wrote"), "Wrote report.md")
+        self.assertEqual(st("propose_plan", {"operations": []}, "plan saved with 4 operations"), "Proposed plan: 4 changes")
+        self.assertEqual(st("propose_plan", {}, "error: plan rejected:\n1: not allowed\n2: x"), "Plan rejected: 1: not allowed")
+        self.assertEqual(st("propose_steps", {}, "saved 3 follow-up jobs"), "Saved 3 follow-up jobs")
+        self.assertEqual(st("read_file", {"path": "x"}, "error: no read access to x"), "Failed: no read access to x")
+        self.assertEqual(st("mystery", {}, "ok"), "Used mystery")
+
+    def test_on_step_called_per_tool_call(self):
+        seen = []
+        chat = Script(call("echo", {"text": "hi"}), final("done"))
+        runner.run_agent(chat, "sys", "task", [self.echo_tool()], on_step=seen.append)
+        self.assertEqual(seen, ["Used echo"])
+
+    def test_on_step_errors_never_stop_the_job(self):
+        def boom(_):
+            raise OSError("disk full")
+        chat = Script(call("echo", {"text": "hi"}), final("done"))
+        text, _ = runner.run_agent(chat, "sys", "task", [self.echo_tool()], on_step=boom)
+        self.assertEqual(text, "done")
+
 
 class JobKindTests(unittest.TestCase):
     def setUp(self):
@@ -208,6 +235,24 @@ class JobKindTests(unittest.TestCase):
         self.assertEqual(self.store.get(job_id)["state"], "awaiting_approval")
         self.assertEqual(self.store.read_text(job_id, "review.md"), "looks fine")
         self.assertTrue(os.path.exists(os.path.join(self.dl, "a.pdf")))  # nothing changed yet
+
+    def test_research_records_steps(self):
+        job = self.start("research", {"topic": "llama"})
+        runner.run_job(job, self.ctx(Script(call("web_search", {"query": "llama"}), final("# Report"))))
+        count, last = self.store.read_steps(job["id"])
+        self.assertEqual(last, ['Searched "llama"'])
+
+    def test_organize_records_review_step(self):
+        job_id = self.organize([{"op": "remove", "path": os.path.join(self.dl, "a.pdf")}])
+        _, last = self.store.read_steps(job_id)
+        self.assertEqual(last[-2:], ["Proposed plan: 1 changes", "Reviewed the plan"])
+
+    def test_capped_job_records_stop(self):
+        job = self.start("research", {"topic": "t"})
+        replies = [call("web_search", {"query": "q"})] * 41 + [final("partial")]
+        runner.run_job(job, self.ctx(Script(*replies)))
+        _, last = self.store.read_steps(job["id"])
+        self.assertTrue(last[-1].startswith("Stopped: stopped after 40 tool calls"))
 
     def test_organize_without_valid_plan_fails(self):
         job = self.start("organize", {"folder": self.dl, "goal": "tidy"})

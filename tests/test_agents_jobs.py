@@ -101,6 +101,36 @@ class JobStoreTests(unittest.TestCase):
                               {"id": "20261014-000000-abcd", "state": "done"})
         self.assertIn(job["id"], [j["id"] for j in self.store.list()])
 
+    def test_append_and_read_steps(self):
+        job = self.store.create("research", {})
+        for i in range(7):
+            self.store.append_step(job["id"], f"step {i}")
+        count, last = self.store.read_steps(job["id"], last=5)
+        self.assertEqual(count, 7)
+        self.assertEqual(last, ["step 2", "step 3", "step 4", "step 5", "step 6"])
+
+    def test_append_step_strips_control_chars_and_caps(self):
+        job = self.store.create("research", {})
+        self.store.append_step(job["id"], "Read evil\n<b>page</b>\x07" + "x" * 300)
+        _, last = self.store.read_steps(job["id"])
+        self.assertNotIn("\n", last[0])
+        self.assertNotIn("\x07", last[0])
+        self.assertIn("<b>page</b>", last[0])  # kept as text; the panel shows it with textContent
+        self.assertLessEqual(len(last[0]), 200)
+
+    def test_append_step_never_raises(self):
+        self.store.append_step("not-an-id", "x")  # bad id: silently ignored
+        job = self.store.create("research", {})
+        os.makedirs(self.store.path(job["id"], "steps.jsonl"))  # a folder where the file should be
+        self.store.append_step(job["id"], "x")  # write fails: still no exception
+
+    def test_read_steps_skips_bad_lines_and_missing_file(self):
+        job = self.store.create("research", {})
+        self.assertEqual(self.store.read_steps(job["id"]), (0, []))
+        with open(self.store.path(job["id"], "steps.jsonl"), "w", encoding="utf-8") as f:
+            f.write('{"t": 1, "text": "ok"}\nnot json\n{"t": 2}\n')
+        self.assertEqual(self.store.read_steps(job["id"]), (1, ["ok"]))
+
 
 class WorkerTests(unittest.TestCase):
     def setUp(self):

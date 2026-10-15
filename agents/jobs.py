@@ -8,6 +8,8 @@ import threading
 import time
 
 _ID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}")
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]+")
+STEP_MAX = 200
 UNFINISHED = ("queued", "running")
 _TRIES, _DELAY = 40, 0.05
 
@@ -93,6 +95,31 @@ class JobStore:
 
     def has(self, job_id, name):
         return os.path.exists(self.path(job_id, name))
+
+    def append_step(self, job_id, text):
+        # Best-effort progress line for the jobs panel; a failed write never fails the job.
+        try:
+            clean = _CONTROL.sub(" ", str(text)).strip()[:STEP_MAX]
+            with open(self.path(job_id, "steps.jsonl"), "a", encoding="utf-8") as f:
+                f.write(json.dumps({"t": time.time(), "text": clean}) + "\n")
+        except (KeyError, OSError, ValueError):
+            pass
+
+    def read_steps(self, job_id, last=5):
+        # (number of steps, the last `last` step texts); unreadable lines are skipped.
+        try:
+            raw = _retry(lambda: _read_text(self.path(job_id, "steps.jsonl")))
+        except (KeyError, OSError):
+            return 0, []
+        texts = []
+        for line in raw.splitlines():
+            try:
+                item = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                texts.append(item["text"])
+        return len(texts), texts[-last:] if last else []
 
     def write_text(self, job_id, name, text):
         # Unique temp name per writer, so two threads never share one tmp file.
