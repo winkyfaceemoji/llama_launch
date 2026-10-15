@@ -103,12 +103,42 @@ class PanelApiTests(unittest.TestCase):
     def test_warns_when_a_plan_removes_files(self):
         warnings = self._awaiting(["c.txt"])["warnings"]
         self.assertEqual(len(warnings), 1)
-        self.assertIn("Removes 1 file", warnings[0])
+        self.assertIn("Removes 1 item", warnings[0]["text"])
+        self.assertEqual(warnings[0]["level"], "warn")
 
     def test_warns_louder_when_a_plan_removes_most_of_the_folder(self):
         warnings = self._awaiting(["a.pdf", "b.pdf", "c.txt"])["warnings"]
-        self.assertIn("Removes 3 files", warnings[0])
-        self.assertIn("more than half", warnings[1])
+        self.assertIn("Removes 3 items", warnings[0]["text"])
+        self.assertIn("more than half", warnings[1]["text"])
+        self.assertEqual(warnings[1]["level"], "danger")
+
+    def test_removing_a_junction_counts_the_link_not_its_target(self):
+        import subprocess
+        outside = os.path.join(self.tmp.name, "outside")
+        os.makedirs(outside)
+        for i in range(10):
+            open(os.path.join(outside, f"o{i}.txt"), "w").close()
+        open(os.path.join(self.dl, "keep.pdf"), "w").close()
+        link = os.path.join(self.dl, "linked")
+        subprocess.run(["cmd", "/c", "mklink", "/J", link, outside], check=True, capture_output=True)
+        warnings = panel_api.removal_warnings([{"op": "remove", "path": link}], self.dl)
+        self.assertIn("Removes 1 item", warnings[0]["text"])
+        os.rmdir(link)
+
+    def test_payload_uses_warnings_saved_at_proposal(self):
+        # The panel polls every 2 s; a big folder must not be re-walked each time.
+        job = self.store.create("organize", {"folder": self.dl, "goal": "g"})
+        self.store.write_json(job["id"], "plan.json", [{"op": "remove", "path": os.path.join(self.dl, "gone.pdf")}])
+        self.store.write_json(job["id"], "warnings.json", [{"level": "warn", "text": "saved"}])
+        self.store.update(job["id"], state="awaiting_approval")
+        with mock.patch.object(panel_api, "removal_warnings", side_effect=AssertionError("recomputed")):
+            self.assertEqual(panel_api.jobs_payload(self.store)[0]["warnings"], [{"level": "warn", "text": "saved"}])
+
+    def test_removing_an_empty_folder_counts_as_one_item(self):
+        os.makedirs(os.path.join(self.dl, "Empty"))
+        open(os.path.join(self.dl, "keep.pdf"), "w").close()
+        warnings = panel_api.removal_warnings([{"op": "remove", "path": os.path.join(self.dl, "Empty")}], self.dl)
+        self.assertIn("Removes 1 item", warnings[0]["text"])
 
     def test_payload_survives_a_corrupt_plan(self):
         job = self.store.create("organize", {"folder": self.dl, "goal": "g"})

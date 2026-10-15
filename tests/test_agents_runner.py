@@ -247,6 +247,20 @@ class JobKindTests(unittest.TestCase):
         job_id = self.organize([{"op": "move", "src": os.path.join(self.dl, "a.pdf"), "dst": old + "\\"}])
         self.assertEqual(self.store.read_json(job_id, "plan.json")[0]["dst"], os.path.join(old, "a.pdf"))
 
+    def test_organize_puts_mkdirs_first_when_the_model_writes_them_late(self):
+        pdfs = os.path.join(self.dl, "PDFs")
+        job_id = self.organize([{"op": "move", "src": os.path.join(self.dl, "a.pdf"), "dst": pdfs},
+                                {"op": "mkdir", "path": pdfs}])
+        self.assertEqual(self.store.get(job_id)["state"], "awaiting_approval")
+        plan = self.store.read_json(job_id, "plan.json")
+        self.assertEqual([o["op"] for o in plan], ["mkdir", "move"])
+        self.assertEqual(plan[1]["dst"], os.path.join(pdfs, "a.pdf"))
+
+    def test_organize_saves_removal_warnings_when_the_plan_is_proposed(self):
+        job_id = self.organize([{"op": "remove", "path": os.path.join(self.dl, "a.pdf")}])
+        warnings = self.store.read_json(job_id, "warnings.json")
+        self.assertIn("Removes 1 item", warnings[0]["text"])
+
     def test_organize_waits_for_approval_with_review(self):
         job_id = self.organize([{"op": "remove", "path": os.path.join(self.dl, "a.pdf")}])
         self.assertEqual(self.store.get(job_id)["state"], "awaiting_approval")

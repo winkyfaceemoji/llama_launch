@@ -313,6 +313,13 @@ def run_organize(job, ctx):
         ctx.store.update(job["id"], state="failed", note="no valid plan was proposed" + (f"; {stop}" if stop else ""))
         return
     ctx.store.write_json(job["id"], "plan.json", proposed)
+    from . import panel_api  # panel_api imports this module
+    try:
+        warnings = panel_api.removal_warnings(proposed, folder)
+    except OSError:
+        warnings = []
+    # Saved once: the panel polls every 2 s and must not re-walk a big folder each time.
+    ctx.store.write_json(job["id"], "warnings.json", warnings)
     review = ctx.chat([{"role": "system", "content": REVIEW_PROMPT.format(goal=goal)},
                        {"role": "user", "content": json.dumps(proposed, indent=2)}], None)
     ctx.store.append_step(job["id"], "Reviewed the plan")

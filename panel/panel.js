@@ -142,7 +142,7 @@
         planBoxes.set(job.id, box);
         c.append(box);
         // Fixed-rule warnings from the server: shown whatever the model's review says.
-        (Array.isArray(job.warnings) ? job.warnings : []).forEach((w) => c.append(el("div", "warning", w)));
+        (Array.isArray(job.warnings) ? job.warnings : []).forEach((w) => c.append(el("div", w.level === "danger" ? "warning danger" : "warning", w.text)));
         if (job.review) c.append(el("div", "review-text", "Review: " + job.review.trim()));
         a.append(button(`Approve ${plural(job.plan.length, "change", "changes")}`, `${job.id}:apply`, () => act(`jobs/${job.id}/apply`)));
       } else {

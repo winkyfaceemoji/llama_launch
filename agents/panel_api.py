@@ -17,27 +17,32 @@ def _title(job):
 
 
 def _count_files(path):
-    # Files at or under path, never following links or junctions.
-    if os.path.isfile(path):
+    # Files at or under path, never following links or junctions (a removed link is one item).
+    if os.path.isfile(path) or plans._is_link(path):
         return 1
     n = 0
     for d, dirs, files in os.walk(path):
-        dirs[:] = [x for x in dirs if not os.path.islink(os.path.join(d, x)) and not plans._is_link(os.path.join(d, x))]
+        dirs[:] = [x for x in dirs if not plans._is_link(os.path.join(d, x))]
         n += len(files)
     return n
 
 
 def removal_warnings(plan, folder):
-    """Fixed-rule warnings for a plan awaiting approval; the model's review is not enough on its own."""
+    """Fixed-rule warnings for an organise plan; the model's review is not enough on its own.
+
+    Returns [{"text", "level"}] with level "warn" or "danger" (more than half the folder's files).
+    """
     removes = [op["path"] for op in plan or [] if isinstance(op, dict) and op.get("op") == "remove" and isinstance(op.get("path"), str)]
     if not removes:
         return []
-    removed = sum(_count_files(p) for p in removes)
-    noun = "file" if removed == 1 else "files"
-    warnings = [f"Removes {removed} {noun}. They go to the agent trash and can be restored until you empty it."]
+    removed = sum(max(1, _count_files(p)) for p in removes)  # an empty folder is still one item
+    noun = "item" if removed == 1 else "items"
+    warnings = [{"level": "warn",
+                 "text": f"Removes {removed} {noun}. They go to the agent trash and can be restored until you empty it."}]
     total = _count_files(folder) if folder and os.path.isdir(folder) else 0
     if total and removed * 2 > total:
-        warnings.append(f"This removes more than half of the files in the folder ({removed} of {total}).")
+        warnings.append({"level": "danger",
+                         "text": f"This removes more than half of the files in the folder ({removed} of {total})."})
     return warnings
 
 
@@ -68,8 +73,11 @@ def jobs_payload(store, limit=50):
             except OSError:
                 item["review"] = ""
             try:
-                item["warnings"] = removal_warnings(item["plan"], (job.get("args") or {}).get("folder"))
-            except OSError:
+                if store.has(jid, "warnings.json"):  # saved at proposal
+                    item["warnings"] = store.read_json(jid, "warnings.json")
+                else:  # jobs proposed before warnings were saved
+                    item["warnings"] = removal_warnings(item["plan"], (job.get("args") or {}).get("folder"))
+            except (OSError, ValueError):
                 item["warnings"] = []
         out.append(item)
     return out

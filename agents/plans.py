@@ -65,14 +65,18 @@ def expand_folder_destinations(ops):
 
     Small models write "move a.pdf into PDFs" as dst=...\\PDFs, which validation must refuse
     (it would overlap the mkdir, or land on an existing folder). The saved plan, which the user
-    approves, gets the explicit file path instead.
+    approves, gets the explicit file path instead. Models also write the mkdir after the moves
+    into it, so mkdirs go first (in their own order); validation still refuses anything that
+    overlaps them.
     """
     if not isinstance(ops, list):
         return ops
-    made, out = set(), []
+    mkdirs = [op for op in ops if isinstance(op, dict) and op.get("op") == "mkdir" and isinstance(op.get("path"), str)]
+    made = {_key(op["path"].rstrip("\\/")) for op in mkdirs}
+    out = list(mkdirs)
     for op in ops:
-        if isinstance(op, dict) and op.get("op") == "mkdir" and isinstance(op.get("path"), str):
-            made.add(_key(op["path"].rstrip("\\/")))
+        if any(op is m for m in mkdirs):
+            continue
         if (isinstance(op, dict) and op.get("op") == "move"
                 and isinstance(op.get("src"), str) and isinstance(op.get("dst"), str)):
             dst = op["dst"].rstrip("\\/")
