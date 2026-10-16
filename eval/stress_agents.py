@@ -63,6 +63,14 @@ def mcp(tool, **args):
     return "\n".join(c.get("text", "") for c in d.get("result", {}).get("content", []))
 
 
+def server_info():
+    """The loaded model's file name and llama.cpp build, so each result names what it tested."""
+    req = urllib.request.Request(f"{PROXY}/props", headers={"Authorization": f"Bearer {KEY}"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        d = json.loads(r.read().decode("utf-8"))
+    return {"model": os.path.basename(d["model_path"].replace("\\", "/")), "build": d["build_info"]}
+
+
 def tools_list(url):
     d = _post(url, {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
               {"Accept": "application/json, text/event-stream"})
@@ -345,8 +353,8 @@ def tool_choice():
 def main():
     # Optional: --cases=O1,O4 runs only those cases; --no-tools skips the tool-choice round.
     only = next((a.split("=", 1)[1].split(",") for a in sys.argv[1:] if a.startswith("--cases=")), None)
-    results = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "pass_marks": PASS_MARKS, "cases": {},
-               "selected": only}
+    results = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), **server_info(), "pass_marks": PASS_MARKS,
+               "cases": {}, "selected": only}
     shutil.rmtree(BASE, ignore_errors=True)
     cases = fixtures()
     if only:
