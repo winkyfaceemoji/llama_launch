@@ -9,6 +9,7 @@ Tkinter launcher (`launcher.pyw`) that starts llama-server, the system prompt pr
 - Syntax check: `python -m py_compile launcher.pyw proxy.py`.
 - Run the proxy alone: `python proxy.py 8080 8081` (listen port, upstream port).
 - Agents MCP server: the launcher starts it on `127.0.0.1:8002` (`uv run --script agents/server.py`, MCP at `/mcp`). **Never run it by hand while the launcher is running**: its startup cancels unfinished jobs in the real sandbox, including one the live server is applying. With the launcher stopped, use a spare port (`--port 18002`); it still touches the real sandbox.
+- Model test: `python eval/model_test.py` (the launcher's **Test this model** runs it). Needs the launcher stack running; about an hour of GPU.
 - Smoke-test a model without the GUI: run the Auto preset command (`AUTO_COMMAND` in `launcher.pyw`) with `-m` set to a real `.gguf`, then stream a `/v1/chat/completions` request through `:8080` and `:8081` and compare. The llama-server log shows the context `--fit` picked (`n_ctx = ...` up to b9776, `n_ctx_slot = ...` from b11636).
 
 ## Conventions

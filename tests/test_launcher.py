@@ -40,6 +40,61 @@ class LoadApiKeyTests(unittest.TestCase):
         self.assertGreaterEqual(len(key), 32)
 
 
+class ModelTestHelperTests(unittest.TestCase):
+    SCRIPT = os.path.join(os.path.dirname(_PATH), "eval", "model_test.py")
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.dir.name, "file")
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def write(self, text):
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def test_command_runs_python_not_pythonw(self):
+        # pythonw has no console streams, so the harness's output would never reach the dialog.
+        for exe in ("C:\\Py\\pythonw.exe", "C:\\Py\\PythonW.EXE"):
+            self.assertEqual(launcher.model_test_command(exe), ["C:\\Py\\python.exe", "-u", self.SCRIPT])
+
+    def test_command_keeps_python(self):
+        self.assertEqual(launcher.model_test_command("C:\\Py\\python.exe"),
+                         ["C:\\Py\\python.exe", "-u", self.SCRIPT])
+
+    def test_lock_holds_a_fresh_random_token(self):
+        token = launcher.write_test_lock(self.path)
+        with open(self.path, encoding="utf-8") as f:
+            self.assertEqual(f.read(), token)
+        self.assertGreaterEqual(len(token), 32)
+        self.assertNotEqual(launcher.write_test_lock(self.path), token)
+
+    def test_clear_lock_removes_it(self):
+        launcher.write_test_lock(self.path)
+        launcher.clear_test_lock(self.path)
+        self.assertFalse(os.path.exists(self.path))
+
+    def test_clear_missing_lock_is_fine(self):
+        launcher.clear_test_lock(self.path)
+
+    def test_temp_dirs_are_the_stress_harness_folders(self):
+        with mock.patch.dict(os.environ, {"TEMP": "C:\\T"}):
+            self.assertEqual(launcher.test_temp_dirs(),
+                             ["C:\\T\\agent-stress", "C:\\T\\agent-stress-outside"])
+
+    def test_read_test_jobs(self):
+        self.write('["20261015-120000-abcd", 5, "20261015-120001-ef01"]')
+        self.assertEqual(launcher.read_test_jobs(self.path),
+                         ["20261015-120000-abcd", "20261015-120001-ef01"])
+
+    def test_read_test_jobs_missing_or_damaged_is_empty(self):
+        self.assertEqual(launcher.read_test_jobs(self.path), [])
+        for text in ("not json", '{"a": 1}', ""):
+            self.write(text)
+            self.assertEqual(launcher.read_test_jobs(self.path), [])
+
+
 class BuildLaunchCommandTests(unittest.TestCase):
     def test_adds_api_key_file(self):
         cmd = launcher.build_launch_command('llama-server -m "{model}"', "C:/m/a.gguf", None, "C:/k/key.txt")

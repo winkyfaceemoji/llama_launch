@@ -134,6 +134,18 @@ This needs llama.cpp installed through WinGet (package `ggml.llamacpp`). The Web
 
 ---
 
+## Testing a model
+
+**Test this model**, next to **Exit Processes** in the running view, scores the loaded model so you can compare models on this PC. It's enabled while the status bar says `● online`.
+
+- **What it measures:** agent jobs (the stress test's organise, risky-plan review, research, plan and tool-choice cases), 40 fixed reasoning questions (maths, logic, instruction following, dates and times), and speed (tokens per second and the context `--fit` picked). Each model uses its own sampling defaults, so a gap of a few points means little.
+- **About an hour of GPU.** Web UI chat is paused while it runs: chat requests get a "model test is running" error until the test finishes or you stop it. The test's jobs never show in the Jobs panel.
+- **The dialog** streams the test's log. When the test finishes, the report opens in the browser.
+- **The report** is `eval/results/report.html`: one row per complete test, sorted by agent score, each expanding to per-area results and the model's wrong answers. It and the result files stay on this PC.
+- **Stop** (or closing the dialog) asks first, then ends the test, cancels its jobs and deletes its temporary folders. Nothing is added to the report. **Exit Processes** during a test stops it the same way, without asking.
+
+---
+
 ## Presets
 
 Presets are stored in `config.json` under the `"presets"` key. Each preset has:

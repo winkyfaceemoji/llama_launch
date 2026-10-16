@@ -83,6 +83,8 @@ import json
 import webbrowser
 import re
 import secrets
+import shutil
+import pathlib
 import threading
 import urllib.request
 import time
@@ -167,6 +169,11 @@ MCP_GUARD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_guard.
 # llama-server's own OpenAI-compatible API. Agents connect here directly,
 # bypassing the system prompt proxy on 8080.
 AGENT_API_URL = "http://127.0.0.1:8081/v1"
+
+# The model test harness. While the lock exists the proxy pauses Web UI chat; it
+# holds a random token that lets the test's own chat requests through.
+MODEL_TEST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "eval", "model_test.py")
+MODEL_TEST_LOCK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_test.lock")
 
 
 # ============================================================
@@ -407,6 +414,47 @@ def preset_matches_model(preset, model_filename):
         return True
     lower = model_filename.lower()
     return any(kw.lower() in lower for kw in keywords)
+
+
+def model_test_command(python_exe):
+    # python.exe even when the launcher runs under pythonw.exe, which has no console
+    # streams, so the harness's lines reach the dialog; -u sends each one at once.
+    folder, name = os.path.split(python_exe)
+    if name.lower() == "pythonw.exe":
+        python_exe = os.path.join(folder, "python.exe")
+    return [python_exe, "-u", MODEL_TEST]
+
+
+def write_test_lock(path):
+    # Pauses Web UI chat; the returned token lets the test's own requests through the proxy.
+    token = secrets.token_urlsafe(32)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(token)
+    return token
+
+
+def clear_test_lock(path):
+    # Missing is fine. Never fatal: startup and Exit Processes clear it again.
+    try:
+        agent_jobs._retry(lambda: os.remove(path))  # the proxy may be reading it
+    except OSError:
+        pass
+
+
+def test_temp_dirs():
+    # The stress harness's throwaway folders (BASE and OUTSIDE in eval/stress_agents.py).
+    temp = os.environ["TEMP"]
+    return [os.path.join(temp, "agent-stress"), os.path.join(temp, "agent-stress-outside")]
+
+
+def read_test_jobs(path):
+    # The model test's job IDs (agents/paths.TEST_JOBS_FILE); missing or damaged gives [].
+    try:
+        with open(path, encoding="utf-8") as f:
+            ids = json.load(f)
+    except (OSError, ValueError):
+        return []
+    return [i for i in ids if isinstance(i, str)] if isinstance(ids, list) else []
 
 
 # ============================================================
@@ -1244,6 +1292,137 @@ class UpdateDialog(tk.Toplevel):
             self.destroy()
 
 
+class TestDialog(tk.Toplevel):
+    # Progress of a model test. proc is the harness (eval/model_test.py); a reader
+    # thread drains its output into the log through after(0, ...). No grab: Exit
+    # Processes stays clickable and stops the test first (stop_now).
+    def __init__(self, parent, proc):
+        super().__init__(parent)
+        self.title("Model test")
+        self.configure(bg=BG)
+        self.geometry(f"{W_SETTINGS}x420")
+        self.protocol("WM_DELETE_WINDOW", self._close)
+        self._proc = proc
+        self._phase = "running"  # running / stopping / done
+        self._report_path = None
+        self._last = ""
+        section_label(self, "MODEL TEST").pack(fill="x", padx=20, pady=(20, 6))
+        border = tk.Frame(self, bg=BORDER, padx=1, pady=1)
+        border.pack(fill="both", expand=True, padx=20)
+        self._log = tk.Text(border, font=FONT_LOG, bg=BG_INPUT, fg=TEXT_PRI, height=10,
+                            relief="flat", state=tk.DISABLED, wrap="word")
+        sb = ttk.Scrollbar(border, orient="vertical", command=self._log.yview)
+        self._log.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self._log.pack(side="left", fill="both", expand=True)
+        self._status = tk.Label(self, text="Running… about an hour. Web UI chat is paused.",
+                                font=FONT_SMALL, fg=TEXT_SEC, bg=BG,
+                                wraplength=W_SETTINGS - 40, justify="left")
+        self._status.pack(padx=20, anchor="w", pady=(10, 0))
+        row = tk.Frame(self, bg=BG)
+        row.pack(fill="x", padx=20, pady=(10, 20))
+        self._close_btn = small_btn(row, "Close", self._close, state=tk.DISABLED)
+        self._close_btn.pack(side="right")
+        self._stop_btn = small_btn(row, "Stop", self._stop, fg=DANGER)
+        self._stop_btn.pack(side="right", padx=(0, 8))
+        threading.Thread(target=self._read, daemon=True).start()
+
+    def busy(self):
+        return self._phase != "done"
+
+    def report(self, line):
+        # Called from the reader and stop threads.
+        self.after(0, self._append, line)
+
+    def _append(self, line):
+        if line.strip():
+            self._last = line
+        if line.startswith("[report] "):
+            self._report_path = line[len("[report] "):].strip()
+        self._log.config(state=tk.NORMAL)
+        self._log.insert("end", line + "\n")
+        self._log.see("end")
+        self._log.config(state=tk.DISABLED)
+
+    def _read(self):
+        # Keeps draining the pipe until EOF (see the launcher rule), then reports the exit code.
+        try:
+            for line in self._proc.stdout:
+                self.report(line.rstrip("\r\n"))
+        except Exception:
+            pass
+        self.after(0, self._ended, self._proc.wait())
+
+    def _ended(self, code):
+        if self._phase != "running":
+            return  # Stop killed it; the stop sequence sets the status
+        self._phase = "done"
+        clear_test_lock(MODEL_TEST_LOCK)
+        self._stop_btn.config(state=tk.DISABLED)
+        self._close_btn.config(state=tk.NORMAL)
+        if code == 0 and self._report_path:
+            self._status.config(text="Done. The report is open in the browser.", fg=TEXT_PRI)
+            webbrowser.open(pathlib.Path(self._report_path).as_uri())
+        else:
+            self._status.config(text=f"Failed (exit {code}): {self._last}", fg=DANGER)
+
+    def _stop(self):
+        # The question runs its own event loop, so the test may have ended meanwhile.
+        if (self._phase == "running"
+                and messagebox.askyesno("Stop the model test",
+                                        "Stop the test? Nothing is added to the report.", parent=self)
+                and self._phase == "running"):
+            self._begin_stop()
+            threading.Thread(target=self._stop_sequence, daemon=True).start()
+
+    def stop_now(self):
+        # Exit Processes: the same sequence without the question, on the UI thread,
+        # so it ends before the agents server is killed.
+        if self._phase == "running":
+            self._begin_stop()
+            self._stop_sequence()
+
+    def _begin_stop(self):
+        self._phase = "stopping"
+        self._stop_btn.config(state=tk.DISABLED)
+        self._status.config(text="Stopping…", fg=TEXT_SEC)
+
+    def _stop_sequence(self):
+        # In this order: the harness first, so it starts no more jobs; then its jobs (a
+        # running one stops before its next model call); then its folders; the lock last.
+        try:
+            subprocess.run(f"taskkill /F /T /PID {self._proc.pid}", shell=True, capture_output=True)
+            try:
+                key = agent_llm.read_key(agent_llm.APPROVAL_KEY_FILE)
+            except OSError:
+                key = ""
+            for job_id in read_test_jobs(agent_paths.TEST_JOBS_FILE):
+                try:
+                    _, body = _http(f"{agent_llm.AGENTS_BASE}/jobs/{job_id}/cancel", 5, b"",
+                                    {"Authorization": f"Bearer {key}",
+                                     "Host": f"127.0.0.1:{agent_llm.AGENTS_PORT}"})
+                    self.report(f"{job_id}: {json.loads(body).get('message')}")
+                except Exception as e:
+                    self.report(f"{job_id}: not cancelled ({e})")
+            for folder in test_temp_dirs():
+                shutil.rmtree(folder, ignore_errors=True)
+            clear_test_lock(MODEL_TEST_LOCK)
+        finally:
+            self.after(0, self._stopped)
+
+    def _stopped(self):
+        self._phase = "done"
+        self._status.config(text="Stopped; nothing was added to the report.", fg=TEXT_PRI)
+        self._close_btn.config(state=tk.NORMAL)
+
+    def _close(self):
+        # Closing the window while the test runs means Stop.
+        if self._phase == "running":
+            self._stop()
+        elif self._phase == "done":
+            self.destroy()
+
+
 # ============================================================
 # SECTION 8 — MAIN APPLICATION WINDOW
 # CommandLauncherGUI manages the full window lifecycle:
@@ -1273,6 +1452,9 @@ class CommandLauncherGUI:
         # Load persisted config — contains the llama.cpp folder path
         self.config    = load_config()
         self.llama_dir = self.config.get("llama_dir", "")
+
+        # A model test lock left by a crash would keep Web UI chat paused.
+        clear_test_lock(MODEL_TEST_LOCK)
 
         # Route to setup or home based on whether a path is already configured
         if not self.llama_dir:
@@ -1395,6 +1577,7 @@ class CommandLauncherGUI:
         self._agents_proc  = None
         self._polling      = False
         self._launch_time  = None
+        self._test_dialog  = None
 
         self.master.columnconfigure(0, weight=1)
 
@@ -1549,9 +1732,19 @@ class CommandLauncherGUI:
         self.log_pane.add(uvx_frame,    stretch="always", minsize=80)
         self.log_pane.add(proxy_frame,  stretch="always", minsize=80)
 
-        # ── Exit button
+        # ── Test this model + Exit buttons. Test is enabled only while the health poll says online.
+        self.exit_row = tk.Frame(self.master, bg=BG)
+        self.test_btn = tk.Button(
+            self.exit_row, text="Test this model",
+            command=self._start_model_test, state=tk.DISABLED,
+            bg=ACCENT, fg=BG, disabledforeground=TEXT_MUT,
+            activebackground=ACCENT, activeforeground=BG,
+            font=("Segoe UI", 12, "bold"), relief="flat", bd=0,
+            padx=14, pady=14, cursor="hand2",
+        )
+        self.test_btn.pack(side="left", padx=(0, 8))
         self.exit_btn = tk.Button(
-            self.master, text="Exit Processes",
+            self.exit_row, text="Exit Processes",
             command=self._exit_running_state,
             bg=DANGER, fg=BG,
             activebackground="#c45c6e", activeforeground=BG,
@@ -1690,8 +1883,11 @@ class CommandLauncherGUI:
         self.master.grid_rowconfigure(7, weight=1)
         self.log_pane.grid(row=7, column=0,
                            sticky="nsew", padx=16, pady=(6, 6))
-        self.exit_btn.grid(row=8, column=0,
+        self.exit_row.grid(row=8, column=0,
                            sticky="ew", padx=16, pady=(0, 14))
+        # winfo_manager() of exit_btn tells the running state apart (Settings, update notice).
+        self.exit_btn.pack(side="left", fill="x", expand=True)
+        self.test_btn.config(state=tk.DISABLED)
         self.master.resizable(True, True)
         self.master.geometry(f"{W}x{H_RUNNING}")
 
@@ -1705,7 +1901,9 @@ class CommandLauncherGUI:
         self.status_bar.grid_remove()
         self.api_bar.grid_remove()
         self.log_pane.grid_remove()
-        self.exit_btn.grid_remove()
+        self.exit_btn.pack_forget()
+        self.exit_row.grid_remove()
+        self.test_btn.config(state=tk.DISABLED)
         # Reset pane labels for the next launch
         self._llama_label_var.set("llama-server")
         self._uvx_label_var.set("UVX Proxy")
@@ -1882,12 +2080,46 @@ class CommandLauncherGUI:
                     browser_opened = True
                     self.master.after(0, lambda: webbrowser.open("http://127.0.0.1:8080/"))
                 self.master.after(0, lambda c=colors[level], t=text: self._health_label.config(fg=c, text=t))
+                self.master.after(0, lambda ok=level == "ok": self._set_test_btn(ok))
                 time.sleep(3)
         threading.Thread(target=poll_loop, daemon=True).start()
 
     def _stop_health_poll(self):
         self._polling = False
         self._health_label.config(text="● waiting", fg=TEXT_MUT)
+
+
+    # ── Model test ────────────────────────────────────────────
+
+    def _set_test_btn(self, healthy):
+        # Only while llama-server is online and no test is running. _polling drops
+        # a poll result that arrives after Exit Processes.
+        busy = self._test_dialog is not None and self._test_dialog.busy()
+        self.test_btn.config(state=tk.NORMAL if healthy and self._polling and not busy else tk.DISABLED)
+
+    def _start_model_test(self):
+        if not messagebox.askyesno("Test this model",
+                "About an hour. Uses the GPU. Web UI chat is paused until it finishes or you stop it."):
+            return
+        self.test_btn.config(state=tk.DISABLED)
+        try:
+            write_test_lock(MODEL_TEST_LOCK)
+            proc = subprocess.Popen(
+                model_test_command(sys.executable),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                cwd=os.path.dirname(os.path.abspath(__file__)),
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        except OSError as e:
+            clear_test_lock(MODEL_TEST_LOCK)
+            messagebox.showerror("Test this model", f"The test couldn't start:\n{e}")
+            return
+        self._test_dialog = TestDialog(self.master, proc)
 
 
     # ── Elapsed time ──────────────────────────────────────────
@@ -1978,6 +2210,12 @@ class CommandLauncherGUI:
                 self._append_log(widget, f"{prefix}─── kill failed: {e} ───")
 
     def _kill_all(self):
+        # A running model test stops first, while the agents server can still cancel its jobs.
+        if self._test_dialog is not None:
+            try:
+                self._test_dialog.stop_now()
+            except Exception:
+                pass
         self._kill_proc(self._llama_proc, getattr(self, "llama_log", None))
         self._llama_proc = None
         self._kill_proc(self._uvx_proc, getattr(self, "uvx_log", None))
@@ -1992,6 +2230,7 @@ class CommandLauncherGUI:
             agent_jobs.JobStore(self.agent_policy.jobs_dir).cancel_unfinished()
         except Exception:
             pass
+        clear_test_lock(MODEL_TEST_LOCK)  # a leftover from a crash would keep Web UI chat paused
 
     def _on_close(self):
         # If servers are running and tray is available, minimize to tray instead of closing.
