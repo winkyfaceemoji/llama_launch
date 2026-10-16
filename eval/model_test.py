@@ -17,6 +17,7 @@ import urllib.request
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 from agents import jobs as agent_jobs, paths as agent_paths, runner  # noqa: E402
+import report  # noqa: E402  (eval/ is on the path: the script's own folder, or the tests')
 
 LLAMA = "http://127.0.0.1:8081"
 PROXY = "http://127.0.0.1:8080"
@@ -262,14 +263,7 @@ def main():
         json.dump(out, f, indent=2, ensure_ascii=False)
     print(f"[results] {path}", flush=True)
 
-    try:
-        import report
-    except ImportError:
-        return
-    page = os.path.join(RESULTS, "report.html")
-    with open(page, "w", encoding="utf-8") as f:
-        f.write(report.build(RESULTS))
-    print(f"[report] {page}", flush=True)
+    print(f"[report] {report.build(RESULTS)}", flush=True)
 
 
 if __name__ == "__main__":
