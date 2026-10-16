@@ -7,6 +7,8 @@ import secrets
 import threading
 import time
 
+from . import plans
+
 _ID = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]+")
 STEP_MAX = 200
@@ -104,6 +106,14 @@ class JobStore:
                 job["note"] = "cancelled"
             self._write(job)
         return f"Cancelled job {job_id}." if state != "running" else f"Cancelling job {job_id} at its next turn."
+
+    def delete(self, job_id):
+        # The job's folder and trash\<job> (Policy keeps trash\ next to jobs\), never following links.
+        self.path(job_id)  # only the exact ID format is a path
+        for folder in (os.path.join(self.jobs_dir, job_id),
+                       os.path.join(os.path.dirname(self.jobs_dir), "trash", job_id)):
+            if os.path.lexists(folder):
+                plans._delete(folder)
 
     def cancel_unfinished(self):
         for job in self.list():

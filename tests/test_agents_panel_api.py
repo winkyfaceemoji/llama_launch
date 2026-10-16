@@ -148,6 +148,28 @@ class PanelApiTests(unittest.TestCase):
             f.write('{"kind": "research", "state": "done"}')
         self.assertEqual([j["id"] for j in panel_api.jobs_payload(self.store)], [good["id"]])
 
+    def test_payload_hides_listed_test_jobs(self):
+        hidden = self.store.create("research", {"topic": "test"})
+        shown = self.store.create("research", {"topic": "mine"})
+        listed = os.path.join(self.tmp.name, "test_jobs.json")
+        with open(listed, "w") as f:
+            f.write(f'["{hidden["id"]}", 7]')
+        ids = [j["id"] for j in panel_api.jobs_payload(self.store, hidden_file=listed)]
+        self.assertEqual(ids, [shown["id"]])
+
+    def test_payload_hides_nothing_when_the_test_job_list_is_missing_or_corrupt(self):
+        job = self.store.create("research", {"topic": "t"})
+        listed = os.path.join(self.tmp.name, "test_jobs.json")
+        self.assertEqual(len(panel_api.jobs_payload(self.store, hidden_file=listed)), 1)
+        for junk in ("{not json", '{"a": 1}', '"' + job["id"] + '"'):
+            with open(listed, "w") as f:
+                f.write(junk)
+            self.assertEqual([j["id"] for j in panel_api.jobs_payload(self.store, hidden_file=listed)], [job["id"]])
+
+    def test_test_job_list_lives_in_the_launcher_folder(self):
+        self.assertEqual(paths.TEST_JOBS_FILE, os.path.join(paths.APP_DIR, "test_jobs.json"))
+        self.assertFalse(self.policy.can_read(paths.TEST_JOBS_FILE))
+
     def test_payload_survives_odd_follow_up_steps(self):
         p = self.store.create("plan", {"goal": "g"})
         self.store.write_json(p["id"], "steps.json", 7)

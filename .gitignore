@@ -4,5 +4,7 @@ config.json
 api_key.txt
 approval_key.txt
 agent_folders.json
+test_jobs.json
+model_test.lock
 __pycache__/
 eval/results/

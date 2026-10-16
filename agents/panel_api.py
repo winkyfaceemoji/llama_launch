@@ -1,7 +1,8 @@
 """Logic behind the jobs panel's routes on the agents server. Standard library only."""
+import json
 import os
 
-from . import plans, runner
+from . import paths, plans, runner
 
 MOVING = ("applying", "restoring")
 # Never cut from the list: a plan waiting for approval is only approvable here, and live jobs are being watched.
@@ -46,9 +47,20 @@ def removal_warnings(plan, folder):
     return warnings
 
 
-def jobs_payload(store, limit=50):
+def _test_jobs(path):
+    # A missing or damaged list hides nothing.
+    try:
+        with open(path, encoding="utf-8") as f:
+            ids = json.load(f)
+    except (OSError, ValueError):
+        return set()
+    return {i for i in ids if isinstance(i, str)} if isinstance(ids, list) else set()
+
+
+def jobs_payload(store, limit=50, hidden_file=paths.TEST_JOBS_FILE):
     out = []
-    newest_first = store.list()
+    hidden = _test_jobs(hidden_file)
+    newest_first = [j for j in store.list() if j["id"] not in hidden]
     pinned = [j["id"] for j in newest_first if j.get("state") in ALWAYS_LISTED]
     others = [j["id"] for j in newest_first if j.get("state") not in ALWAYS_LISTED]
     keep = set(pinned) | set(others[:max(0, limit - len(pinned))])

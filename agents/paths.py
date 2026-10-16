@@ -5,6 +5,8 @@ import os
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FOLDERS_FILE = os.path.join(APP_DIR, "agent_folders.json")
+# Job IDs the model test created; the jobs panel hides them. Outside every agent's reach, like the files above.
+TEST_JOBS_FILE = os.path.join(APP_DIR, "test_jobs.json")
 
 _DRIVE_REMOVABLE, _DRIVE_FIXED = 2, 3
 

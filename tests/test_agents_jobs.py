@@ -95,6 +95,27 @@ class JobStoreTests(unittest.TestCase):
         self.assertIn("Not cancelled", self.store.request_cancel("20261014-000000-abcd"))
         self.assertIn("Not cancelled", self.store.request_cancel(r"..\x"))
 
+    def test_delete_removes_job_and_its_trash_without_following_junctions(self):
+        import subprocess
+        outside = os.path.join(self.tmp.name, "outside")
+        os.makedirs(outside)
+        with open(os.path.join(outside, "keep.txt"), "w") as f:
+            f.write("x")
+        job = self.store.create("organize", {})
+        trash = os.path.join(self.tmp.name, "trash", job["id"], "1", "C")
+        os.makedirs(trash)
+        for link in (self.store.path(job["id"], "linked"), os.path.join(trash, "linked")):
+            subprocess.run(["cmd", "/c", "mklink", "/J", link, outside], check=True, capture_output=True)
+        other = self.store.create("research", {})
+        self.store.delete(job["id"])
+        self.assertFalse(os.path.exists(os.path.join(self.store.jobs_dir, job["id"])))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, "trash", job["id"])))
+        self.assertTrue(os.path.exists(os.path.join(outside, "keep.txt")))
+        self.assertEqual(self.store.get(other["id"])["id"], other["id"])
+        self.store.delete(job["id"])  # already gone: nothing to do
+        with self.assertRaises(KeyError):
+            self.store.delete(r"..\outside")
+
     def test_list_newest_first_and_skips_junk(self):
         a = self.store.create("research", {})
         time.sleep(0.01)
