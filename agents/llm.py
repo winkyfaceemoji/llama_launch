@@ -1,5 +1,6 @@
 """HTTP calls to llama-server, the UVX MCP proxy and the agents server's approval routes. Standard library only."""
 import hmac
+import http.client
 import json
 import os
 import urllib.error
@@ -28,8 +29,14 @@ def _post(url, body, headers, timeout):
         with e:
             text = e.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"{url} returned HTTP {e.code}: {text[:500]}") from None
+    except (http.client.HTTPException, UnicodeDecodeError) as e:
+        # A reply cut off mid-way (IncompleteRead) is not an OSError; callers only catch RuntimeError/OSError.
+        raise RuntimeError(f"{url} sent a broken reply: {e!r}"[:300]) from None
     if not ctype.startswith("text/event-stream"):
-        return json.loads(raw)
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            raise RuntimeError(f"unexpected reply from {url}: {raw[:200]}") from None
     # The proxy may answer with one SSE event; the JSON-RPC reply is its last data line.
     for line in reversed(raw.splitlines()):
         if line.startswith("data:"):

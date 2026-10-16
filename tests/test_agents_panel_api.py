@@ -140,6 +140,20 @@ class PanelApiTests(unittest.TestCase):
         warnings = panel_api.removal_warnings([{"op": "remove", "path": os.path.join(self.dl, "Empty")}], self.dl)
         self.assertIn("Removes 1 item", warnings[0]["text"])
 
+    def test_payload_skips_a_job_file_without_an_id(self):
+        # One damaged job.json must not take the whole Jobs panel down.
+        good = self.store.create("research", {"topic": "fine"})
+        os.makedirs(os.path.join(self.policy.jobs_dir, "20261015-000000-dead"))
+        with open(os.path.join(self.policy.jobs_dir, "20261015-000000-dead", "job.json"), "w") as f:
+            f.write('{"kind": "research", "state": "done"}')
+        self.assertEqual([j["id"] for j in panel_api.jobs_payload(self.store)], [good["id"]])
+
+    def test_payload_survives_odd_follow_up_steps(self):
+        p = self.store.create("plan", {"goal": "g"})
+        self.store.write_json(p["id"], "steps.json", 7)
+        self.store.update(p["id"], state="done")
+        self.assertEqual(panel_api.jobs_payload(self.store)[0]["queue_count"], 0)
+
     def test_payload_survives_a_corrupt_plan(self):
         job = self.store.create("organize", {"folder": self.dl, "goal": "g"})
         with open(self.store.path(job["id"], "plan.json"), "w") as f:

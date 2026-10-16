@@ -60,7 +60,8 @@ def jobs_payload(store, limit=50):
                     can_restore=state in ("applied", "failed") and store.has(jid, "applied.json"))
         if job.get("kind") == "plan" and state == "done" and not job.get("steps_queued") and store.has(jid, "steps.json"):
             try:
-                item["queue_count"] = len(store.read_json(jid, "steps.json"))
+                steps_json = store.read_json(jid, "steps.json")
+                item["queue_count"] = len(steps_json) if isinstance(steps_json, list) else 0
             except (OSError, ValueError):
                 pass
         if state == "awaiting_approval":

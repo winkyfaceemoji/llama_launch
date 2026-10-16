@@ -281,7 +281,7 @@ def resolve_uvx_command(cmd, config_file):
 def remove_stale_agents_entry(config):
     # The agents server used to run inside mcp-proxy from config.json's mcpServers.
     # The launcher starts it itself now (ADR 0007), so drop that old entry.
-    return config.get("mcpServers", {}).pop("agents", None) is not None
+    return (config.get("mcpServers") or {}).pop("agents", None) is not None
 
 
 def health_status(exit_codes, health, shown=()):

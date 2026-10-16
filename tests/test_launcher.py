@@ -138,6 +138,7 @@ class RemoveStaleAgentsEntryTests(unittest.TestCase):
     def test_nothing_to_remove(self):
         self.assertFalse(launcher.remove_stale_agents_entry({}))
         self.assertFalse(launcher.remove_stale_agents_entry({"mcpServers": {"fetch": {}}}))
+        self.assertFalse(launcher.remove_stale_agents_entry({"mcpServers": None}))  # hand-edited config
 
 
 class ParseBuildTests(unittest.TestCase):

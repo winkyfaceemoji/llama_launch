@@ -23,6 +23,16 @@ class Fake(BaseHTTPRequestHandler):
             return self._reply(500, "text/plain", b"model not loaded")
         if "/sse" in p:
             return self._reply(200, "text/event-stream", SSE_BODY.encode())
+        if "/cut" in p:  # promises more bytes than it sends, then closes: IncompleteRead
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", "100")
+            self.end_headers()
+            self.wfile.write(b'{"choi')
+            self.close_connection = True
+            return
+        if "/html" in p:
+            return self._reply(200, "text/html", b"<html>proxy error</html>")
         if "/empty" in p:
             out = {}
         elif p == "/v1/chat/completions":
@@ -89,6 +99,16 @@ class HttpTests(unittest.TestCase):
     def test_sse_reply_is_parsed(self):
         text = llm.mcp_call("sse", "search", {"query": "q"}, url=self.base + "/servers/{server}/mcp")
         self.assertEqual(text, "sse ok")
+
+    def test_cut_off_reply_is_runtime_error(self):
+        # The run loop catches RuntimeError/OSError and keeps what a job has; anything else failed it outright.
+        with self.assertRaises(RuntimeError):
+            self.chat("/v1/cut")
+
+    def test_non_json_reply_is_runtime_error(self):
+        with self.assertRaises(RuntimeError) as cm:
+            self.chat("/v1/html")
+        self.assertIn("proxy error", str(cm.exception))
 
     def test_chat_missing_choices_is_runtime_error(self):
         with self.assertRaises(RuntimeError) as cm:

@@ -80,9 +80,11 @@ class JobStore:
         found = []
         for name in os.listdir(self.jobs_dir):
             try:
-                found.append(self.get(name))
+                job = self.get(name)
             except KeyError:
-                pass
+                continue
+            if isinstance(job, dict) and "id" in job:  # a damaged job.json is skipped, not fatal
+                found.append(job)
         return sorted(found, key=lambda j: j.get("created", 0), reverse=True)
 
     def cancel_unfinished(self):
