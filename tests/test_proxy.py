@@ -3,8 +3,10 @@ import http.client
 import json
 import os
 import sys
+import tempfile
 import threading
 import unittest
+from unittest import mock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -16,6 +18,15 @@ SEEN = {}
 
 
 class FakeLlama(BaseHTTPRequestHandler):
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        body = b'{"choices": []}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         SEEN["llama_headers"] = dict(self.headers)
         if "broken" in self.path:
@@ -222,6 +233,37 @@ class ProxyIntegrationTests(unittest.TestCase):
         r, body = self.get("GET", "/", {"Host": "evil.example"})
         self.assertEqual(r.status, 200)
         self.assertIn(TAG, body)
+
+    CHAT_PATHS = ("/v1/chat/completions", "/chat/completions", "/v1/completions", "/completion", "/completions")
+
+    def post(self, path):
+        c = http.client.HTTPConnection("127.0.0.1", self.proxy.server_port, timeout=10)
+        c.request("POST", path, body=b'{"messages": []}', headers={"Content-Type": "application/json"})
+        r = c.getresponse()
+        body = r.read()
+        c.close()
+        return r, body
+
+    def test_chat_is_paused_while_a_model_test_runs(self):
+        # The launcher writes the lock; the test itself talks to llama-server on 8081, not here.
+        with tempfile.TemporaryDirectory() as d:
+            lock = os.path.join(d, "model_test.lock")
+            open(lock, "w").close()
+            with mock.patch.object(proxy, "MODEL_TEST_LOCK", lock):
+                for path in self.CHAT_PATHS:
+                    r, body = self.post(path)
+                    self.assertEqual(r.status, 503, path)
+                    self.assertIn("model test is running", json.loads(body)["error"]["message"])
+                r, body = self.get("GET", "/")  # the Web UI page and the panel stay up
+                self.assertEqual(r.status, 200)
+                r, _ = self.get("GET", "/agent-jobs/panel.js")
+                self.assertEqual(r.status, 200)
+
+    def test_chat_passes_without_the_lock(self):
+        with mock.patch.object(proxy, "MODEL_TEST_LOCK", os.path.join(os.path.dirname(__file__), "no-such.lock")):
+            for path in self.CHAT_PATHS:
+                r, _ = self.post(path)
+                self.assertEqual(r.status, 200, path)
 
     def test_api_returns_502_when_agents_server_down(self):
         saved = proxy._AGENTS

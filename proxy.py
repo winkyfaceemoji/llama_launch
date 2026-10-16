@@ -17,6 +17,11 @@ PANEL_FILES = {
     "/agent-jobs/panel.css": ("panel.css", "text/css; charset=utf-8"),
 }
 INJECT_TAG = b'<script src="/agent-jobs/inject.js"></script>'
+# While the launcher runs a model test it writes this file; Web UI chat waits (the test uses 8081 directly).
+MODEL_TEST_LOCK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_test.lock")
+_CHAT_PATHS = ("/v1/chat/completions", "/chat/completions", "/v1/completions", "/completion", "/completions")
+_PAUSED = json.dumps({"error": {"message": "A model test is running in the launcher. Chat is paused until it "
+                                           "finishes or you stop it.", "type": "unavailable"}}).encode()
 WEBUI_PAGES = ("/", "/index.html")
 _JOB_ID = r"\d{8}-\d{6}-[0-9a-f]{4}"
 _API = [
@@ -166,6 +171,10 @@ class Handler(BaseHTTPRequestHandler):
             body = b"".join(chunks) if chunks else None
         else:
             body = None
+
+        # Checked per request (after reading the body), so no restart is needed either way.
+        if self.command == "POST" and path in _CHAT_PATHS and os.path.exists(MODEL_TEST_LOCK):
+            return self._send(503, _PAUSED, [("Content-Type", "application/json")])
 
         if self.command == "POST" and "/v1/chat/completions" in self.path and _SP and body:
             try:
