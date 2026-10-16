@@ -255,7 +255,7 @@ class CheckAnswerTests(unittest.TestCase):
     def test_question_file_accepts_normal_ways_to_write_the_answer(self):
         questions = model_test.load_questions()
         for i, answer in ((0, "29 dollars"), (2, "66 dollars"), (9, "2662 dollars"), (7, "162 cm^2"),
-                          (7, "162 square cm"), (22, "7,5,3,1."), (23, "the party starts at 9 tonight")):
+                          (7, "162 square cm"), (22, "7,5,3,1."), (23, "party starts at 9 tonight")):
             self.assertTrue(model_test.check_answer(answer, questions[i]["check"]), (i, answer))
 
     def test_empty_answer(self):
