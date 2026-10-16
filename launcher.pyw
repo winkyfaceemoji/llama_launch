@@ -537,6 +537,7 @@ class UpdateRunner:
 
     def __init__(self, report, run=subprocess.run, popen=subprocess.Popen):
         self._report, self._run, self._popen = report, run, popen
+        self.rolled_back = False  # update() put the previous build back
 
     def _text(self, args, timeout, **kw):
         # (exit code, combined output); decoded so an odd byte can't raise.
@@ -642,6 +643,7 @@ class UpdateRunner:
             return True, message
         ok, rolled = self.rollback(previous)
         if ok:
+            self.rolled_back = True
             return False, f"{message} Rolled back to b{previous}."
         return False, f"{message} Roll back to b{previous} also failed: {rolled}"
 
@@ -1602,15 +1604,23 @@ class CommandLauncherGUI:
         self.config["previous_build"] = f"b{installed}"
         save_config(self.config)
         model_path, mmproj = self._models.get(self.model_var.get(), (None, None))
-        UpdateDialog(self.master, f"Update to b{newest}",
-                     lambda report: UpdateRunner(report).update(
-                         installed, newest, model_path, mmproj, API_KEY_FILE),
-                     on_done=self._update_done)
+        runners = []
 
-    def _update_done(self, ok):
+        def job(report):
+            runners.append(UpdateRunner(report))
+            return runners[0].update(installed, newest, model_path, mmproj, API_KEY_FILE)
+        UpdateDialog(self.master, f"Update to b{newest}", job,
+                     on_done=lambda ok: self._update_done(ok, runners and runners[0].rolled_back))
+
+    def _update_done(self, ok, rolled_back):
         if ok:
             self._notice.grid_remove()
             self._resize_config()
+        elif rolled_back:
+            # Back on the build previous_build names: nothing to roll back to. A failed
+            # roll back keeps it, so Settings can retry from the broken build.
+            self.config.pop("previous_build", None)
+            save_config(self.config)
 
     def _start_rollback(self, build):
         model_path, mmproj = self._models.get(self.model_var.get(), (None, None))

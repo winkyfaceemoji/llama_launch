@@ -388,6 +388,7 @@ class UpdateRunnerTests(unittest.TestCase):
             self.assertEqual(self.runner.update(9776, 11636, "C:\\m\\a.gguf", None, self.key_file),
                              (True, "Build check passed."))
         self.assertNotIn(self.INSTALL_9776, self.calls)
+        self.assertFalse(self.runner.rolled_back)
 
     def test_failed_check_rolls_back_to_previous_build(self):
         self.versions = [11636, 9776]
@@ -397,6 +398,8 @@ class UpdateRunnerTests(unittest.TestCase):
         self.assertEqual(result, (False, "Build check failed: chat without key (HTTP 200). "
                                          "Rolled back to b9776."))
         self.assertIn(self.INSTALL_9776, self.calls)
+        # Back on the previous build: Settings must not offer to roll back to the build in use.
+        self.assertTrue(self.runner.rolled_back)
 
     def test_failed_roll_back_is_reported(self):
         self.exit_codes["install"] = 1
@@ -405,6 +408,8 @@ class UpdateRunnerTests(unittest.TestCase):
             result = self.runner.update(9776, 11636, "C:\\m\\a.gguf", None, self.key_file)
         self.assertEqual(result, (False, "Build check failed: chat without key (HTTP 200). "
                                          "Roll back to b9776 also failed: WinGet install failed (exit 1)."))
+        # Still on the broken build: Settings' Roll back is the way out, so keep it.
+        self.assertFalse(self.runner.rolled_back)
 
     def test_build_check_error_still_rolls_back(self):
         self.versions = [11636, 9776]
