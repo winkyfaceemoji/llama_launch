@@ -55,6 +55,7 @@ Click **⚙ Settings** in the top-right corner at any time to update the models 
 llama_launch/
 ├── launcher.pyw          # the application
 ├── proxy.py              # system prompt injection proxy (port 8080 → 8081)
+├── mcp_guard.py          # starts the UVX MCP proxy (8001) with a Host check
 ├── agents/               # agents server (server.py, port 8002) and the job, plan and path code it uses
 ├── panel/                # the jobs panel the proxy adds to the Web UI (served at /agent-jobs)
 ├── config.json           # all settings: models folder, presets, system prompt, MCP servers
@@ -116,7 +117,7 @@ The directory scanned for `.gguf` model files and used as the working directory 
 ### Launch options
 
 - **Web UI** — set to **Yes** to automatically open `http://127.0.0.1:8080/` in the browser once the server comes online. Set to **No** to skip this. The choice is saved between launches and has no other effect.
-- **UVX Settings** — click **▶ Show command** to expand and edit the `uvx mcp-proxy` command. Changes are saved when you click **Save**.
+- **UVX Settings** — click **▶ Show command** to expand and edit the command that starts mcp-proxy. Changes are saved when you click **Save**.
 - **llama.cpp** — **Roll back to bNNNN** shows after an update, while the servers are stopped. See [Updating llama.cpp](#updating-llamacpp).
 
 ---
@@ -264,7 +265,7 @@ All settings live in a single `config.json` next to the launcher:
 | `presets` | Saved launch presets |
 | `system_prompt` | System prompt injected into every Web UI chat request |
 | `mcpServers` | MCP tool definitions used by the UVX proxy |
-| `uvx_command` | The `uvx mcp-proxy` command run at launch (editable in Settings). `{config}` stands for the path to `config.json` |
+| `uvx_command` | The command that starts mcp-proxy at launch (editable in Settings). `{config}` stands for the path to `config.json`, `{guard}` for `mcp_guard.py`, which adds the Host check |
 | `open_browser` | Whether to open the Web UI when the server comes online |
 | `last_model` | Remembered model selection between sessions |
 | `previous_build` | The llama.cpp build before the last update (e.g. `b9776`), for roll back. Cleared after a roll back |
@@ -300,7 +301,7 @@ The card then shows the server name, **Connected**, and the number of tools avai
 Neither MCP server sends CORS headers, so with **Use llama-server proxy** off the browser blocks the connection; with it on, the Web UI reaches them through llama-server's `/cors-proxy`, which needs the API key. Missing CORS headers don't stop DNS rebinding, where a web page points its own host name at `127.0.0.1`:
 
 - The agents server checks every request's `Host` (and `Origin`, when sent) and answers only `127.0.0.1` and `localhost`, so a rebound page is refused. Its approval routes, used by the Jobs panel, also require the approval key. The panel's routes on the proxy (`/agent-jobs`) do the same Host check themselves, since the proxy rewrites Host before the agents server sees it.
-- The UVX proxy on `8001` has no such check, so a rebound page can still reach fetch, ddg-search and time.
+- The UVX proxy on `8001` is started through `mcp_guard.py`, which answers only `Host: 127.0.0.1:8001` and `localhost:8001`, so a rebound page can't reach fetch, ddg-search or time either. If you edit the UVX command in Settings, keep `python "{guard}"` in it.
 
 ---
 

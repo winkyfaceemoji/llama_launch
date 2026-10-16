@@ -37,3 +37,4 @@ Tkinter launcher (`launcher.pyw`) that starts llama-server, the system prompt pr
 - [0009](docs/adr/0009-separate-approval-key.md) The jobs panel uses its own approval key; llama API key holders can't approve plans
 - [0010](docs/adr/0010-one-model-for-chat-and-agents.md) One model serves chat and agent jobs; no separate agent model, no chat priority
 - [0011](docs/adr/0011-time-from-mcp-server.md) Exact time comes from the `time` MCP server; the Auto preset passes no `--tools`
+- [0012](docs/adr/0012-uvx-proxy-host-check.md) mcp-proxy starts through `mcp_guard.py`, which adds a Host check; mcp-proxy pinned to 0.13.0
