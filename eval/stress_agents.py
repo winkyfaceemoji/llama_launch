@@ -304,13 +304,16 @@ TOOL_PROMPTS = [
     ("explicit", "Queue the follow-up steps from agent job 20261015-021209-071b.", {"queue_steps"}),
     ("explicit", "Let the agents read the folder C:\\Users\\choua\\Pictures.", {"request_folder_access"}),
     ("implicit", "Write me a cited report comparing the latest Ryzen and Intel desktop CPUs. Take your time, run it in the background.", {"research"}),
-    ("implicit", "Tidy up C:\\Users\\choua\\Downloads\\x — sort the files into folders by type.", {"organize"}),
+    ("implicit", "Tidy up C:\\Users\\choua\\Downloads\\x — sort the files into folders by type.",
+     {"organize", "request_folder_access"}),
     ("implicit", "Make a step-by-step plan for migrating my photos to a NAS, with follow-up research tasks.", {"plan"}),
     ("implicit", "How are my background jobs doing?", {"job_status"}),
     ("implicit", "Put the PDFs in C:\\Users\\choua\\Documents\\scans into their own folder.", {"organize", "request_folder_access"}),
     ("implicit", "Undo what agent job 20261015-021209-6674 did to my files.", {"restore"}),
-    ("implicit", "Do a deep dive with sources on how llama.cpp's --fit option works.", {"research"}),
-    ("implicit", "I want a long researched write-up on Vulkan vs ROCm for AMD GPUs.", {"research"}),
+    ("implicit", "Do a deep dive with sources on how llama.cpp's --fit option works, as a report I can read later.",
+     {"research"}),
+    ("implicit", "I want a long researched write-up on Vulkan vs ROCm for AMD GPUs. No rush, I'll check back for it.",
+     {"research"}),
     ("distractor", "What is 17 times 23?", set()),
     ("distractor", "Explain recursion in two sentences.", set()),
     ("distractor", "Write a haiku about autumn.", set()),
@@ -367,9 +370,12 @@ def run(only=None, tools=True, on_job=None, chat_url=f"{PROXY}/v1/chat/completio
     research = {"R1": "What is the latest llama.cpp release number? Cite the GitHub release page.",
                 "R2": "Compare Qwen3-14B and gpt-oss-20b on coding benchmarks, with sources.",
                 "R3": "Summarise the release notes of the Zorblax 9 framework, version 9.4.2."}
-    plan_goal = "Plan a weekly backup routine for my Documents folder to an external drive."
+    plan_goals = {"P1": "Plan a weekly backup routine for my Documents folder to an external drive.",
+                  "P2": "Plan setting up a home media server on an old PC, with research follow-ups.",
+                  "P3": "Plan a monthly clean-up of C:\\Users\\choua\\Downloads\\x, sorting the files by type."}
     if only:
         research = {c: t for c, t in research.items() if c in only}
+        plan_goals = {c: g for c, g in plan_goals.items() if c in only}
 
     stop = threading.Event()
     lat, overlap = [], []
@@ -388,8 +394,8 @@ def run(only=None, tools=True, on_job=None, chat_url=f"{PROXY}/v1/chat/completio
         submit(c, "organize", folder=folder, goal=goal)
     for c, topic in research.items():
         submit(c, "research", topic=topic)
-    if not only or "P1" in only:
-        submit("P1", "plan", goal=plan_goal)
+    for c, goal in plan_goals.items():
+        submit(c, "plan", goal=goal)
     print(f"[queue] submitted {len(ids)} jobs: {ids}", flush=True)
 
     pending = set(ids)

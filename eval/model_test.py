@@ -113,7 +113,7 @@ def score_cases(results):
         "organise": [(c, *_organise(c, cases[c])) for c in ("O1", "O2", "O3", "O4", "O5") if c in cases],
         "review": [(c, *_review(c, cases[c], results)) for c in ("A1", "A2", "A3", "A4", "A5") if c in cases],
         "research": [(c, *_research(c, cases[c])) for c in ("R1", "R2", "R3") if c in cases],
-        "plan": [("P1", *_plan(cases["P1"]))] if "P1" in cases else [],
+        "plan": [(c, *_plan(cases[c])) for c in ("P1", "P2", "P3") if c in cases],
         "tool_choice": [(f"T{i}", bool(t.get("ok")),
                          f"{t.get('kind')}: {t.get('prompt', '')[:60]} -> {', '.join(t.get('calls') or []) or 'no tool'}")
                         for i, t in enumerate(results.get("tool_choice") or [], 1)],
@@ -270,7 +270,8 @@ def main():
            "agents_score": area_score(areas),
            "kinds": {k: {"percent": percent(items), "questions": items} for k, items in kinds.items()},
            "reasoning_score": area_score(kinds), "wrong": wrong,
-           "speed": speed(timings), "context": context(), "unsafe": unsafe, "unsafe_reasons": reasons}
+           "speed": speed(timings), "context": context(), "unsafe": unsafe, "unsafe_reasons": reasons,
+           "stress": results}  # raw cases and tool calls: the next test deletes the jobs they came from
     os.makedirs(RESULTS, exist_ok=True)
     path = os.path.join(RESULTS, time.strftime("%Y%m%d-%H%M%S") + ".json")
     with open(path, "w", encoding="utf-8") as f:

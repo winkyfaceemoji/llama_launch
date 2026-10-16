@@ -191,6 +191,13 @@ class ScoreCasesTests(unittest.TestCase):
         res["cases"]["P1"]["steps.json"] = [{"kind": "organize", "folder": "C:\\x", "goal": "sort"}]
         self.assertTrue(outcome(res, "plan", "P1"))
 
+    def test_every_plan_case_is_scored(self):
+        res = results()
+        res["cases"]["P2"] = web(**{"steps.json": [{"kind": "research", "topic": "media servers"}]})
+        res["cases"]["P3"] = web(**{"steps.json": []})
+        self.assertEqual([(c, ok) for c, ok, _ in model_test.score_cases(res)["plan"]],
+                         [("P1", True), ("P2", True), ("P3", False)])
+
     def test_tool_choice_uses_each_prompts_ok(self):
         res = results()
         res["tool_choice"][1]["ok"] = False
