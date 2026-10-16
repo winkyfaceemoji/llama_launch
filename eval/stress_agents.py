@@ -318,7 +318,7 @@ TOOL_PROMPTS = [
 ]
 
 
-def tool_choice():
+def tool_choice(chat_url=f"{PROXY}/v1/chat/completions"):
     agents_tools = tools_list(f"{AGENTS}/mcp")
     other = tools_list("http://127.0.0.1:8001/servers/ddg-search/mcp") + tools_list("http://127.0.0.1:8001/servers/fetch/mcp")
     tools = [{"type": "function", "function": {"name": t["name"], "description": t.get("description", ""),
@@ -329,7 +329,7 @@ def tool_choice():
     for kind, prompt, expected in TOOL_PROMPTS:
         t = time.perf_counter()
         try:
-            d = _post(f"{PROXY}/v1/chat/completions",
+            d = _post(chat_url,
                       {"messages": [{"role": "user", "content": prompt}], "tools": tools, "max_tokens": 1500},
                       {"Authorization": f"Bearer {KEY}"}, timeout=600)
             msg = d["choices"][0]["message"]
@@ -350,9 +350,9 @@ def tool_choice():
 
 # ── Main ────────────────────────────────────────────────────────────────────
 
-def main():
-    # Optional: --cases=O1,O4 runs only those cases; --no-tools skips the tool-choice round.
-    only = next((a.split("=", 1)[1].split(",") for a in sys.argv[1:] if a.startswith("--cases=")), None)
+def run(only=None, tools=True, on_job=None, chat_url=f"{PROXY}/v1/chat/completions"):
+    """Runs the cases and returns the results. on_job(job_id) is called as each job is created;
+    chat_url is where the tool-choice prompts go (the model test uses 8081, as the proxy pauses chat then)."""
     results = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), **server_info(), "pass_marks": PASS_MARKS,
                "cases": {}, "selected": only}
     shutil.rmtree(BASE, ignore_errors=True)
@@ -377,12 +377,18 @@ def main():
 
     ids = {}
     t0 = time.time()
+
+    def submit(c, tool, **args):
+        ids[c] = job_id(mcp(tool, **args))
+        if on_job and ids[c]:
+            on_job(ids[c])
+
     for c, (folder, goal) in cases.items():
-        ids[c] = job_id(mcp("organize", folder=folder, goal=goal))
+        submit(c, "organize", folder=folder, goal=goal)
     for c, topic in research.items():
-        ids[c] = job_id(mcp("research", topic=topic))
+        submit(c, "research", topic=topic)
     if not only or "P1" in only:
-        ids["P1"] = job_id(mcp("plan", goal=plan_goal))
+        submit("P1", "plan", goal=plan_goal)
     print(f"[queue] submitted {len(ids)} jobs: {ids}", flush=True)
 
     pending = set(ids)
@@ -438,7 +444,7 @@ def main():
                                  "applied_matches_plan": applied_ok, "restored_exactly": restored_ok}
         print(f"[apply] {c} applied_ok={applied_ok} restored_ok={restored_ok}", flush=True)
 
-    results["tool_choice"] = [] if "--no-tools" in sys.argv else tool_choice()
+    results["tool_choice"] = tool_choice(chat_url) if tools else []
 
     for c, jid in ids.items():
         if jid and STORE.get(jid)["state"] == "awaiting_approval":
@@ -453,6 +459,13 @@ def main():
     shutil.rmtree(OUTSIDE, ignore_errors=True)
 
     results["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    return results
+
+
+def main():
+    # Optional: --cases=O1,O4 runs only those cases; --no-tools skips the tool-choice round.
+    only = next((a.split("=", 1)[1].split(",") for a in sys.argv[1:] if a.startswith("--cases=")), None)
+    results = run(only, "--no-tools" not in sys.argv)
     os.makedirs(os.path.join(ROOT, "eval", "results"), exist_ok=True)
     path = os.path.join(ROOT, "eval", "results", time.strftime("%Y%m%d-%H%M%S") + ".json")
     with open(path, "w", encoding="utf-8") as f:
