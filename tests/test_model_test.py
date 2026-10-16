@@ -1,7 +1,11 @@
+import io
+import json
 import os
 import re
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "eval"))
@@ -261,6 +265,48 @@ class CheckAnswerTests(unittest.TestCase):
     def test_empty_answer(self):
         self.assertFalse(model_test.check_answer("", {"exact": "x"}))
         self.assertFalse(model_test.check_answer(None, {"regex": "x"}))
+
+
+class AskTests(unittest.TestCase):
+    # Decisions 1B and 2B: through the proxy with the lock's token, capped at 8192 tokens.
+    def ask(self, finish="stop", lock_text="tok-9"):
+        sent = {}
+
+        def fake_urlopen(req, timeout):
+            sent["url"], sent["headers"], sent["body"] = req.full_url, dict(req.header_items()), json.loads(req.data)
+            reply = {"choices": [{"message": {"content": "29"}, "finish_reason": finish}],
+                     "timings": {"predicted_per_second": 30.0}}
+            return io.BytesIO(json.dumps(reply).encode())
+
+        with tempfile.TemporaryDirectory() as d:
+            lock = os.path.join(d, "model_test.lock")
+            if lock_text is not None:
+                with open(lock, "w", encoding="utf-8") as f:
+                    f.write(lock_text)
+            with mock.patch.object(model_test, "LOCK", lock), mock.patch.object(model_test, "_key", return_value="k"),                     mock.patch.object(model_test.urllib.request, "urlopen", fake_urlopen):
+                answer, timings, cut_off = model_test.ask("What is 2 + 27?")
+        return sent, answer, cut_off
+
+    def test_goes_through_the_proxy_with_the_token(self):
+        sent, answer, cut_off = self.ask()
+        self.assertEqual(sent["url"], "http://127.0.0.1:8080/v1/chat/completions")
+        self.assertEqual(sent["headers"]["X-model-test"], "tok-9")
+        self.assertEqual((answer, cut_off), ("29", False))
+
+    def test_cap_and_no_sampling_fields(self):
+        body = self.ask()[0]["body"]
+        self.assertEqual(body["max_tokens"], 8192)
+        self.assertFalse({"temperature", "top_p", "top_k", "min_p", "seed"} & set(body))
+        # The proxy replaces system messages with the user's own prompt, so the format rule rides in the question.
+        self.assertEqual([m["role"] for m in body["messages"]], ["user"])
+        self.assertIn("What is 2 + 27?", body["messages"][0]["content"])
+        self.assertIn("last line", body["messages"][0]["content"])
+
+    def test_cut_off_by_the_cap_is_reported(self):
+        self.assertTrue(self.ask(finish="length")[2])
+
+    def test_without_a_lock_no_token_is_sent(self):
+        self.assertNotIn("X-model-test", self.ask(lock_text=None)[0]["headers"])
 
 
 class SpeedAndContextTests(unittest.TestCase):

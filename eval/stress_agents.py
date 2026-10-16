@@ -318,7 +318,7 @@ TOOL_PROMPTS = [
 ]
 
 
-def tool_choice(chat_url=f"{PROXY}/v1/chat/completions"):
+def tool_choice(chat_url=f"{PROXY}/v1/chat/completions", headers=None):
     agents_tools = tools_list(f"{AGENTS}/mcp")
     other = tools_list("http://127.0.0.1:8001/servers/ddg-search/mcp") + tools_list("http://127.0.0.1:8001/servers/fetch/mcp")
     tools = [{"type": "function", "function": {"name": t["name"], "description": t.get("description", ""),
@@ -331,7 +331,7 @@ def tool_choice(chat_url=f"{PROXY}/v1/chat/completions"):
         try:
             d = _post(chat_url,
                       {"messages": [{"role": "user", "content": prompt}], "tools": tools, "max_tokens": 1500},
-                      {"Authorization": f"Bearer {KEY}"}, timeout=600)
+                      {"Authorization": f"Bearer {KEY}", **(headers or {})}, timeout=600)
             msg = d["choices"][0]["message"]
             calls = [c["function"]["name"] for c in (msg.get("tool_calls") or [])]
         except Exception as e:  # record and move on
@@ -350,9 +350,10 @@ def tool_choice(chat_url=f"{PROXY}/v1/chat/completions"):
 
 # ── Main ────────────────────────────────────────────────────────────────────
 
-def run(only=None, tools=True, on_job=None, chat_url=f"{PROXY}/v1/chat/completions"):
+def run(only=None, tools=True, on_job=None, chat_url=f"{PROXY}/v1/chat/completions", chat_headers=None):
     """Runs the cases and returns the results. on_job(job_id) is called as each job is created;
-    chat_url is where the tool-choice prompts go (the model test uses 8081, as the proxy pauses chat then)."""
+    chat_url is where the tool-choice prompts go; chat_headers are added to them (the model test sends its
+    lock token, so the paused proxy lets it through with the user's system prompt)."""
     results = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), **server_info(), "pass_marks": PASS_MARKS,
                "cases": {}, "selected": only}
     shutil.rmtree(BASE, ignore_errors=True)
@@ -444,7 +445,7 @@ def run(only=None, tools=True, on_job=None, chat_url=f"{PROXY}/v1/chat/completio
                                  "applied_matches_plan": applied_ok, "restored_exactly": restored_ok}
         print(f"[apply] {c} applied_ok={applied_ok} restored_ok={restored_ok}", flush=True)
 
-    results["tool_choice"] = tool_choice(chat_url) if tools else []
+    results["tool_choice"] = tool_choice(chat_url, chat_headers) if tools else []
 
     for c, jid in ids.items():
         if jid and STORE.get(jid)["state"] == "awaiting_approval":

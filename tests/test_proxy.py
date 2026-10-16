@@ -259,6 +259,28 @@ class ProxyIntegrationTests(unittest.TestCase):
                 r, _ = self.get("GET", "/agent-jobs/panel.js")
                 self.assertEqual(r.status, 200)
 
+    def post_with(self, path, headers):
+        c = http.client.HTTPConnection("127.0.0.1", self.proxy.server_port, timeout=10)
+        c.request("POST", path, body=b'{"messages": []}', headers={"Content-Type": "application/json", **headers})
+        r = c.getresponse()
+        r.read()
+        c.close()
+        return r
+
+    def test_the_model_test_itself_gets_through_with_the_lock_token(self):
+        # The test's own requests go through the proxy so they get the user's system prompt and date (1B).
+        with tempfile.TemporaryDirectory() as d:
+            lock = os.path.join(d, "model_test.lock")
+            with open(lock, "w") as f:
+                f.write("tok-123\n")
+            with mock.patch.object(proxy, "MODEL_TEST_LOCK", lock):
+                self.assertEqual(self.post_with("/v1/chat/completions", {"X-Model-Test": "tok-123"}).status, 200)
+                self.assertEqual(self.post_with("/v1/chat/completions", {"X-Model-Test": "wrong"}).status, 503)
+                self.assertEqual(self.post_with("/v1/chat/completions", {}).status, 503)
+            open(lock, "w").close()  # an empty lock has no token: nothing gets through
+            with mock.patch.object(proxy, "MODEL_TEST_LOCK", lock):
+                self.assertEqual(self.post_with("/v1/chat/completions", {"X-Model-Test": ""}).status, 503)
+
     def test_chat_passes_without_the_lock(self):
         with mock.patch.object(proxy, "MODEL_TEST_LOCK", os.path.join(os.path.dirname(__file__), "no-such.lock")):
             for path in self.CHAT_PATHS:
