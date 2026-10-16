@@ -130,7 +130,13 @@ def final_line(answer):
     text = (answer or "").rsplit("</think>", 1)[-1]
     lines = [l.strip().strip("*`").strip() for l in text.splitlines()]
     lines = [l for l in lines if l]
-    return re.sub(r"^(?:final answer|answer)\s*:\s*", "", lines[-1], flags=re.I) if lines else ""
+    if not lines:
+        return ""
+    line = lines[-1].replace("**", "")  # bold around a label or the value: "**Answer:** 29", "Answer: **29**"
+    line = re.sub(r"^(?:final answer|answer)\s*:\s*", "", line, flags=re.I).strip("*` ")
+    # LaTeX answers (Qwen, DeepSeek): "$\boxed{29}$" -> "29"
+    boxed = re.fullmatch(r"\$*\s*\\boxed\{(.*)\}\s*\$*", line)
+    return boxed.group(1).strip() if boxed else line
 
 
 def check_answer(answer, check):
