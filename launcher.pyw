@@ -1315,7 +1315,7 @@ class TestDialog(tk.Toplevel):
         self._log.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
         self._log.pack(side="left", fill="both", expand=True)
-        self._status = tk.Label(self, text="Running… about an hour. Web UI chat is paused.",
+        self._status = tk.Label(self, text="Running… 15 to 60 minutes. Web UI chat is paused.",
                                 font=FONT_SMALL, fg=TEXT_SEC, bg=BG,
                                 wraplength=W_SETTINGS - 40, justify="left")
         self._status.pack(padx=20, anchor="w", pady=(10, 0))
@@ -2099,7 +2099,7 @@ class CommandLauncherGUI:
 
     def _start_model_test(self):
         if not messagebox.askyesno("Test this model",
-                "About an hour. Uses the GPU. Web UI chat is paused until it finishes or you stop it."):
+                "15 to 60 minutes, depending on the model. Uses the GPU. Web UI chat is paused until it finishes or you stop it."):
             return
         self.test_btn.config(state=tk.DISABLED)
         try:

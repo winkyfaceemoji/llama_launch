@@ -1,6 +1,6 @@
 """Model test: the agents stress run, 40 reasoning questions and speed, for the loaded model.
 
-The launcher's Test this model button runs it (python eval/model_test.py) while the stack is up. About an hour of GPU.
+The launcher's Test this model button runs it (python eval/model_test.py) while the stack is up. 15 to 60 minutes of GPU (gpt-oss-20b: 16 minutes).
 Writes eval/results/<timestamp>.json only once every part finished; a stopped run writes nothing.
 Pass rules are fixed here, before any run (global rules §10). Tool-choice prompts go through the proxy (8080)
 like real chat, with the token from model_test.lock, which the proxy lets through while Web UI chat is paused.
