@@ -161,6 +161,9 @@ API_KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "api_key
 # (agent_llm.AGENTS_PORT) as a fourth process; its log goes to the UVX pane.
 AGENTS_SERVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agents", "server.py")
 
+# Starts mcp-proxy with a Host check against DNS rebinding (ADR 0012).
+MCP_GUARD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_guard.py")
+
 # llama-server's own OpenAI-compatible API. Agents connect here directly,
 # bypassing the system prompt proxy on 8080.
 AGENT_API_URL = "http://127.0.0.1:8081/v1"
@@ -273,9 +276,24 @@ def load_presets(config: dict) -> dict:
     return {AUTO_PRESET: {"command": AUTO_COMMAND, "models": []}, **migrated}
 
 
-def resolve_uvx_command(cmd, config_file):
-    # {config} lets the saved UVX command survive moving the launcher folder.
-    return cmd.replace("{config}", config_file)
+def resolve_uvx_command(cmd, config_file, guard_file=MCP_GUARD):
+    # {config} and {guard} let the saved UVX command survive moving the launcher folder.
+    return cmd.replace("{config}", config_file).replace("{guard}", guard_file)
+
+
+# mcp-proxy is pinned: mcp_guard hooks how it starts uvicorn (ADR 0012).
+UVX_COMMAND = ('uv run --no-project --with mcp-proxy==0.13.0 python "{guard}" '
+               '--named-server-config "{config}" --port 8001 --stateless')
+_OLD_UVX_COMMAND = 'uvx mcp-proxy --named-server-config "{config}" --port 8001 --stateless'
+
+
+def migrate_uvx_command(config):
+    # Saved configs keep their own command, so only the untouched old default is
+    # swapped for the guarded one; an edited command is the user's and stays.
+    if config.get("uvx_command", "").strip() != _OLD_UVX_COMMAND:
+        return False
+    config["uvx_command"] = UVX_COMMAND
+    return True
 
 
 def remove_stale_agents_entry(config):
@@ -1357,10 +1375,9 @@ class CommandLauncherGUI:
             self.presets = {}
         self._open_browser = self.config.get("open_browser", True)
         self._models       = {}
-        self.uvx_command   = self.config.get(
-            "uvx_command",
-            'uvx mcp-proxy --named-server-config "{config}" --port 8001 --stateless'
-        )
+        if migrate_uvx_command(self.config):
+            save_config(self.config)
+        self.uvx_command   = self.config.get("uvx_command", UVX_COMMAND)
         self.api_key       = load_api_key(API_KEY_FILE)
         # Only the jobs panel sends this one, so llama API key holders can't approve plans (ADR 0009).
         self.approval_key  = load_api_key(agent_llm.APPROVAL_KEY_FILE)

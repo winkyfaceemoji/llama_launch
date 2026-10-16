@@ -76,6 +76,29 @@ class ResolveUvxCommandTests(unittest.TestCase):
         cmd = launcher.resolve_uvx_command('uvx mcp-proxy --named-server-config "{config}" --port 8001', r"D:\app\config.json")
         self.assertEqual(cmd, r'uvx mcp-proxy --named-server-config "D:\app\config.json" --port 8001')
 
+    def test_substitutes_guard_path(self):
+        cmd = launcher.resolve_uvx_command('python "{guard}" --named-server-config "{config}"',
+                                           r"D:\app\config.json", r"D:\app\mcp_guard.py")
+        self.assertEqual(cmd, r'python "D:\app\mcp_guard.py" --named-server-config "D:\app\config.json"')
+
+
+class MigrateUvxCommandTests(unittest.TestCase):
+    OLD = 'uvx mcp-proxy --named-server-config "{config}" --port 8001 --stateless'
+
+    def test_old_default_gets_the_host_check(self):
+        # Saved configs keep their own command; only the untouched old default is swapped (ADR 0012).
+        config = {"uvx_command": self.OLD}
+        self.assertTrue(launcher.migrate_uvx_command(config))
+        self.assertEqual(config["uvx_command"], launcher.UVX_COMMAND)
+        self.assertIn("mcp_guard.py", launcher.UVX_COMMAND.replace("{guard}", "mcp_guard.py"))
+        self.assertIn("mcp-proxy==0.13.0", launcher.UVX_COMMAND)
+
+    def test_custom_or_missing_command_is_left_alone(self):
+        for config in ({"uvx_command": self.OLD + " --allow-origin x"}, {}):
+            before = dict(config)
+            self.assertFalse(launcher.migrate_uvx_command(config))
+            self.assertEqual(config, before)
+
 
 class HealthStatusTests(unittest.TestCase):
     RUNNING = {"llama-server": None, "UVX proxy": None, "prompt proxy": None}
