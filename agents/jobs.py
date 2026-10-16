@@ -87,6 +87,24 @@ class JobStore:
                 found.append(job)
         return sorted(found, key=lambda j: j.get("created", 0), reverse=True)
 
+    def request_cancel(self, job_id):
+        # Queued: cancelled now. Running: flagged; it stops before its next model call and the
+        # worker records it. Awaiting: its plan is rejected. Applying/restoring are never cut short.
+        with self._lock:
+            try:
+                job = self.get(job_id)
+            except KeyError:
+                return f"Not cancelled: no job {job_id}."
+            state = job["state"]
+            if state not in ("queued", "running", "awaiting_approval"):
+                return f"Not cancelled: job {job_id} is {state}."
+            new_state = {"queued": "cancelled", "awaiting_approval": "rejected"}.get(state, state)
+            job.update(state=new_state, cancel_requested=True, updated=time.time())
+            if new_state != state:
+                job["note"] = "cancelled"
+            self._write(job)
+        return f"Cancelled job {job_id}." if state != "running" else f"Cancelling job {job_id} at its next turn."
+
     def cancel_unfinished(self):
         for job in self.list():
             if job["state"] in UNFINISHED:
@@ -175,3 +193,9 @@ class Worker:
                 self.store.update(job_id, state="failed", note=f"{type(e).__name__}: {e}")
             except Exception:
                 pass
+        try:  # cancelled mid-run: it keeps what it wrote, but a plan it proposed can't be approved
+            if self.store.get(job_id).get("cancel_requested"):
+                self.store.transition(job_id, ("running", "done", "failed", "awaiting_approval"), "cancelled",
+                                      note="cancelled; kept what it wrote so far")
+        except Exception:
+            pass

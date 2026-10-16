@@ -59,6 +59,42 @@ class JobStoreTests(unittest.TestCase):
             self.assertEqual(got["state"], "failed")
             self.assertIn("use Restore to undo what ran", got["note"])
 
+    def test_cancel_queued_job_is_cancelled_at_once(self):
+        job = self.store.create("research", {})
+        self.assertIn("Cancelled", self.store.request_cancel(job["id"]))
+        got = self.store.get(job["id"])
+        self.assertEqual(got["state"], "cancelled")
+        self.assertTrue(got["cancel_requested"])
+
+    def test_cancel_running_job_is_flagged_and_keeps_running(self):
+        job = self.store.create("research", {})
+        self.store.update(job["id"], state="running")
+        self.store.request_cancel(job["id"])
+        got = self.store.get(job["id"])
+        self.assertEqual(got["state"], "running")  # it stops itself at its next turn
+        self.assertTrue(got["cancel_requested"])
+
+    def test_cancel_awaiting_job_rejects_its_plan(self):
+        job = self.store.create("organize", {})
+        self.store.update(job["id"], state="awaiting_approval")
+        self.store.request_cancel(job["id"])
+        self.assertEqual(self.store.get(job["id"])["state"], "rejected")
+
+    def test_cancel_leaves_moving_and_finished_jobs_alone(self):
+        for state in ("applying", "restoring", "done", "applied", "failed"):
+            job = self.store.create("organize", {})
+            self.store.update(job["id"], state=state)
+            reply = self.store.request_cancel(job["id"])
+            self.assertIn("Not cancelled", reply)
+            self.assertIn(state, reply)
+            got = self.store.get(job["id"])
+            self.assertEqual(got["state"], state)
+            self.assertNotIn("cancel_requested", got)
+
+    def test_cancel_unknown_job(self):
+        self.assertIn("Not cancelled", self.store.request_cancel("20261014-000000-abcd"))
+        self.assertIn("Not cancelled", self.store.request_cancel(r"..\x"))
+
     def test_list_newest_first_and_skips_junk(self):
         a = self.store.create("research", {})
         time.sleep(0.01)
@@ -181,6 +217,18 @@ class WorkerTests(unittest.TestCase):
         worker.submit(job["id"])
         worker.queue.join()
         self.assertEqual(ran, [])
+
+    def test_cancel_requested_while_running_ends_cancelled_and_keeps_its_files(self):
+        def run(job):
+            self.store.request_cancel(job["id"])  # Stop pressed mid-run
+            self.store.write_text(job["id"], "result.md", "partial")
+            self.store.update(job["id"], state="done", note="cancelled")
+        worker = jobs.Worker(self.store, run)
+        job = self.store.create("research", {})
+        worker.submit(job["id"])
+        self._drain(worker)
+        self.assertEqual(self.store.get(job["id"])["state"], "cancelled")
+        self.assertEqual(self.store.read_text(job["id"], "result.md"), "partial")
 
     def _drain(self, worker):
         # Bounded join: a worker that dies leaves queue.join() blocked forever.

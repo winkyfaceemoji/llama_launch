@@ -187,6 +187,25 @@ class RunAgentTests(unittest.TestCase):
         self.assertEqual(text, "done")
 
 
+    def test_cancel_stops_before_the_next_model_call(self):
+        reply = call("echo", {"text": "hi"})
+        reply["content"] = "so far"
+        chat = Script(reply, final("never asked"))
+        # Cancelled while the model was answering: the tool call still runs, the next turn doesn't.
+        text, stop = runner.run_agent(chat, "s", "t", [self.echo_tool()], cancelled=lambda: len(chat.seen) > 0)
+        self.assertEqual((text, stop), ("so far", "cancelled"))
+        self.assertEqual(len(chat.seen), 1)
+
+    def test_cancel_also_skips_the_final_answer_after_a_cap(self):
+        two = call("echo", {"text": "x"})
+        two["tool_calls"].append({"id": "c2", "type": "function", "function": {"name": "echo", "arguments": "{}"}})
+        chat = Script(two, final("never asked"))
+        _, stop = runner.run_agent(chat, "s", "t", [self.echo_tool()], max_calls=1,
+                                   cancelled=lambda: len(chat.seen) > 0)
+        self.assertEqual(stop, "cancelled")
+        self.assertEqual(len(chat.seen), 1)
+
+
 class JobKindTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -385,6 +404,40 @@ class JobKindTests(unittest.TestCase):
         runner.run_job(job, self.ctx(Script(*replies)))
         _, last = self.store.read_steps(job["id"])
         self.assertTrue(last[-1].startswith("Stopped: stopped after 40 tool calls"))
+
+    def run_cancelled(self, job, *replies):
+        # Stop is pressed while the model answers its first turn.
+        script = Script(*replies)
+
+        def chat(messages, tools=None):
+            reply = script(messages, tools)
+            self.store.request_cancel(job["id"])
+            return reply
+        worker = jobs.Worker(self.store, lambda j: runner.run_job(j, self.ctx(chat)))
+        worker.submit(job["id"])
+        worker.queue.join()
+        return script
+
+    def test_cancelled_research_stops_at_its_next_turn_and_keeps_what_it_wrote(self):
+        job = self.store.create("research", {"topic": "t"})
+        reply = call("write_file", {"path": "notes.md", "content": "n"})
+        reply["content"] = "draft"
+        script = self.run_cancelled(job, reply, final("never asked"))
+        self.assertEqual(len(script.seen), 1)
+        got = self.store.get(job["id"])
+        self.assertEqual(got["state"], "cancelled")
+        self.assertTrue(got["note"])
+        self.assertEqual(self.store.read_text(job["id"], "result.md"), "draft")
+        self.assertTrue(os.path.exists(os.path.join(self.policy.sandbox, "notes.md")))
+
+    def test_cancelled_organize_skips_the_review_and_cannot_be_approved(self):
+        job = self.store.create("organize", {"folder": self.dl, "goal": "tidy"})
+        ops = [{"op": "remove", "path": os.path.join(self.dl, "a.pdf")}]
+        script = self.run_cancelled(job, call("propose_plan", {"operations": ops}), final("never asked"))
+        self.assertEqual(len(script.seen), 1)  # no review call either
+        self.assertEqual(self.store.get(job["id"])["state"], "cancelled")
+        self.assertIn("Not applied", runner.approve(job["id"], self.ctx(Script())))
+        self.assertTrue(os.path.exists(os.path.join(self.dl, "a.pdf")))
 
     def test_organize_without_valid_plan_fails(self):
         job = self.start("organize", {"folder": self.dl, "goal": "tidy"})

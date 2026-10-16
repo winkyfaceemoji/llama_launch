@@ -130,6 +130,8 @@ ACTIONS = {
     "reject": lambda job_id: runner.reject(job_id, ctx),
     "restore": lambda job_id: runner.undo(job_id, ctx),
     "queue": lambda job_id: runner.queue_steps(job_id, ctx, worker.submit),
+    # Launcher only (the model test's Stop): not an MCP tool, and the proxy doesn't forward it from the panel.
+    "cancel": lambda job_id: store.request_cancel(job_id),
 }
 
 

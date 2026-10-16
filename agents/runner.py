@@ -20,6 +20,7 @@ CONTEXT_CHARS = 40000
 ELIDED = "[older tool result removed to save space]"
 TRUNCATED = "\n[truncated]"
 MAX_CHECKS = 2  # times a final answer can be sent back before it is accepted as is
+CANCELLED = "cancelled"  # run_agent's stop reason after JobStore.request_cancel
 URL = re.compile(r"""https?://[^\s<>()\[\]{}"'`|]+""", re.IGNORECASE)
 # Fenced blocks (an unclosed one runs to the end) and inline code: commands and config, not citations.
 CODE = re.compile(r"(```|~~~).*?(?:\1|\Z)|`[^`\n]*`", re.DOTALL)
@@ -108,8 +109,9 @@ def _parse_args(raw):
 
 
 def run_agent(chat, system, task, tools, max_calls=MAX_CALLS, max_seconds=MAX_SECONDS, clock=time.monotonic,
-              on_step=None, check=None, max_checks=MAX_CHECKS):
-    """check(final_text) returns None to accept a final answer, or a message that sends it back (max_checks times)."""
+              on_step=None, check=None, max_checks=MAX_CHECKS, cancelled=lambda: False):
+    """check(final_text) returns None to accept a final answer, or a message that sends it back (max_checks times).
+    cancelled() is asked before each model call; when true the loop stops with stop "cancelled"."""
     schemas = [t[1] for t in tools]
     fns = {t[0]: t[2] for t in tools}
     messages = [{"role": "system", "content": system}, {"role": "user", "content": task}]
@@ -122,6 +124,8 @@ def run_agent(chat, system, task, tools, max_calls=MAX_CALLS, max_seconds=MAX_SE
         return text, reason
 
     while True:
+        if cancelled():
+            return last_text, CANCELLED
         _trim(messages)
         try:
             reply = chat(messages, schemas)
@@ -163,6 +167,8 @@ def run_agent(chat, system, task, tools, max_calls=MAX_CALLS, max_seconds=MAX_SE
         if limited:
             reason = (f"stopped after {used} tool calls" if used >= max_calls
                       else f"stopped after {max_seconds // 60} minutes")
+            if cancelled():
+                return last_text, CANCELLED
             messages.append({"role": "user", "content": "You are out of tool calls. Write your final answer now from what you have."})
             _trim(messages)
             try:
@@ -298,6 +304,10 @@ def _steps(job, ctx):
     return lambda text: ctx.store.append_step(job["id"], text)
 
 
+def _cancelled(job, ctx):
+    return lambda: bool(ctx.store.get(job["id"]).get("cancel_requested"))
+
+
 def _source_check(job, ctx, must_read):
     """A small model writes from search snippets and cites pages it never opened, so a web job's answer may cite
     only pages fetch_url read; enforced here, not just asked for in the prompt. Returns on_fetch, check, finish."""
@@ -338,7 +348,7 @@ def run_research(job, ctx):
     on_fetch, check, finish = _source_check(job, ctx, must_read=True)
     tools = web_tools(ctx.mcp_call, on_fetch) + sandbox_tools(ctx.policy)
     text, stop = run_agent(ctx.chat, _dated(RESEARCH_PROMPT), job["args"]["topic"], tools, on_step=_steps(job, ctx),
-                           check=check)
+                           check=check, cancelled=_cancelled(job, ctx))
     text, note = finish(text, stop)
     ctx.store.write_text(job["id"], "result.md", text)
     ctx.store.update(job["id"], state="done", note=note)
@@ -360,7 +370,7 @@ def run_plan(job, ctx):
     tools = web_tools(ctx.mcp_call, on_fetch) + sandbox_tools(ctx.policy) + [
         tool("propose_steps", "Save follow-up jobs for the user to queue.", steps_param, ["steps"], propose_steps)]
     text, stop = run_agent(ctx.chat, _dated(PLAN_PROMPT), job["args"]["goal"], tools, on_step=_steps(job, ctx),
-                           check=check)
+                           check=check, cancelled=_cancelled(job, ctx))
     text, note = finish(text, stop)
     ctx.store.write_text(job["id"], "result.md", text)
     ctx.store.write_json(job["id"], "steps.json", saved)
@@ -384,10 +394,13 @@ def run_organize(job, ctx):
     # No write_file: the model must not copy listed-folder contents into the sandbox, which web-enabled jobs read.
     tools = [t for t in file_tools(ctx.policy) if t[0] != "write_file"] + [
         tool("propose_plan", "Propose the full list of file operations.", ops_param, ["operations"], propose_plan)]
-    text, stop = run_agent(ctx.chat, ORGANIZE_PROMPT.format(folder=folder), goal, tools, on_step=_steps(job, ctx))
+    text, stop = run_agent(ctx.chat, ORGANIZE_PROMPT.format(folder=folder), goal, tools, on_step=_steps(job, ctx),
+                           cancelled=_cancelled(job, ctx))
     if stop:
         ctx.store.append_step(job["id"], f"Stopped: {stop}")
     ctx.store.write_text(job["id"], "result.md", text)
+    if stop == CANCELLED:
+        return  # no review call; the worker marks it cancelled
     if not proposed:
         ctx.store.update(job["id"], state="failed", note="no valid plan was proposed" + (f"; {stop}" if stop else ""))
         return
