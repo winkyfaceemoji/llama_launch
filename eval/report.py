@@ -70,6 +70,8 @@ def _details(r):
             given = _text(w.get("given"))
             if w.get("cut_off"):  # ran out of room, not a wrong answer
                 given = f'<span class="cut">cut off at the token cap</span><br>{given}'
+            elif not str(w.get("given") or "").strip():  # ended without a final answer at all
+                given = '<span class="cut">no answer</span>'
             parts.append(f"<tr><td>{_text(w.get('kind'))}</td><td>{_text(w.get('q'))}</td>"
                          f"<td>{_text(_expected(w.get('expected')))}</td><td>{given}</td></tr>")
         parts.append("</table>")

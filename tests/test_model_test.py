@@ -268,7 +268,8 @@ class CheckAnswerTests(unittest.TestCase):
 
 
 class AskTests(unittest.TestCase):
-    # Decisions 1B and 2B: through the proxy with the lock's token, capped at 8192 tokens.
+    # Reasoning goes straight to llama-server: through the proxy the user's system prompt says to search first,
+    # and with no tools offered gpt-oss ended with an empty answer (live run 2026-10-16). Capped at 8192 tokens.
     def ask(self, finish="stop", lock_text="tok-9"):
         sent = {}
 
@@ -287,17 +288,16 @@ class AskTests(unittest.TestCase):
                 answer, timings, cut_off = model_test.ask("What is 2 + 27?")
         return sent, answer, cut_off
 
-    def test_goes_through_the_proxy_with_the_token(self):
+    def test_goes_straight_to_llama_server(self):
         sent, answer, cut_off = self.ask()
-        self.assertEqual(sent["url"], "http://127.0.0.1:8080/v1/chat/completions")
-        self.assertEqual(sent["headers"]["X-model-test"], "tok-9")
+        self.assertEqual(sent["url"], "http://127.0.0.1:8081/v1/chat/completions")
+        self.assertNotIn("X-model-test", sent["headers"])  # the paused proxy isn't involved
         self.assertEqual((answer, cut_off), ("29", False))
 
     def test_cap_and_no_sampling_fields(self):
         body = self.ask()[0]["body"]
         self.assertEqual(body["max_tokens"], 8192)
         self.assertFalse({"temperature", "top_p", "top_k", "min_p", "seed"} & set(body))
-        # The proxy replaces system messages with the user's own prompt, so the format rule rides in the question.
         self.assertEqual([m["role"] for m in body["messages"]], ["user"])
         self.assertIn("What is 2 + 27?", body["messages"][0]["content"])
         self.assertIn("last line", body["messages"][0]["content"])

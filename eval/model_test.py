@@ -2,8 +2,10 @@
 
 The launcher's Test this model button runs it (python eval/model_test.py) while the stack is up. About an hour of GPU.
 Writes eval/results/<timestamp>.json only once every part finished; a stopped run writes nothing.
-Pass rules are fixed here, before any run (global rules §10). Chat requests go through the proxy (8080) like
-real chat, with the token from model_test.lock, which the proxy lets through while Web UI chat is paused.
+Pass rules are fixed here, before any run (global rules §10). Tool-choice prompts go through the proxy (8080)
+like real chat, with the token from model_test.lock, which the proxy lets through while Web UI chat is paused.
+Reasoning questions go straight to llama-server (8081): the user's system prompt says to search first, and
+with no tools offered a model then ends with an empty answer.
 No sampling settings are sent (the model's defaults); answers are capped at MAX_TOKENS.
 """
 import json
@@ -26,7 +28,6 @@ MAX_TOKENS = 8192  # a runaway answer costs a few minutes, not the 15-minute tim
 QUESTIONS = os.path.join(ROOT, "eval", "questions.json")
 RESULTS = os.path.join(ROOT, "eval", "results")
 ASK_TIMEOUT = 900
-# In the question, not a system message: the proxy replaces system messages with the user's own prompt.
 FORMAT = ("Answer the question. You may work it out first, but put the final answer alone on the last line, "
           "with no label, quotes or other text on that line.")
 
@@ -168,11 +169,10 @@ def test_headers():
 
 
 def ask(q):
-    """(answer, timings, cut_off) through the proxy; no sampling fields, so the model's defaults apply."""
+    """(answer, timings, cut_off) from llama-server; no sampling fields, so the model's defaults apply."""
     body = {"messages": [{"role": "user", "content": f"{q}\n\n{FORMAT}"}], "max_tokens": MAX_TOKENS}
-    req = urllib.request.Request(f"{PROXY}/v1/chat/completions", data=json.dumps(body).encode(), method="POST",
-                                 headers={"Content-Type": "application/json", "Authorization": f"Bearer {_key()}",
-                                          **test_headers()})
+    req = urllib.request.Request(f"{LLAMA}/v1/chat/completions", data=json.dumps(body).encode(), method="POST",
+                                 headers={"Content-Type": "application/json", "Authorization": f"Bearer {_key()}"})
     with urllib.request.urlopen(req, timeout=ASK_TIMEOUT) as r:
         d = json.loads(r.read().decode("utf-8"))
     choice = d["choices"][0]

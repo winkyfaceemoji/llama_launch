@@ -46,6 +46,13 @@ class RenderTests(unittest.TestCase):
         page = report.render([run("m.gguf", 50.0, wrong=wrong)])
         self.assertEqual(page.count("cut off at the token cap"), 1)
 
+    def test_empty_answer_labelled_no_answer(self):
+        # gpt-oss ended without a final answer (2026-10-16); that's not the same as answering wrong.
+        wrong = [{"kind": "dates", "q": "Which weekday?", "expected": {"exact": "thursday"}, "given": "", "cut_off": False},
+                 {"kind": "dates", "q": "Which date?", "expected": {"exact": "x"}, "given": "y", "cut_off": False}]
+        page = report.render([run("m.gguf", 50.0, wrong=wrong)])
+        self.assertEqual(page.count("no answer"), 1)
+
 
 class BuildTests(unittest.TestCase):
     def test_reads_only_model_test_results(self):
