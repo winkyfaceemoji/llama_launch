@@ -89,11 +89,51 @@ def _row(r):
             f'</summary><div class="body">{_details(r)}</div></details>')
 
 
+def _mean(values):
+    values = [v for v in values if isinstance(v, (int, float))]
+    return round(sum(values) / len(values), 1) if values else None
+
+
+def _spread(values):
+    # "72.7 (69.0–78.0)" for repeat runs: one run of a model can move several points (Qwen3.6: 69, 71, 78).
+    values = [v for v in values if isinstance(v, (int, float))]
+    if len(values) < 2:
+        return _mean(values)
+    return f"{_mean(values)} ({min(values):.1f}–{max(values):.1f})"
+
+
+def _model_row(model, runs):
+    runs = sorted(runs, key=lambda r: r.get("started") or "", reverse=True)
+    latest = runs[0]
+    mark = ' <span class="unsafe">unsafe</span>' if any(r.get("unsafe") for r in runs) else ""
+    count = f"{len(runs)} run" + ("s" if len(runs) > 1 else "")
+    cells = [latest.get("build"), (latest.get("started") or "")[:10], _spread([r.get("agents_score") for r in runs]),
+             _spread([r.get("reasoning_score") for r in runs]),
+             _mean([(r.get("speed") or {}).get("predicted_per_second") for r in runs]), latest.get("context")]
+    spans = "".join(f'<span data-l="{l}">{_text(c)}</span>' for l, c in zip(COLUMNS[1:], cells))
+    return (f'<details><summary class="row"><span class="model">{_text(model)} · {count}{mark}</span>{spans}'
+            f'</summary><div class="body">{"".join(_row(r) for r in runs)}</div></details>')
+
+
+def _by_agents(rows):
+    return sorted(rows, key=lambda kv: _mean([r.get("agents_score") for r in kv[1]]) or 0, reverse=True)
+
+
 def render(runs):
-    """The report page for these result dicts, best agents score first."""
-    runs = sorted(runs, key=lambda r: r.get("agents_score") or 0, reverse=True)
+    """The report page for these result dicts: one row per model for the current test version (repeat runs
+    averaged, best agents score first), then runs from older test versions, which aren't comparable."""
+    current = max((r.get("test_version", 1) for r in runs), default=1)
+    models = {}
+    for r in runs:
+        if r.get("test_version", 1) == current:
+            models.setdefault(r.get("model"), []).append(r)
+    older = sorted((r for r in runs if r.get("test_version", 1) != current),
+                   key=lambda r: r.get("agents_score") or 0, reverse=True)
     head = "".join(f"<span>{c}</span>" for c in COLUMNS)
-    rows = "".join(_row(r) for r in runs) or "<p>No complete model tests yet.</p>"
+    rows = "".join(_model_row(m, rs) for m, rs in _by_agents(models.items())) or "<p>No complete model tests yet.</p>"
+    if older:
+        rows += ("<h3>Older test versions</h3><p class=\"note\">Scored by an earlier version of the test, so not "
+                 "comparable with the rows above. Rerun a model to compare it.</p>" + "".join(_row(r) for r in older))
     return ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
             f"<title>Model test report</title><style>{CSS}</style></head><body><h1>Model test report</h1>"

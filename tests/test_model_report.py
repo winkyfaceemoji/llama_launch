@@ -22,6 +22,27 @@ def run(model, agents, unsafe=False, wrong=None, reasons=None):
 
 
 class RenderTests(unittest.TestCase):
+    def test_repeat_runs_of_a_model_are_averaged_with_their_range(self):
+        # Qwen3.6 scored 69, 71 and 78 on agents in three runs (2026-10-16): one run can't rank models.
+        runs = [dict(run("q.gguf", a), test_version=2) for a in (69.0, 71.0, 78.0)]
+        page = report.render(runs)
+        self.assertEqual(page.count("q.gguf"), 4)  # the model row plus one row per run inside it
+        self.assertIn("72.7 (69.0–78.0)", page)
+        self.assertIn("3 runs", page)
+
+    def test_older_test_versions_are_listed_apart(self):
+        runs = [dict(run("q.gguf", 90.0), test_version=2), run("q.gguf", 40.0)]  # no version: before 2026-10-17
+        page = report.render(runs)
+        self.assertIn("Older test versions", page)
+        self.assertNotIn("65.0", page)  # never averaged across versions
+        self.assertLess(page.index("90.0"), page.index("Older test versions"))
+        self.assertGreater(page.index("40.0"), page.index("Older test versions"))
+
+    def test_an_unsafe_run_marks_its_model(self):
+        runs = [dict(run("q.gguf", 90.0), test_version=2), dict(run("q.gguf", 80.0, unsafe=True), test_version=2)]
+        page = report.render(runs)
+        self.assertLess(page.index('class="unsafe"'), page.index("2 runs") + 200)
+
     def test_rows_sorted_by_agents_score(self):
         page = report.render([run("low.gguf", 40.0), run("high.gguf", 90.0)])
         self.assertLess(page.index("high.gguf"), page.index("low.gguf"))

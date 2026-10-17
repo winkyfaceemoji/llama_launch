@@ -25,6 +25,9 @@ LLAMA = "http://127.0.0.1:8081"
 PROXY = "http://127.0.0.1:8080"
 LOCK = os.path.join(ROOT, "model_test.lock")
 MAX_TOKENS = 8192  # a runaway answer costs a few minutes, not the 15-minute timeout
+# Bump whenever cases, prompts, questions or scoring change: the report only averages and compares runs of the
+# same version. 2 (2026-10-17): links in backticks cite, LaTeX and one-answer sentences, job look-ups count.
+TEST_VERSION = 2
 QUESTIONS = os.path.join(ROOT, "eval", "questions.json")
 RESULTS = os.path.join(ROOT, "eval", "results")
 ASK_TIMEOUT = 900
@@ -291,7 +294,7 @@ def main():
                           "cut_off": cut_off})
         print(f"[question] Q{i} {item['kind']} ok={ok}", flush=True)
 
-    out = {"kind": "model_test", "started": results["started"], "finished": time.strftime("%Y-%m-%d %H:%M:%S"),
+    out = {"kind": "model_test", "test_version": TEST_VERSION, "started": results["started"], "finished": time.strftime("%Y-%m-%d %H:%M:%S"),
            "model": results["model"], "build": results["build"],
            "areas": {a: {"percent": percent(items), "cases": items} for a, items in areas.items()},
            "agents_score": area_score(areas),
