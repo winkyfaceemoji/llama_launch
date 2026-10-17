@@ -252,8 +252,16 @@ def _same_page(url):
     return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), parts.query, ""))
 
 
+def _outside_code(match):
+    # A span that is only a link (URL: `https://...`) is a citation written as code; a URL in a command isn't.
+    span = match.group(0)
+    if span.startswith("`") and not span.startswith("```") and URL.fullmatch(span.strip("` ")):
+        return span.strip("` ")
+    return " "
+
+
 def cited_urls(text):
-    return list(dict.fromkeys(_same_page(u) for u in URL.findall(CODE.sub(" ", text or ""))))
+    return list(dict.fromkeys(_same_page(u) for u in URL.findall(CODE.sub(_outside_code, text or ""))))
 
 
 RESEARCH_PROMPT = (

@@ -292,6 +292,12 @@ class JobKindTests(unittest.TestCase):
         self.assertEqual(runner.cited_urls(text), ["https://x.test/a", "https://x.test/d"])
         self.assertEqual(runner.cited_urls("```\nhttps://x.test/a\n(unclosed fence)"), [])
 
+    def test_a_link_alone_in_backticks_is_a_citation(self):
+        # Qwen3.6 and gpt-oss list sources as URL: `https://...` (model tests, 2026-10-16); that's a citation,
+        # unlike a URL inside a command.
+        text = "Sources:\n1. Qwen3 report. URL: `https://x.test/a`\n2. Run `curl https://x.test/c` to check.\n"
+        self.assertEqual(runner.cited_urls(text), ["https://x.test/a"])
+
     def test_plan_with_a_command_url_is_not_sent_back(self):
         job = self.start("plan", {"goal": "g"})
         chat = Script(call("fetch_url", {"url": "https://x.test/a"}),
