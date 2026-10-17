@@ -291,6 +291,35 @@ class CheckAnswerTests(unittest.TestCase):
                           (7, "162 square cm"), (22, "7,5,3,1."), (23, "party starts at 9 tonight")):
             self.assertTrue(model_test.check_answer(answer, questions[i]["check"]), (i, answer))
 
+    def test_latex_answers(self):
+        # Ministral wrote the right answer to the dice question as \(\frac{1}{9}\) (model tests, 2026-10-16).
+        for answer in (r"\(\frac{1}{9}\)", r"\[ \frac{1}{9} \]", r"$\frac{1}{9}$", r"\(\boxed{\frac{1}{9}}\)",
+                       r"\(\dfrac{1}{9}\)"):
+            self.assertTrue(model_test.check_answer(answer, {"regex": r"^1\s*/\s*9\.?$"}), answer)
+        self.assertTrue(model_test.check_answer(r"\(48\)", {"regex": r"^48$"}))
+
+    def test_a_sentence_with_one_answer_counts(self):
+        # Decision 2A (2026-10-16): score the reasoning, not the formatting, when the last line holds one answer.
+        cases = [("The largest of the three is 48.", r"^48\.?$", "maths"),
+                 ("Thus, 1 May 2025 was a Thursday.", r"^thursday\.?$", "dates"),
+                 ("So the smallest number of socks you must take out is 4.", r"^4( socks)?\.?$", "logic"),
+                 ("Day 30 is 2024-02-29.", r"^2024-02-29$", "dates"),
+                 ("It is 17:30 there.", r"^17:30$", "dates")]
+        for answer, regex, kind in cases:
+            self.assertTrue(model_test.check_answer(answer, {"regex": regex}, kind), answer)
+
+    def test_a_sentence_with_several_answers_does_not(self):
+        cases = [("It is Tuesday or Thursday.", r"^thursday\.?$", "dates"),
+                 ("30 (total) - 25 (at least one sport) = 5", r"^5( students)?\.?$", "logic"),
+                 ("Between 2024-02-28 and 2024-02-29.", r"^2024-02-29$", "dates"),
+                 ("The largest is 48, not 46.", r"^48\.?$", "maths")]
+        for answer, regex, kind in cases:
+            self.assertFalse(model_test.check_answer(answer, {"regex": regex}, kind), answer)
+
+    def test_instructions_stay_strict(self):
+        # Following the format is the point of these.
+        self.assertFalse(model_test.check_answer("The list is 9;18;27;36;", {"regex": r"^9;18;27;36;$"}, "instructions"))
+
     def test_empty_answer(self):
         self.assertFalse(model_test.check_answer("", {"exact": "x"}))
         self.assertFalse(model_test.check_answer(None, {"regex": "x"}))

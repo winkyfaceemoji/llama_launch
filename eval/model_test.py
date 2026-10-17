@@ -155,16 +155,43 @@ def final_line(answer):
         return ""
     line = lines[-1].replace("**", "")  # bold around a label or the value: "**Answer:** 29", "Answer: **29**"
     line = re.sub(r"^(?:final answer|answer)\s*:\s*", "", line, flags=re.I).strip("*` ")
-    # LaTeX answers (Qwen, DeepSeek): "$\boxed{29}$" -> "29"
-    boxed = re.fullmatch(r"\$*\s*\\boxed\{(.*)\}\s*\$*", line)
-    return boxed.group(1).strip() if boxed else line
+    return _plain_latex(line)
 
 
-def check_answer(answer, check):
-    got = final_line(answer)
+def _plain_latex(line):
+    # LaTeX answers (Qwen, DeepSeek, Ministral): "$\boxed{29}$" -> "29", "\(\frac{1}{9}\)" -> "1/9"
+    line = re.sub(r"^\\[(\[]|\\[)\]]$", "", line.strip()).strip().strip("$").strip()
+    line = re.sub(r"^\\[(\[]|\\[)\]]$", "", line).strip()
+    line = re.sub(r"\\boxed\{(.*)\}", r"\1", line)
+    return re.sub(r"\\d?frac\{([^{}]+)\}\{([^{}]+)\}", r"\1/\2", line).strip()
+
+
+# One-answer sentences (decision 2A, 2026-10-16): "Thus, 1 May 2025 was a Thursday." counts as "Thursday" when
+# it is the only weekday on the line. Dates and times are taken out before numbers, so 2024-02-29 isn't 3 numbers.
+_CANDIDATES = (r"\b\d{4}-\d{2}-\d{2}\b", r"\b\d{1,2}:\d{2}\b",
+               r"\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+               r"\$?\d[\d,]*(?:\.\d+)?(?:\s*/\s*\d+)?")
+
+
+def _matches(got, check):
     if "exact" in check:
         return got.casefold() == check["exact"].strip().casefold()
     return bool(re.search(check["regex"], got, re.I))
+
+
+def check_answer(answer, check, kind=None):
+    """True if the final line is the answer. With a kind other than "instructions", a sentence also counts when
+    it holds exactly one answer of some type (date, time, weekday or number) and that one matches."""
+    got = final_line(answer)
+    if _matches(got, check) or kind in (None, "instructions"):
+        return _matches(got, check)
+    rest = got
+    for pattern in _CANDIDATES:
+        found = re.findall(pattern, rest, re.I)
+        rest = re.sub(pattern, " ", rest, flags=re.I)
+        if len(found) == 1 and _matches(found[0].strip(), check):
+            return True
+    return False
 
 
 def _key():
@@ -254,7 +281,7 @@ def main():
             answer, t, cut_off = ask(item["q"])
         except Exception as e:  # record and move on, as the tool-choice round does
             answer, t, cut_off = f"ERROR: {e}", {}, False
-        ok = check_answer(answer, item["check"])
+        ok = check_answer(answer, item["check"], item["kind"])
         given = final_line(answer)[:300]
         kinds.setdefault(item["kind"], []).append((f"Q{i}", ok, given))
         timings.append(t)
