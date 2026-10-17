@@ -382,6 +382,18 @@ class SpeedAndContextTests(unittest.TestCase):
         self.assertIsNone(model_test.n_ctx({}))
 
 
+class ToolPromptTests(unittest.TestCase):
+    def test_acting_on_a_named_job_may_look_it_up_first(self):
+        # Ministral answered "queue the steps from job X" with job_result, Qwen3.6 "undo job X" with job_status
+        # (model tests, 2026-10-16): checking the job before acting on it is a right first move.
+        import stress_agents
+        named = [(p, e) for kind, p, e in stress_agents.TOOL_PROMPTS
+                 if re.search(r"\bjob \d{8}-\d{6}-[0-9a-f]{4}", p) and kind != "distractor"]
+        self.assertGreaterEqual(len(named), 4)
+        for prompt, expected in named:
+            self.assertTrue({"job_status", "job_result"} <= expected, prompt)
+
+
 class QuestionsFileTests(unittest.TestCase):
     def test_schema(self):
         items = model_test.load_questions()

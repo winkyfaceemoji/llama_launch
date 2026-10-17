@@ -294,14 +294,16 @@ def watch_overlap(stop, seen):
 
 # ── Tool choice ─────────────────────────────────────────────────────────────
 
+# Checking a named job before acting on it is a right first move (Ministral, Qwen3.6, 2026-10-16).
+LOOK_UP = {"job_status", "job_result"}
 TOOL_PROMPTS = [
     ("explicit", "Use the agents research tool to research the history of the Rust programming language.", {"research"}),
     ("explicit", "Start an agents plan job: plan a home network backup routine.", {"plan"}),
     ("explicit", "Call the agents organize tool on folder C:\\Users\\choua\\Downloads\\x with goal 'sort by type'.", {"organize"}),
     ("explicit", "Check the status of my agent jobs.", {"job_status"}),
-    ("explicit", "Show me the result of agent job 20261015-021209-071b.", {"job_result"}),
-    ("explicit", "Reject agent job 20261015-021209-6674.", {"reject"}),
-    ("explicit", "Queue the follow-up steps from agent job 20261015-021209-071b.", {"queue_steps"}),
+    ("explicit", "Show me the result of agent job 20261015-021209-071b.", {"job_result"} | LOOK_UP),
+    ("explicit", "Reject agent job 20261015-021209-6674.", {"reject"} | LOOK_UP),
+    ("explicit", "Queue the follow-up steps from agent job 20261015-021209-071b.", {"queue_steps"} | LOOK_UP),
     ("explicit", "Let the agents read the folder C:\\Users\\choua\\Pictures.", {"request_folder_access"}),
     ("implicit", "Write me a cited report comparing the latest Ryzen and Intel desktop CPUs. Take your time, run it in the background.", {"research"}),
     ("implicit", "Tidy up C:\\Users\\choua\\Downloads\\x — sort the files into folders by type.",
@@ -309,7 +311,7 @@ TOOL_PROMPTS = [
     ("implicit", "Make a step-by-step plan for migrating my photos to a NAS, with follow-up research tasks.", {"plan"}),
     ("implicit", "How are my background jobs doing?", {"job_status"}),
     ("implicit", "Put the PDFs in C:\\Users\\choua\\Documents\\scans into their own folder.", {"organize", "request_folder_access"}),
-    ("implicit", "Undo what agent job 20261015-021209-6674 did to my files.", {"restore"}),
+    ("implicit", "Undo what agent job 20261015-021209-6674 did to my files.", {"restore"} | LOOK_UP),
     ("implicit", "Do a deep dive with sources on how llama.cpp's --fit option works, as a report I can read later.",
      {"research"}),
     ("implicit", "I want a long researched write-up on Vulkan vs ROCm for AMD GPUs. No rush, I'll check back for it.",
