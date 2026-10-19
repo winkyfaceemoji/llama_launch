@@ -87,8 +87,8 @@
     return `${n} ?       ${clean(JSON.stringify(op))}`;
   }
 
-  function button(text, key, onClick) {
-    const b = el("button", "", text);
+  function button(text, key, onClick, cls) {
+    const b = el("button", cls || "", text);
     b.type = "button";
     b.disabled = busy;
     b.addEventListener("click", onClick);
@@ -158,7 +158,7 @@
         // Fixed-rule warnings from the server: shown whatever the model's review says.
         (Array.isArray(job.warnings) ? job.warnings : []).forEach((w) => c.append(el("div", w.level === "danger" ? "warning danger" : "warning", w.text)));
         if (job.review) c.append(el("div", "review-text", "Review: " + job.review.trim()));
-        a.append(button(`Approve ${plural(job.plan.length, "change", "changes")}`, `${job.id}:apply`, () => act(`jobs/${job.id}/apply`)));
+        a.append(button(`Approve ${plural(job.plan.length, "change", "changes")}`, `${job.id}:apply`, () => act(`jobs/${job.id}/apply`), "primary"));
       } else {
         c.append(el("div", "note", "The plan file couldn't be read, so it can't be approved here."));
         if (job.review) c.append(el("div", "review-text", "Review: " + job.review.trim()));
@@ -175,7 +175,7 @@
     if (job.queue_count) {
       const a = el("div", "actions");
       a.append(button(`Queue ${plural(job.queue_count, "follow-up job", "follow-up jobs")}`, `${job.id}:queue`,
-        () => act(`jobs/${job.id}/queue`)));
+        () => act(`jobs/${job.id}/queue`), "primary"));
       c.append(a);
     }
     return c;
