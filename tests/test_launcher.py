@@ -659,5 +659,33 @@ class RemapColorsTests(unittest.TestCase):
         self.assertEqual(launcher.remap_colors(options, self.OLD, self.NEW), {})
 
 
+class TrimLogTests(unittest.TestCase):
+    def setUp(self):
+        import tkinter as tk
+        try:
+            self.root = tk.Tk()
+        except tk.TclError as e:
+            self.skipTest(f"no display: {e}")
+        self.root.withdraw()
+        self.text = tk.Text(self.root)
+
+    def tearDown(self):
+        self.root.destroy()
+
+    def lines(self):
+        return self.text.get("1.0", "end-1c").splitlines()
+
+    def test_keeps_the_newest_lines(self):
+        for i in range(12):
+            self.text.insert("end", f"line {i}\n")
+            launcher.trim_log(self.text, 5)
+        self.assertEqual(self.lines(), [f"line {i}" for i in range(7, 12)])
+
+    def test_leaves_a_short_log_alone(self):
+        self.text.insert("end", "a\nb\n")
+        launcher.trim_log(self.text, 5)
+        self.assertEqual(self.lines(), ["a", "b"])
+
+
 if __name__ == "__main__":
     unittest.main()

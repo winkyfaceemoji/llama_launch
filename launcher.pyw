@@ -190,6 +190,7 @@ H_SETTINGS_UVX  = 550   # settings dialog, UVX expanded
 H_ROLLBACK      = 44    # added to both while the roll back row shows
 W_SETTINGS      = 460   # settings dialog width
 H_RUNNING   = 750   # height of the running/log view
+LOG_MAX_LINES = 5000  # lines each log pane keeps; older ones are dropped so a long session stays responsive
 
 
 # ============================================================
@@ -903,6 +904,13 @@ def apply_theme(root, name):
             pass  # ttk widgets: apply_ttk_style covers them
         if isinstance(widget, (tk.Tk, tk.Toplevel)):
             set_dark_title_bar(widget, name == "dark")
+
+
+def trim_log(widget, max_lines):
+    # Drop a Text widget's oldest lines beyond max_lines (the text ends with a newline).
+    lines = int(widget.index("end-1c").split(".")[0]) - 1
+    if lines > max_lines:
+        widget.delete("1.0", f"{lines - max_lines + 1}.0")
 
 
 def apply_ttk_style():
@@ -2457,6 +2465,7 @@ class CommandLauncherGUI:
         # Append one line to a log pane. Safe to call from any thread via .after().
         widget.config(state=tk.NORMAL)
         widget.insert("end", text + "\n")
+        trim_log(widget, LOG_MAX_LINES)
         if self._autoscroll_var.get():
             widget.see("end")
         widget.config(state=tk.DISABLED)
