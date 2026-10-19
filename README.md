@@ -45,7 +45,7 @@ pythonw launcher.pyw
 
 On the first launch, a setup screen asks you to locate your **models folder** — the directory where your `.gguf` files live. This path is saved to `config.json`. Make sure `llama-server` is on your system `PATH` so the launcher can find it regardless of working directory.
 
-Click **⚙ Settings** in the top-right corner at any time to update the models folder path, toggle the Web UI option, or edit the UVX proxy command.
+Click **Settings** in the top-right corner at any time to update the models folder path, toggle the Web UI option, or edit the UVX proxy command.
 
 ---
 
@@ -109,7 +109,7 @@ Closing the window while servers are running minimizes to the system tray. Right
 
 ## Settings
 
-Click **⚙ Settings** to open the settings dialog, which has two sections:
+Click **Settings** to open the settings dialog, which has two sections:
 
 ### Llama.cpp folder
 The directory scanned for `.gguf` model files and used as the working directory when launching `llama-server`. Use **Browse** to pick a folder.
@@ -117,6 +117,7 @@ The directory scanned for `.gguf` model files and used as the working directory 
 ### Launch options
 
 - **Web UI** — set to **Yes** to automatically open `http://127.0.0.1:8080/` in the browser once the server comes online. Set to **No** to skip this. The choice is saved between launches and has no other effect.
+- **Theme** — **System** (the default) follows Windows' light or dark setting and switches when Windows does; **Light** and **Dark** stay put. It applies at once to the launcher and its dialogs. The Jobs panel follows the Web UI's own theme setting instead.
 - **UVX Settings** — click **▶ Show command** to expand and edit the command that starts mcp-proxy. Changes are saved when you click **Save**.
 - **llama.cpp** — **Roll back to bNNNN** shows after an update, while the servers are stopped. See [Updating llama.cpp](#updating-llamacpp).
 
@@ -130,7 +131,7 @@ This needs llama.cpp installed through WinGet (package `ggml.llamacpp`). The Web
 - **Servers stopped:** Windows locks a running `llama-server.exe`, so **Update** and roll back only work while the servers are stopped.
 - **Build check:** right after the update, the launcher starts the new build once on the spare port `18081` with the selected model and the API key, and checks that it reports the new version, comes online, answers a chat with the key, refuses chat, `/tools` and `/cors-proxy` without the key (also from a foreign web page), and logs the context size `--fit` picked. This uses the GPU for about 30 seconds. With no model selected, only the version is checked.
 - **Automatic roll back:** if any check fails, the launcher reinstalls the previous build and shows which check failed.
-- **Roll back by hand:** **⚙ Settings → llama.cpp → Roll back to bNNNN** reinstalls the build you had before the last update, then runs the build check (it only reports; there's nothing older to fall back to). Afterwards the startup notice offers the newer build again.
+- **Roll back by hand:** **Settings → llama.cpp → Roll back to bNNNN** reinstalls the build you had before the last update, then runs the build check (it only reports; there's nothing older to fall back to). Afterwards the startup notice offers the newer build again.
 
 ---
 
@@ -208,7 +209,7 @@ The chat model in the Web UI can start background jobs that run on your local mo
 
 1. Launch the server. The launcher starts the agents server itself on port `8002`. The first launch takes a little longer while `uv` installs the `mcp` package; the UVX pane shows its progress on lines marked `[agents]`.
 2. In the Web UI's **MCP Servers** page, add `http://127.0.0.1:8002/mcp` and switch on **Use llama-server proxy**, as for the other servers (see [MCP web UI setup](#mcp-web-ui-setup)). If you added the old `http://127.0.0.1:8001/servers/agents/mcp` before, delete it.
-3. In the launcher, open **⚙ Settings → Agent folders → Manage…** and add the local folders agents may read and organise. The chat model can also ask for a folder with `request_folder_access`; approving that tool call adds it.
+3. In the launcher, open **Settings → Agent folders → Manage…** and add the local folders agents may read and organise. The chat model can also ask for a folder with `request_folder_access`; approving that tool call adds it.
 4. Paste your [API key](#api-key) into the Web UI under **Settings → General** if you haven't, and the [approval key](#approval-key) into the Jobs panel the first time it asks.
 
 Leave the Web UI's per-tool confirmation on for `organize`, `restore`, `queue_steps` and `request_folder_access`, and check that it really asks before each of them (no "always allow"). That confirmation is your approval for those calls: `organize` reads your listed folders into its report, `restore` moves files, `queue_steps` starts the jobs a plan proposed, and `request_folder_access` widens what agents can read.

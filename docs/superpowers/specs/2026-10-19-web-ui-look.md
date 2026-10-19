@@ -31,7 +31,7 @@ Make the launcher window, its dialogs and the Jobs panel look like the llama Web
   - Model and Preset sit in boxes with a 1px border on the window background (2A).
   - Section labels and log pane headers become muted sentence case ("Model", "llama-server") with no blue stripe.
   - Side padding goes to about 24px and rows get a little more space; the fixed heights in SECTION 1 grow to fit. The row order and window width stay the same.
-- **Buttons are monochrome, except Launch and Exit** (round 3, 3B). Ghost and outline buttons everywhere else, Test included. Launch is a filled muted green tuned to each theme; Exit is filled with the destructive red. Delete keeps red text.
+- **Buttons are monochrome, except Launch and Exit** (round 3, 3B). Ghost and outline buttons everywhere else, Test included, except each dialog's main action (Save, Confirm, Add folder…, Update), which stays filled primary (review, 1A). Launch is a filled muted green tuned to each theme; Exit is filled with the destructive red. Delete keeps red text.
 - **All dialogs get the full treatment** (round 4, 3A): Settings, Preset editor, Folders, Update and Test.
 - **The Jobs panel moves to the same neutral greys** (round 2), in both `panel.css` and the Jobs button styles in `inject.js`. Its status chips (amber, green, red) stay, retuned to sit on the greys (round 4, 2A).
 - **The Jobs panel follows the Web UI's own theme** (round 5, 1B). `inject.js` watches the `dark` class on the page's `<html>` and posts it to the iframe; the panel switches palette on that message rather than on `prefers-color-scheme`.

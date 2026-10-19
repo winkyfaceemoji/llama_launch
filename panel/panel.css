@@ -1,12 +1,14 @@
-:root{color-scheme:light dark;--bg:#faf9f5;--surface:#ffffff;--surface-2:#f0eee6;--text:#1f1e1d;--text-2:#5e5d59;--text-3:#6b6a64;
-  --border:rgba(31,30,29,.15);--border-strong:rgba(31,30,29,.3);
-  --accent-bg:#e6f1fb;--accent-text:#0c447c;--warn-bg:#faeeda;--warn-text:#633806;--warn-border:#ef9f27;
-  --ok-bg:#eaf3de;--ok-text:#27500a;--bad-bg:#fcebeb;--bad-text:#791f1f;--muted-bg:#f1efe8;--muted-text:#444441;
+/* The llama Web UI's neutral greys. panel.js sets .dark on <html>: from the Web UI's own theme when embedded,
+   else from prefers-color-scheme. */
+:root{color-scheme:light;--bg:#fafafa;--surface:#ffffff;--surface-2:#f0f0f0;--text:#0a0a0a;--text-2:#525252;--text-3:#6b6b6b;
+  --border:rgba(0,0,0,.12);--border-strong:rgba(0,0,0,.25);
+  --accent-bg:#e6efff;--accent-text:#1e3a8a;--warn-bg:#fef3c7;--warn-text:#78350f;--warn-border:#f59e0b;
+  --ok-bg:#dcfce7;--ok-text:#14532d;--bad-bg:#fee2e2;--bad-text:#7f1d1d;--muted-bg:#f0f0f0;--muted-text:#404040;
   --mono:ui-monospace,"Cascadia Mono",Consolas,monospace}
-@media (prefers-color-scheme:dark){:root{--bg:#262624;--surface:#30302e;--surface-2:#1f1e1d;--text:#faf9f5;--text-2:#c2c0b6;
-  --text-3:#9c9a92;--border:rgba(250,249,245,.15);--border-strong:rgba(250,249,245,.3);
-  --accent-bg:#0c447c;--accent-text:#e6f1fb;--warn-bg:#633806;--warn-text:#faeeda;--warn-border:#ba7517;
-  --ok-bg:#27500a;--ok-text:#eaf3de;--bad-bg:#791f1f;--bad-text:#fcebeb;--muted-bg:#444441;--muted-text:#f1efe8}}
+:root.dark{color-scheme:dark;--bg:#141414;--surface:#1c1c1c;--surface-2:#262626;--text:#fafafa;--text-2:#c4c4c4;
+  --text-3:#a1a1a1;--border:rgba(255,255,255,.12);--border-strong:rgba(255,255,255,.25);
+  --accent-bg:#1e3a5f;--accent-text:#dbeafe;--warn-bg:#451a03;--warn-text:#fde68a;--warn-border:#b45309;
+  --ok-bg:#14391f;--ok-text:#bbf7d0;--bad-bg:#4c1010;--bad-text:#fecaca;--muted-bg:#262626;--muted-text:#e5e5e5}
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
 body{background:var(--bg);color:var(--text);font:400 13px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;

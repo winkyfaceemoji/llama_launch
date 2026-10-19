@@ -88,6 +88,8 @@ import pathlib
 import threading
 import urllib.request
 import time
+import ctypes
+import winreg
 from agents import jobs as agent_jobs, paths as agent_paths, llm as agent_llm
 
 
@@ -115,21 +117,62 @@ except Exception:
 # easy to find and change without touching any logic.
 # ============================================================
 
-# Tokyo Night color palette — a dark blue-grey theme
-BG        = "#1a1b26"
-BG_PANEL  = "#24283b"
-BG_INPUT  = "#1f2335"
-ACCENT    = "#7aa2f7"
-SUCCESS   = "#9ece6a"
-DANGER    = "#f7768e"
-TEXT_PRI  = "#c0caf5"
-TEXT_SEC  = "#a9b1d6"
-TEXT_MUT  = "#565f89"
-BORDER    = "#292e42"
+# Neutral greys from the llama Web UI, light and dark. set_palette() rebinds the
+# module constants (BG, TEXT_PRI, ...) to one of them. Every colour must be unique
+# within its palette: apply_theme() finds a widget's role by its colour, which is why
+# BG_PANEL is one step off BG.
+PALETTES = {
+    "light": {
+        "BG":            "#ffffff",
+        "BG_PANEL":      "#fefefe",   # boxes
+        "BG_INPUT":      "#f5f5f5",
+        "HOVER":         "#eeeeee",
+        "BORDER":        "#e5e5e5",
+        "ACCENT":        "#171717",   # primary: filled buttons, selection, links
+        "TEXT_PRI":      "#0a0a0a",
+        "TEXT_SEC":      "#404040",
+        "TEXT_MUT":      "#6b6b6b",
+        "SUCCESS":       "#15803d",
+        "SUCCESS_HOVER": "#166534",
+        "DANGER":        "#e7000b",
+        "DANGER_HOVER":  "#c10007",
+        "WARN":          "#b45309",
+    },
+    "dark": {
+        "BG":            "#0d0d0d",
+        "BG_PANEL":      "#0e0e0e",
+        "BG_INPUT":      "#171717",
+        "HOVER":         "#262626",
+        "BORDER":        "#2e2e2e",
+        "ACCENT":        "#e5e5e5",
+        "TEXT_PRI":      "#fafafa",
+        "TEXT_SEC":      "#d4d4d4",
+        "TEXT_MUT":      "#a1a1a1",
+        "SUCCESS":       "#22a35a",
+        "SUCCESS_HOVER": "#1e8f4f",
+        "DANGER":        "#ff6467",
+        "DANGER_HOVER":  "#ff4d50",
+        "WARN":          "#fbbf24",
+    },
+}
+THEMES = ("system", "light", "dark")   # the Settings choice; resolve_theme() turns it into a palette name
+_palette = {}                          # the current palette's colours, by role
+CURRENT_THEME = None                   # "light" or "dark"
+
+
+def set_palette(name):
+    # Rebind the colour constants. Code reads them when it builds a widget, so set this first.
+    global CURRENT_THEME
+    _palette.clear()
+    _palette.update(PALETTES[name])
+    globals().update(_palette)
+    CURRENT_THEME = name
+
+
+set_palette("dark")
 
 # Fonts
 FONT_TITLE  = ("Segoe UI", 13, "bold")
-FONT_LABEL  = ("Segoe UI", 9, "bold")
 FONT_SMALL  = ("Segoe UI", 9)
 FONT_BTN    = ("Segoe UI", 10, "bold")
 FONT_BTN_SM = ("Segoe UI", 9)
@@ -140,9 +183,9 @@ FONT_LOG    = ("Cascadia Code", 10)
 W           = 480
 H_SETUP     = 280    # height of the first-run setup screen
 H_CONFIG    = 270    # height of the main config view
-H_NOTICE    = 66     # added while the llama.cpp update notice shows
-H_SETTINGS      = 419   # settings dialog, UVX collapsed
-H_SETTINGS_UVX  = 509   # settings dialog, UVX expanded
+H_NOTICE    = 70     # added while the llama.cpp update notice shows
+H_SETTINGS      = 460   # settings dialog, UVX collapsed
+H_SETTINGS_UVX  = 550   # settings dialog, UVX expanded
 H_ROLLBACK      = 44    # added to both while the roll back row shows
 W_SETTINGS      = 460   # settings dialog width
 H_RUNNING   = 750   # height of the running/log view
@@ -744,8 +787,83 @@ class UpdateRunner:
 # SECTION 4 — THEME & SHARED UI HELPERS
 # ============================================================
 
+def theme_setting(config):
+    # The saved Settings choice; anything missing or unknown is "system".
+    theme = config.get("theme")
+    return theme if theme in THEMES else "system"
+
+
+def resolve_theme(setting, windows_light):
+    # "light"/"dark" win; otherwise follow Windows. windows_light is None when the registry
+    # can't be read, which counts as light (Windows' default).
+    if setting in ("light", "dark"):
+        return setting
+    return "dark" if windows_light is False else "light"
+
+
+def remap_colors(options, old, new):
+    # options: {option: value} read from a widget. Returns the options whose value is a
+    # colour of the old palette, each mapped to the same role's colour in the new one.
+    roles = {colour: role for role, colour in old.items()}
+    changed = {}
+    for option, value in options.items():
+        role = roles.get(str(value).lower())
+        if role:
+            changed[option] = new[role]
+    return changed
+
+
+_COLOUR_OPTIONS = ("bg", "fg", "activebackground", "activeforeground", "disabledforeground",
+                   "highlightbackground", "highlightcolor", "insertbackground",
+                   "selectbackground", "selectforeground", "selectcolor", "troughcolor")
+
+
+def windows_light():
+    # Windows' app theme: True light, False dark, None if it can't be read.
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as key:
+            return bool(winreg.QueryValueEx(key, "AppsUseLightTheme")[0])
+    except OSError:
+        return None
+
+
+def set_dark_title_bar(win, dark):
+    # Dark or light Windows title bar (DWMWA_USE_IMMERSIVE_DARK_MODE). Cosmetic: never raises.
+    try:
+        hwnd = ctypes.windll.user32.GetParent(win.winfo_id())
+        value = ctypes.c_int(1 if dark else 0)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(value), ctypes.sizeof(value))
+        # Windows repaints the frame only when told it changed (SWP_NOSIZE|NOMOVE|NOZORDER|NOACTIVATE|FRAMECHANGED).
+        ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020)
+    except Exception:
+        pass
+
+
+def apply_theme(root, name):
+    # Switch the palette and recolour every existing widget, dialogs included. Widgets carry
+    # no role: each colour option holding an old-palette colour gets that role's new colour.
+    old = dict(_palette)
+    set_palette(name)
+    apply_ttk_style()
+    stack = [root]
+    while stack:
+        widget = stack.pop()
+        stack.extend(widget.winfo_children())
+        try:
+            keys = set(widget.keys())
+            options = {o: widget.cget(o) for o in _COLOUR_OPTIONS if o in keys}
+            changed = remap_colors(options, old, _palette)
+            if changed:
+                widget.configure(**changed)
+        except tk.TclError:
+            pass  # ttk widgets: apply_ttk_style covers them
+        if isinstance(widget, (tk.Tk, tk.Toplevel)):
+            set_dark_title_bar(widget, name == "dark")
+
+
 def apply_ttk_style():
-    # Style the ttk scrollbar to match the dark theme.
+    # Style the ttk scrollbar from the current palette (apply_theme calls this again on a switch).
     style = ttk.Style()
     style.theme_use("clam")
     style.configure("Vertical.TScrollbar",
@@ -756,32 +874,34 @@ def apply_ttk_style():
     style.map("Vertical.TScrollbar", background=[("active", BORDER)])
 
 
-def flat_btn(parent, text, command, color=ACCENT, fg=BG, **kw):
-    # Full-size flat button for primary actions.
+def flat_btn(parent, text, command, color=None, fg=None, **kw):
+    # Full-size flat button for primary actions. Colours default at call time (theme switches).
+    color, fg = color or ACCENT, fg or BG
     return tk.Button(
         parent, text=text, command=command,
         bg=color, fg=fg, activebackground=color, activeforeground=fg,
-        font=FONT_BTN, relief="flat", bd=0,
+        disabledforeground=TEXT_MUT, font=FONT_BTN, relief="flat", bd=0,
         padx=14, pady=7, cursor="hand2", **kw
     )
 
 
-def small_btn(parent, text, command, color=BG_PANEL, fg=TEXT_SEC, **kw):
-    # Compact flat button for secondary actions.
+def small_btn(parent, text, command, color=None, fg=None, **kw):
+    # Compact ghost button for secondary actions: the parent's background until hovered.
+    color, fg = color or parent.cget("bg"), fg or TEXT_SEC
     return tk.Button(
         parent, text=text, command=command,
-        bg=color, fg=fg, activebackground=BORDER, activeforeground=TEXT_PRI,
-        font=FONT_BTN_SM, relief="flat", bd=0,
+        bg=color, fg=fg, activebackground=HOVER, activeforeground=TEXT_PRI,
+        disabledforeground=TEXT_MUT, font=FONT_BTN_SM, relief="flat", bd=0,
         padx=10, pady=5, cursor="hand2", **kw
     )
 
 
 def section_label(parent, text):
-    # A label with a coloured left accent bar — used as a section heading.
-    frame = tk.Frame(parent, bg=BG)
-    tk.Frame(frame, bg=ACCENT, width=3).pack(side="left", fill="y")
-    tk.Label(frame, text=text, font=FONT_LABEL,
-             fg=TEXT_MUT, bg=BG).pack(side="left", padx=(8, 0), pady=4)
+    # A quiet sentence-case heading in muted text, on the parent's background.
+    bg = parent.cget("bg")
+    frame = tk.Frame(parent, bg=bg)
+    tk.Label(frame, text=text, font=FONT_SMALL,
+             fg=TEXT_MUT, bg=bg).pack(side="left", pady=4)
     return frame
 
 
@@ -827,7 +947,7 @@ class _MenuProxy:
 class DropdownButton(tk.Frame):
     # A custom dropdown: a Button + arrow Label that opens a borderless popup window.
     def __init__(self, parent, var):
-        super().__init__(parent, bg=BG, padx=1, pady=1)
+        super().__init__(parent, bg=BORDER, padx=1, pady=1)
         self._var   = var
         self._popup = None
         self.menu   = _MenuProxy()
@@ -863,7 +983,7 @@ class DropdownButton(tk.Frame):
         # overrideredirect strips all OS window chrome so we control the border fully
         popup = tk.Toplevel(self)
         popup.overrideredirect(True)
-        popup.configure(bg=BG)
+        popup.configure(bg=BORDER)
 
         inner = tk.Frame(popup, bg=BG_INPUT)
         inner.pack(fill="both", expand=True, padx=1, pady=1)
@@ -922,7 +1042,7 @@ class PresetDialog(tk.Toplevel):
         self.result_models  = None
         self._available_models = available_models or []
 
-        section_label(self, "PRESET NAME").pack(fill="x", padx=20, pady=(16, 2))
+        section_label(self, "Preset name").pack(fill="x", padx=20, pady=(16, 2))
         self.name_var = tk.StringVar(value=name)
         tk.Entry(self, textvariable=self.name_var,
                  font=FONT_MONO, bg=BG_INPUT, fg=TEXT_PRI,
@@ -930,14 +1050,13 @@ class PresetDialog(tk.Toplevel):
                  highlightthickness=1, highlightbackground=BORDER,
                  highlightcolor=ACCENT).pack(fill="x", padx=20, ipady=6)
 
-        section_label(self, "APPLIES TO MODELS").pack(fill="x", padx=20, pady=(14, 2))
+        section_label(self, "Applies to models").pack(fill="x", padx=20, pady=(14, 2))
         tk.Label(self, text="Select models this preset applies to — leave none selected to match all",
                  font=FONT_SMALL, fg=TEXT_MUT, bg=BG).pack(padx=20, anchor="w", pady=(0, 4))
 
         list_frame = tk.Frame(self, bg=BORDER)
         list_frame.pack(fill="x", padx=20)
-        scrollbar = tk.Scrollbar(list_frame, orient="vertical", bg=BG_PANEL,
-                                 troughcolor=BG_INPUT, relief="flat")
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical")
         self.models_listbox = tk.Listbox(
             list_frame, selectmode=tk.MULTIPLE,
             bg=BG_INPUT, fg=TEXT_PRI,
@@ -965,7 +1084,7 @@ class PresetDialog(tk.Toplevel):
             self.models_listbox.insert(tk.END, "(no models found — will match all)")
             self.models_listbox.config(fg=TEXT_MUT)
 
-        section_label(self, "COMMAND TEMPLATE  --  use {model} as the model path placeholder").pack(
+        section_label(self, "Command template: use {model} as the model path placeholder").pack(
             fill="x", padx=20, pady=(14, 2)
         )
         self.cmd_text = tk.Text(
@@ -1011,7 +1130,8 @@ class SettingsDialog(tk.Toplevel):
     def __init__(self, parent, current_path, on_save,
                  uvx_command="", on_save_uvx=None,
                  open_browser=True, on_set_open_browser=None,
-                 on_open_folders=None, previous_build=None, on_rollback=None):
+                 on_open_folders=None, previous_build=None, on_rollback=None,
+                 theme="system", on_set_theme=None):
         super().__init__(parent)
         self.title("Settings")
         self.configure(bg=BG)
@@ -1026,10 +1146,11 @@ class SettingsDialog(tk.Toplevel):
         self._on_rollback    = on_rollback
         self._on_save_uvx    = on_save_uvx
         self._on_set_open_browser = on_set_open_browser
+        self._on_set_theme   = on_set_theme
         self._uvx_expanded   = False
 
         # ── Llama.cpp folder ─────────────────────────────────────
-        section_label(self, "LLAMA.CPP FOLDER").pack(fill="x", padx=20, pady=(20, 6))
+        section_label(self, "llama.cpp folder").pack(fill="x", padx=20, pady=(20, 6))
         tk.Label(self, text="The working directory used when launching llama-server.",
                  font=FONT_SMALL, fg=TEXT_MUT, bg=BG).pack(padx=20, anchor="w", pady=(0, 10))
 
@@ -1046,7 +1167,7 @@ class SettingsDialog(tk.Toplevel):
         small_btn(path_row, "Browse", self._browse).grid(row=0, column=1, padx=(8, 0))
 
         # ── Launch options ────────────────────────────────────────
-        section_label(self, "LAUNCH OPTIONS").pack(fill="x", padx=20, pady=(20, 6))
+        section_label(self, "Launch options").pack(fill="x", padx=20, pady=(20, 6))
 
         # Web UI row: label left, equal-width Yes/No buttons right
         web_row = tk.Frame(self, bg=BG)
@@ -1073,6 +1194,22 @@ class SettingsDialog(tk.Toplevel):
 
         tk.Label(self, text="Open the browser automatically when the server comes online.",
                  font=FONT_SMALL, fg=TEXT_MUT, bg=BG).pack(padx=20, anchor="w", pady=(0, 14))
+
+        # Theme row: System follows Windows' light/dark setting, like the Web UI's choice.
+        theme_row = tk.Frame(self, bg=BG)
+        theme_row.pack(fill="x", padx=20, pady=(0, 14))
+        tk.Label(theme_row, text="Theme", font=FONT_SMALL, fg=TEXT_PRI, bg=BG).pack(side="left")
+        theme_grp = tk.Frame(theme_row, bg=BG)
+        theme_grp.pack(side="right")
+        self._theme_btns = {}
+        for i, t in enumerate(THEMES):
+            b = tk.Button(theme_grp, text=t.capitalize(), width=6,
+                          font=FONT_BTN_SM, relief="flat", bd=0, padx=6, pady=5, cursor="hand2",
+                          command=lambda t=t: self._set_theme_dlg(t))
+            b.pack(side="left", padx=(0, 3) if i < len(THEMES) - 1 else 0)
+            self._theme_btns[t] = b
+        self._theme_dlg = theme
+        self._apply_theme_style()
 
         if on_open_folders:
             agents_row = tk.Frame(self, bg=BG)
@@ -1116,11 +1253,26 @@ class SettingsDialog(tk.Toplevel):
         if self._on_set_open_browser:
             self._on_set_open_browser(open_browser)
 
+    @staticmethod
+    def _style_toggle(button, on):
+        if on:
+            button.config(bg=ACCENT, fg=BG, activebackground=ACCENT, activeforeground=BG)
+        else:
+            button.config(bg=BG_INPUT, fg=TEXT_SEC, activebackground=BORDER, activeforeground=TEXT_PRI)
+
     def _apply_open_browser_style(self):
-        on, off = (self._yes_btn_dlg, self._no_btn_dlg) if self._open_browser_dlg \
-            else (self._no_btn_dlg, self._yes_btn_dlg)
-        on.config(bg=ACCENT, fg=BG, activebackground=ACCENT, activeforeground=BG)
-        off.config(bg=BG_INPUT, fg=TEXT_SEC, activebackground=BORDER, activeforeground=TEXT_PRI)
+        self._style_toggle(self._yes_btn_dlg, self._open_browser_dlg)
+        self._style_toggle(self._no_btn_dlg, not self._open_browser_dlg)
+
+    def _set_theme_dlg(self, theme):
+        self._theme_dlg = theme
+        if self._on_set_theme:
+            self._on_set_theme(theme)  # recolours this dialog too
+        self._apply_theme_style()
+
+    def _apply_theme_style(self):
+        for t, b in self._theme_btns.items():
+            self._style_toggle(b, t == self._theme_dlg)
 
     def _toggle_uvx_dlg(self):
         self._uvx_expanded = not self._uvx_expanded
@@ -1175,7 +1327,7 @@ class FoldersDialog(tk.Toplevel):
         self.grab_set()
         self._parent = parent
         self._policy = policy
-        section_label(self, "FOLDERS AGENTS CAN READ").pack(fill="x", padx=20, pady=(20, 6))
+        section_label(self, "Folders agents can read").pack(fill="x", padx=20, pady=(20, 6))
         note = f"Agents always write only to {policy.sandbox}. Local drives only."
         if error:
             note += f" The sandbox can't be created: {error}"
@@ -1244,7 +1396,7 @@ class UpdateDialog(tk.Toplevel):
         self.grab_set()
         self._on_done = on_done
         self._working = True
-        section_label(self, title.upper()).pack(fill="x", padx=20, pady=(20, 6))
+        section_label(self, title).pack(fill="x", padx=20, pady=(20, 6))
         border = tk.Frame(self, bg=BORDER, padx=1, pady=1)
         border.pack(fill="both", expand=True, padx=20)
         self._log = tk.Text(border, font=FONT_LOG, bg=BG_INPUT, fg=TEXT_PRI, height=10,
@@ -1306,7 +1458,7 @@ class TestDialog(tk.Toplevel):
         self._phase = "running"  # running / stopping / done
         self._report_path = None
         self._last = ""
-        section_label(self, "MODEL TEST").pack(fill="x", padx=20, pady=(20, 6))
+        section_label(self, "Model test").pack(fill="x", padx=20, pady=(20, 6))
         border = tk.Frame(self, bg=BORDER, padx=1, pady=1)
         border.pack(fill="both", expand=True, padx=20)
         self._log = tk.Text(border, font=FONT_LOG, bg=BG_INPUT, fg=TEXT_PRI, height=10,
@@ -1439,19 +1591,29 @@ class TestDialog(tk.Toplevel):
 class CommandLauncherGUI:
     def __init__(self, master):
         self.master = master
+
+        # Load persisted config — contains the llama.cpp folder path
+        self.config    = load_config()
+        self.llama_dir = self.config.get("llama_dir", "")
+
+        # The palette must be set before any widget is built; widgets read it when created.
+        self._theme = theme_setting(self.config)
+        set_palette(resolve_theme(self._theme, windows_light()))
         master.title("")
         master.configure(bg=BG)
         master.resizable(False, False)
         master.iconbitmap(default="")
 
         apply_ttk_style()
+        # Every dialog gets the title bar of the current theme when it first shows.
+        # Class bindings fire for the window itself, not for its children.
+        for cls in ("Tk", "Toplevel"):
+            master.bind_class(cls, "<Map>",
+                              lambda e: set_dark_title_bar(e.widget, CURRENT_THEME == "dark"), add="+")
+        self._watch_windows_theme()
 
         # Kill all child processes when the window is closed
         master.protocol("WM_DELETE_WINDOW", self._on_close)
-
-        # Load persisted config — contains the llama.cpp folder path
-        self.config    = load_config()
-        self.llama_dir = self.config.get("llama_dir", "")
 
         # A model test lock left by a crash would keep Web UI chat paused.
         clear_test_lock(MODEL_TEST_LOCK)
@@ -1472,12 +1634,11 @@ class CommandLauncherGUI:
         self.master.grid_columnconfigure(0, weight=1)
         self.master.grid_rowconfigure(1, weight=1)
 
-        # Header bar
-        hdr = tk.Frame(self.master, bg="#13141f", height=54)
+        # Title row, on the window background (no header bar, like the Web UI)
+        hdr = tk.Frame(self.master, bg=BG)
         hdr.grid(row=0, column=0, sticky="ew")
-        hdr.grid_propagate(False)
         tk.Label(hdr, text="Llama Launcher", font=FONT_TITLE,
-                 fg=TEXT_PRI, bg="#13141f").pack(side="left", padx=24, pady=14)
+                 fg=TEXT_PRI, bg=BG).pack(side="left", padx=32, pady=(20, 0))
 
         # Body — holds all setup content in a single frame for easy cleanup
         self._setup_frame = tk.Frame(self.master, bg=BG)
@@ -1581,15 +1742,12 @@ class CommandLauncherGUI:
 
         self.master.columnconfigure(0, weight=1)
 
-        # ── Row 0: Header bar with Settings button on the right
-        hdr = tk.Frame(self.master, bg="#13141f", height=54)
-        hdr.grid(row=0, column=0, sticky="ew")
-        hdr.grid_propagate(False)
-        hdr.columnconfigure(0, weight=1)
+        # ── Row 0: Title row with Settings on the right, on the window background
+        hdr = tk.Frame(self.master, bg=BG)
+        hdr.grid(row=0, column=0, sticky="ew", padx=24, pady=(16, 0))
         tk.Label(hdr, text="Llama Launcher", font=FONT_TITLE,
-                 fg=TEXT_PRI, bg="#13141f").pack(side="left", padx=24, pady=14)
-        small_btn(hdr, "⚙ Settings", self._open_settings,
-                  color="#13141f", fg=TEXT_MUT).pack(side="right", padx=16, pady=14)
+                 fg=TEXT_PRI, bg=BG).pack(side="left")
+        small_btn(hdr, "Settings", self._open_settings).pack(side="right")
 
         # ── Row 1: llama.cpp update notice (hidden until the startup check finds a newer build)
         self._notice, notice_card = card(self.master)
@@ -1601,24 +1759,23 @@ class CommandLauncherGUI:
 
         # ── Row 2: Model selector
         self.model_outer, model_card = card(self.master)
-        self.model_outer.grid(row=2, column=0, padx=16, pady=(12, 6), sticky="ew")
+        self.model_outer.grid(row=2, column=0, padx=24, pady=(16, 8), sticky="ew")
         model_card.grid_columnconfigure(1, weight=1)
 
-        section_label(model_card, "MODEL").grid(row=0, column=0, sticky="w", padx=(12, 6), pady=10)
+        section_label(model_card, "Model").grid(row=0, column=0, sticky="w", padx=(12, 6), pady=10)
         self.model_var  = tk.StringVar()
         self.model_menu = DropdownButton(model_card, self.model_var)
         self.model_menu.grid(row=0, column=1, sticky="ew", pady=10)
-        small_btn(model_card, "Refresh", self._refresh_models,
-                  color=BG_PANEL, fg=TEXT_SEC).grid(row=0, column=2, padx=(6, 12), pady=10)
+        small_btn(model_card, "Refresh", self._refresh_models).grid(row=0, column=2, padx=(6, 12), pady=10)
 
         self._refresh_models(init=True)
 
         # ── Row 3: Preset selector
         self.preset_outer, preset_card = card(self.master)
-        self.preset_outer.grid(row=3, column=0, padx=16, pady=(0, 6), sticky="ew")
+        self.preset_outer.grid(row=3, column=0, padx=24, pady=(0, 8), sticky="ew")
         preset_card.grid_columnconfigure(1, weight=1)
 
-        section_label(preset_card, "PRESET").grid(row=0, column=0, sticky="w", padx=(12, 6), pady=10)
+        section_label(preset_card, "Preset").grid(row=0, column=0, sticky="w", padx=(12, 6), pady=10)
         self.preset_var  = tk.StringVar()
         self.preset_menu = DropdownButton(preset_card, self.preset_var)
         self.preset_menu.grid(row=0, column=1, sticky="ew", pady=10)
@@ -1627,20 +1784,19 @@ class CommandLauncherGUI:
         preset_btns.grid(row=0, column=2, padx=(6, 12), pady=10)
         small_btn(preset_btns, "+ Add",  self._add_preset).pack(side="left", padx=(0, 6))
         small_btn(preset_btns, "Edit",   self._edit_preset).pack(side="left", padx=(0, 6))
-        small_btn(preset_btns, "Delete", self._delete_preset,
-                  color=BG_PANEL, fg=DANGER).pack(side="left")
+        small_btn(preset_btns, "Delete", self._delete_preset, fg=DANGER).pack(side="left")
 
         # ── Row 4: Launch Server button
         self.run_button = tk.Button(
             self.master, text="Launch Server",
             command=self.run_commands,
             bg=SUCCESS, fg=BG,
-            activebackground="#7db84e", activeforeground=BG,
-            font=("Segoe UI", 12, "bold"), relief="flat", bd=0,
-            pady=14, cursor="hand2",
+            activebackground=SUCCESS_HOVER, activeforeground=BG,
+            font=("Segoe UI", 11, "bold"), relief="flat", bd=0,
+            pady=12, cursor="hand2",
         )
         self.run_button.grid(row=4, column=0,
-                             sticky="ew", padx=16, pady=(6, 8))
+                             sticky="ew", padx=24, pady=(8, 24))
 
         # ── Row 5: Status bar (hidden until running state)
         self.status_bar = tk.Frame(self.master, bg=BG_PANEL)
@@ -1686,7 +1842,7 @@ class CommandLauncherGUI:
         self._key_label.pack(side="left", padx=(8, 0))
         self._key_label.bind("<Button-1>", lambda e: self._copy_key(self.api_key, self._key_label))
         tk.Label(key_row, text="Approval key (Jobs panel)", font=FONT_SMALL,
-                 fg=TEXT_MUT, bg=BG).pack(side="left", padx=(24, 0))
+                 fg=TEXT_MUT, bg=BG).pack(side="left", padx=(16, 0))
         self._approval_label = tk.Label(key_row, text="click to copy", font=FONT_MONO,
                                         fg=ACCENT, bg=BG, cursor="hand2")
         self._approval_label.pack(side="left", padx=(8, 0))
@@ -1709,11 +1865,9 @@ class CommandLauncherGUI:
         def _make_log_pane(label_var):
             frame = tk.Frame(self.log_pane, bg=BG)
             hdr = tk.Frame(frame, bg=BG)
-            hdr.pack(fill="x", pady=(0, 4))
-            tk.Frame(hdr, bg=ACCENT, width=3).pack(side="left", fill="y")
+            hdr.pack(fill="x", pady=(4, 2))
             tk.Label(hdr, textvariable=label_var,
-                     font=FONT_LABEL, fg=TEXT_MUT, bg=BG).pack(
-                side="left", padx=(8, 0), pady=4)
+                     font=FONT_SMALL, fg=TEXT_MUT, bg=BG).pack(side="left", pady=2)
             border = tk.Frame(frame, bg=BORDER, padx=1, pady=1)
             border.pack(fill="both", expand=True)
             txt = tk.Text(border, font=FONT_LOG,
@@ -1734,22 +1888,25 @@ class CommandLauncherGUI:
 
         # ── Test this model + Exit buttons. Test is enabled only while the health poll says online.
         self.exit_row = tk.Frame(self.master, bg=BG)
+        # Outline button: a Tk button on Windows draws no border of its own, so a 1px frame does.
+        test_border = tk.Frame(self.exit_row, bg=BORDER, padx=1, pady=1)
+        test_border.pack(side="left", padx=(0, 8))
         self.test_btn = tk.Button(
-            self.exit_row, text="Test this model",
+            test_border, text="Test this model",
             command=self._start_model_test, state=tk.DISABLED,
-            bg=ACCENT, fg=BG, disabledforeground=TEXT_MUT,
-            activebackground=ACCENT, activeforeground=BG,
-            font=("Segoe UI", 12, "bold"), relief="flat", bd=0,
-            padx=14, pady=14, cursor="hand2",
+            bg=BG, fg=TEXT_PRI, disabledforeground=TEXT_MUT,
+            activebackground=HOVER, activeforeground=TEXT_PRI,
+            font=("Segoe UI", 11, "bold"), relief="flat", bd=0,
+            padx=14, pady=11, cursor="hand2",
         )
-        self.test_btn.pack(side="left", padx=(0, 8))
+        self.test_btn.pack()
         self.exit_btn = tk.Button(
             self.exit_row, text="Exit Processes",
             command=self._exit_running_state,
             bg=DANGER, fg=BG,
-            activebackground="#c45c6e", activeforeground=BG,
-            font=("Segoe UI", 12, "bold"), relief="flat", bd=0,
-            pady=14, cursor="hand2",
+            activebackground=DANGER_HOVER, activeforeground=BG,
+            font=("Segoe UI", 11, "bold"), relief="flat", bd=0,
+            pady=12, cursor="hand2",
         )
 
         # When the model changes, re-filter the preset list.
@@ -1787,6 +1944,7 @@ class CommandLauncherGUI:
             on_open_folders=lambda parent: FoldersDialog(parent, self.agent_policy, self._agents_error),
             previous_build=self.config.get("previous_build"),
             on_rollback=None if self.exit_btn.winfo_manager() else self._start_rollback,
+            theme=self._theme, on_set_theme=self._set_theme,
         )
 
 
@@ -1802,7 +1960,7 @@ class CommandLauncherGUI:
         self._update_builds = (installed, newest)
         self._notice_label.config(text=f"llama.cpp b{newest} is out (you have b{installed}). "
                                        "Updating accepts the package's terms.")
-        self._notice.grid(row=1, column=0, padx=16, pady=(12, 0), sticky="ew")
+        self._notice.grid(row=1, column=0, padx=24, pady=(16, 0), sticky="ew")
         # Windows locks a running llama-server.exe, so no updates while running.
         running = bool(self.exit_btn.winfo_manager())
         self._update_btn.config(state=tk.DISABLED if running else tk.NORMAL)
@@ -1852,6 +2010,23 @@ class CommandLauncherGUI:
         extra = H_NOTICE if self._notice.winfo_manager() else 0
         self.master.geometry(f"{W}x{H_CONFIG + extra}")
 
+    def _set_theme(self, theme):
+        # From Settings: applies at once, like the Web UI's own theme choice.
+        self._theme = theme
+        self.config["theme"] = theme
+        save_config(self.config)
+        name = resolve_theme(theme, windows_light())
+        if name != CURRENT_THEME:
+            apply_theme(self.master, name)
+
+    def _watch_windows_theme(self):
+        # In System mode, follow a change of Windows' setting. Runs on the UI thread (tkinter isn't thread-safe).
+        if self._theme == "system":
+            name = resolve_theme("system", windows_light())
+            if name != CURRENT_THEME:
+                apply_theme(self.master, name)
+        self.master.after(3000, self._watch_windows_theme)
+
     def _set_open_browser(self, open_browser):
         self._open_browser = open_browser
         self.config["open_browser"] = open_browser
@@ -1878,13 +2053,13 @@ class CommandLauncherGUI:
             w.grid_remove()
         self._update_btn.config(state=tk.DISABLED)
         self.status_bar.grid(row=5, column=0,
-                             sticky="ew", padx=16, pady=(10, 0))
-        self.api_bar.grid(row=6, column=0, sticky="ew", padx=16, pady=(6, 0))
+                             sticky="ew", padx=24, pady=(16, 0))
+        self.api_bar.grid(row=6, column=0, sticky="ew", padx=24, pady=(8, 0))
         self.master.grid_rowconfigure(7, weight=1)
         self.log_pane.grid(row=7, column=0,
-                           sticky="nsew", padx=16, pady=(6, 6))
+                           sticky="nsew", padx=24, pady=(8, 8))
         self.exit_row.grid(row=8, column=0,
-                           sticky="ew", padx=16, pady=(0, 14))
+                           sticky="ew", padx=24, pady=(0, 24))
         # winfo_manager() of exit_btn tells the running state apart (Settings, update notice).
         self.exit_btn.pack(side="left", fill="x", expand=True)
         self.test_btn.config(state=tk.DISABLED)
@@ -2055,7 +2230,8 @@ class CommandLauncherGUI:
         def poll_loop():
             browser_opened = False
             shown = set()  # the agents server is optional: its crash shows for one poll, then llama's status returns
-            colors = {"ok": SUCCESS, "warn": "#f7c948", "error": DANGER, "idle": TEXT_MUT}
+            # Role names, looked up when the label updates, so a theme switch can't leave stale colours.
+            colors = {"ok": "SUCCESS", "warn": "WARN", "error": "DANGER", "idle": "TEXT_MUT"}
             while self._polling:
                 try:
                     with urllib.request.urlopen(
@@ -2079,7 +2255,7 @@ class CommandLauncherGUI:
                 if level == "ok" and not browser_opened and self._open_browser:
                     browser_opened = True
                     self.master.after(0, lambda: webbrowser.open("http://127.0.0.1:8080/"))
-                self.master.after(0, lambda c=colors[level], t=text: self._health_label.config(fg=c, text=t))
+                self.master.after(0, lambda c=colors[level], t=text: self._health_label.config(fg=_palette[c], text=t))
                 self.master.after(0, lambda ok=level == "ok": self._set_test_btn(ok))
                 time.sleep(3)
         threading.Thread(target=poll_loop, daemon=True).start()
