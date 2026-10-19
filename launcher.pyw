@@ -2416,8 +2416,9 @@ class CommandLauncherGUI:
 
     def _on_close(self):
         # If servers are running and tray is available, minimize to tray instead of closing.
-        running = (self._llama_proc, self._uvx_proc, self._proxy_proc, self._agents_proc)
-        if any(p is not None for p in running) and _TRAY_AVAILABLE:
+        # Alive, not just started: a second launcher's _free_port may have killed them all.
+        procs = (self._llama_proc, self._uvx_proc, self._proxy_proc, self._agents_proc)
+        if any(p is not None and p.poll() is None for p in procs) and _TRAY_AVAILABLE:
             self._hide_to_tray()
         else:
             if hasattr(self, "_llama_proc"):

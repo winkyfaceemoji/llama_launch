@@ -205,6 +205,31 @@ class PortOwnershipTests(unittest.TestCase):
         self.assertFalse(launcher.is_own_process("node.exe", "", r"C:\app"))
 
 
+class CloseWindowTests(unittest.TestCase):
+    # _on_close on a stub: no window, no tray, no processes of the stack.
+    def close(self, *procs):
+        calls = []
+        stub = mock.Mock(_llama_proc=procs[0], _uvx_proc=procs[1], _proxy_proc=procs[2],
+                         _agents_proc=procs[3])
+        stub._hide_to_tray.side_effect = lambda: calls.append("hide")
+        stub._kill_all.side_effect = lambda: calls.append("kill_all")
+        stub.master.destroy.side_effect = lambda: calls.append("destroy")
+        with mock.patch.object(launcher, "_TRAY_AVAILABLE", True):
+            launcher.CommandLauncherGUI._on_close(stub)
+        return calls
+
+    def test_hides_to_tray_while_a_server_runs(self):
+        dead = mock.Mock(**{"poll.return_value": 1})
+        alive = mock.Mock(**{"poll.return_value": None})
+        self.assertEqual(self.close(dead, alive, dead, None), ["hide"])
+
+    def test_exits_when_every_server_has_exited(self):
+        # A second launcher's _free_port kills this one's servers; closing it must not
+        # leave it in the tray holding dead handles.
+        dead = mock.Mock(**{"poll.return_value": 1})
+        self.assertEqual(self.close(dead, dead, dead, None), ["kill_all", "destroy"])
+
+
 class RemoveStaleAgentsEntryTests(unittest.TestCase):
     def test_removes_old_mcp_proxy_entry(self):
         config = {"mcpServers": {"fetch": {"command": "uvx", "args": ["mcp-server-fetch"]},
