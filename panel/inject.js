@@ -4,8 +4,13 @@
   const css = `
 #ajp-root{all:initial}
 #ajp-root .ajp-btn{position:fixed;top:16px;right:16px;z-index:9;display:flex;align-items:center;justify-content:center;
-  width:40px;height:40px;padding:0;border:0;border-radius:9999px;cursor:pointer;background:transparent;color:var(--ajp-text)}
+  width:40px;height:40px;padding:0;border:1px solid var(--ajp-border);border-radius:9999px;cursor:pointer;
+  background:var(--ajp-fill);color:var(--ajp-text);box-shadow:0 1px 2px rgba(0,0,0,.08)}
 #ajp-root .ajp-btn:hover{background:var(--ajp-hover)}
+/* From 768px the Web UI's chat-tab bar (z-10, 53px) spans the top, so the button sits just under it; from
+   1024px the message box no longer reaches the right edge, so it moves to the free bottom-right corner. */
+@media (min-width:768px){#ajp-root .ajp-btn{top:64px}}
+@media (min-width:1024px){#ajp-root .ajp-btn{top:auto;bottom:16px}}
 #ajp-root .ajp-btn:focus-visible{outline:2px solid var(--ajp-ring);outline-offset:2px}
 #ajp-root .ajp-btn svg{width:18px;height:18px}
 #ajp-root .ajp-badge{position:absolute;top:6px;right:6px;box-shadow:0 0 0 2px var(--ajp-page);
@@ -22,9 +27,9 @@
 #ajp-root.ajp-away .ajp-btn,#ajp-root.ajp-away .ajp-frame{display:none}
 @media (max-width:479px){#ajp-root.ajp-open .ajp-btn{display:none}}
 #ajp-root{color-scheme:light;--ajp-page:#ffffff;--ajp-bg:#fafafa;--ajp-text:#0a0a0a;--ajp-border:rgba(0,0,0,.15);
-  --ajp-hover:rgba(0,0,0,.06);--ajp-ring:#a1a1a1;--ajp-muted:#737373;--ajp-review-bg:#b45309;--ajp-review-text:#ffffff}
+  --ajp-fill:#f5f5f5;--ajp-hover:#ebebeb;--ajp-ring:#a1a1a1;--ajp-muted:#737373;--ajp-review-bg:#b45309;--ajp-review-text:#ffffff}
 #ajp-root.ajp-dark{color-scheme:dark;--ajp-page:#0d0d0d;--ajp-bg:#141414;--ajp-text:#fafafa;--ajp-border:rgba(255,255,255,.15);
-  --ajp-hover:rgba(255,255,255,.1);--ajp-ring:#737373;--ajp-muted:#a1a1a1;--ajp-review-bg:#f59e0b;--ajp-review-text:#0d0d0d}`;
+  --ajp-fill:#262626;--ajp-hover:#333333;--ajp-ring:#737373;--ajp-muted:#a1a1a1;--ajp-review-bg:#f59e0b;--ajp-review-text:#0d0d0d}`;
   // A list-with-checks icon (static markup, not model output).
   const ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
     'stroke-linejoin="round" aria-hidden="true"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/>' +
