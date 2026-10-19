@@ -831,6 +831,10 @@ def windows_light():
 def set_dark_title_bar(win, dark):
     # Dark or light Windows title bar (DWMWA_USE_IMMERSIVE_DARK_MODE). Cosmetic: never raises.
     try:
+        # Borderless windows (the dropdown list) have no title bar, and the frame-changed
+        # call below would drop Tk's pending move and leave them at the screen's corner.
+        if win.overrideredirect():
+            return
         hwnd = ctypes.windll.user32.GetParent(win.winfo_id())
         value = ctypes.c_int(1 if dark else 0)
         ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(value), ctypes.sizeof(value))
