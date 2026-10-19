@@ -42,6 +42,6 @@ Tkinter launcher (`launcher.pyw`) that starts llama-server, the system prompt pr
 - [0012](docs/adr/0012-uvx-proxy-host-check.md) mcp-proxy starts through `mcp_guard.py`, which adds a Host check; mcp-proxy pinned to 0.13.0
 - [0013](docs/adr/0013-organise-plans-in-batches.md) Organise jobs propose their plan in batches; no longer timeout, no per-plan cap
 - [0014](docs/adr/0014-web-ui-look-in-tk.md) The Web UI look is a Tk restyle: no webview, no controls in the Web UI, no Canvas-drawn rounded widgets
-- [0015](docs/adr/0015-plan-waiting-toast.md) A waiting plan gets a Windows toast from the launcher (polls `/jobs` with the approval key); no tray badge, no saved toast state
 - [0016](docs/adr/0016-close-stops-servers.md) Closing the window stops the servers and exits; no hide-to-tray
 - [0017](docs/adr/0017-single-launcher-instance.md) One launcher per Windows session (named mutex); a second start shows the first's window
+- [0018](docs/adr/0018-no-plan-waiting-toast.md) No plan toast (supersedes 0015): pystray balloons showed unreliably and ADR 0016 removed the tray case; the Jobs button count is the only cue

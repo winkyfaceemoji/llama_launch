@@ -11,4 +11,3 @@ Glossary for the launcher. One line per term.
 - **Test report**: the local HTML page the launcher writes and opens in the browser after each model test: one row per test, sorted by agent score, each expanding to per-case results and the model's wrong answers. It never leaves this PC.
 - **Test job**: an agent job a model test created; it never shows in the Jobs panel, and the next model test replaces it.
 - **Build check**: the test run right after an update (last model, spare port, key and foreign `Origin` refused); a failed check rolls back.
-- **Plan toast**: the Windows toast the launcher shows once when an organise plan starts waiting for approval; clicking it opens the Web UI, and approving still happens only in the Jobs panel.

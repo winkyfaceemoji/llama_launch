@@ -1,6 +1,6 @@
 # 0015. A waiting plan gets a Windows toast from the launcher
 
-Status: Accepted
+Status: Superseded by 0018
 
 ## Context
 
