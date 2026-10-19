@@ -88,6 +88,8 @@ import pathlib
 import threading
 import urllib.request
 import time
+import ctypes
+import winreg
 from agents import jobs as agent_jobs, paths as agent_paths, llm as agent_llm
 
 
@@ -154,14 +156,17 @@ PALETTES = {
     },
 }
 THEMES = ("system", "light", "dark")   # the Settings choice; resolve_theme() turns it into a palette name
-_palette = {}
+_palette = {}                          # the current palette's colours, by role
+CURRENT_THEME = None                   # "light" or "dark"
 
 
 def set_palette(name):
     # Rebind the colour constants. Code reads them when it builds a widget, so set this first.
+    global CURRENT_THEME
     _palette.clear()
     _palette.update(PALETTES[name])
     globals().update(_palette)
+    CURRENT_THEME = name
     return name
 
 
@@ -181,8 +186,8 @@ W           = 480
 H_SETUP     = 280    # height of the first-run setup screen
 H_CONFIG    = 270    # height of the main config view
 H_NOTICE    = 66     # added while the llama.cpp update notice shows
-H_SETTINGS      = 419   # settings dialog, UVX collapsed
-H_SETTINGS_UVX  = 509   # settings dialog, UVX expanded
+H_SETTINGS      = 460   # settings dialog, UVX collapsed
+H_SETTINGS_UVX  = 550   # settings dialog, UVX expanded
 H_ROLLBACK      = 44    # added to both while the roll back row shows
 W_SETTINGS      = 460   # settings dialog width
 H_RUNNING   = 750   # height of the running/log view
@@ -822,6 +827,55 @@ def remap_colors(options, old, new):
     return changed
 
 
+_COLOUR_OPTIONS = ("bg", "fg", "activebackground", "activeforeground", "disabledforeground",
+                   "highlightbackground", "highlightcolor", "insertbackground",
+                   "selectbackground", "selectforeground", "selectcolor", "troughcolor")
+
+
+def windows_light():
+    # Windows' app theme: True light, False dark, None if it can't be read.
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as key:
+            return bool(winreg.QueryValueEx(key, "AppsUseLightTheme")[0])
+    except OSError:
+        return None
+
+
+def set_dark_title_bar(win, dark):
+    # Dark or light Windows title bar (DWMWA_USE_IMMERSIVE_DARK_MODE). Cosmetic: never raises.
+    try:
+        hwnd = ctypes.windll.user32.GetParent(win.winfo_id())
+        value = ctypes.c_int(1 if dark else 0)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(value), ctypes.sizeof(value))
+        # Windows repaints the frame only when told it changed (SWP_NOSIZE|NOMOVE|NOZORDER|NOACTIVATE|FRAMECHANGED).
+        ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020)
+    except Exception:
+        pass
+
+
+def apply_theme(root, name):
+    # Switch the palette and recolour every existing widget, dialogs included. Widgets carry
+    # no role: each colour option holding an old-palette colour gets that role's new colour.
+    old = dict(_palette)
+    set_palette(name)
+    apply_ttk_style()
+    stack = [root]
+    while stack:
+        widget = stack.pop()
+        stack.extend(widget.winfo_children())
+        try:
+            keys = set(widget.keys())
+            options = {o: widget.cget(o) for o in _COLOUR_OPTIONS if o in keys}
+            changed = remap_colors(options, old, _palette)
+            if changed:
+                widget.configure(**changed)
+        except tk.TclError:
+            pass  # ttk widgets: apply_ttk_style covers them
+        if isinstance(widget, (tk.Tk, tk.Toplevel)):
+            set_dark_title_bar(widget, name == "dark")
+
+
 def apply_ttk_style():
     # Style the ttk scrollbar to match the dark theme.
     style = ttk.Style()
@@ -834,8 +888,9 @@ def apply_ttk_style():
     style.map("Vertical.TScrollbar", background=[("active", BORDER)])
 
 
-def flat_btn(parent, text, command, color=ACCENT, fg=BG, **kw):
-    # Full-size flat button for primary actions.
+def flat_btn(parent, text, command, color=None, fg=None, **kw):
+    # Full-size flat button for primary actions. Colours default at call time (theme switches).
+    color, fg = color or ACCENT, fg or BG
     return tk.Button(
         parent, text=text, command=command,
         bg=color, fg=fg, activebackground=color, activeforeground=fg,
@@ -844,8 +899,9 @@ def flat_btn(parent, text, command, color=ACCENT, fg=BG, **kw):
     )
 
 
-def small_btn(parent, text, command, color=BG_PANEL, fg=TEXT_SEC, **kw):
+def small_btn(parent, text, command, color=None, fg=None, **kw):
     # Compact flat button for secondary actions.
+    color, fg = color or BG_PANEL, fg or TEXT_SEC
     return tk.Button(
         parent, text=text, command=command,
         bg=color, fg=fg, activebackground=BORDER, activeforeground=TEXT_PRI,
@@ -1089,7 +1145,8 @@ class SettingsDialog(tk.Toplevel):
     def __init__(self, parent, current_path, on_save,
                  uvx_command="", on_save_uvx=None,
                  open_browser=True, on_set_open_browser=None,
-                 on_open_folders=None, previous_build=None, on_rollback=None):
+                 on_open_folders=None, previous_build=None, on_rollback=None,
+                 theme="system", on_set_theme=None):
         super().__init__(parent)
         self.title("Settings")
         self.configure(bg=BG)
@@ -1104,6 +1161,7 @@ class SettingsDialog(tk.Toplevel):
         self._on_rollback    = on_rollback
         self._on_save_uvx    = on_save_uvx
         self._on_set_open_browser = on_set_open_browser
+        self._on_set_theme   = on_set_theme
         self._uvx_expanded   = False
 
         # ── Llama.cpp folder ─────────────────────────────────────
@@ -1152,6 +1210,22 @@ class SettingsDialog(tk.Toplevel):
         tk.Label(self, text="Open the browser automatically when the server comes online.",
                  font=FONT_SMALL, fg=TEXT_MUT, bg=BG).pack(padx=20, anchor="w", pady=(0, 14))
 
+        # Theme row: System follows Windows' light/dark setting, like the Web UI's choice.
+        theme_row = tk.Frame(self, bg=BG)
+        theme_row.pack(fill="x", padx=20, pady=(0, 14))
+        tk.Label(theme_row, text="Theme", font=FONT_SMALL, fg=TEXT_PRI, bg=BG).pack(side="left")
+        theme_grp = tk.Frame(theme_row, bg=BG)
+        theme_grp.pack(side="right")
+        self._theme_btns = {}
+        for i, t in enumerate(THEMES):
+            b = tk.Button(theme_grp, text=t.capitalize(), width=6,
+                          font=FONT_BTN_SM, relief="flat", bd=0, padx=6, pady=5, cursor="hand2",
+                          command=lambda t=t: self._set_theme_dlg(t))
+            b.pack(side="left", padx=(0, 3) if i < len(THEMES) - 1 else 0)
+            self._theme_btns[t] = b
+        self._theme_dlg = theme
+        self._apply_theme_style()
+
         if on_open_folders:
             agents_row = tk.Frame(self, bg=BG)
             agents_row.pack(fill="x", padx=20, pady=(0, 14))
@@ -1199,6 +1273,19 @@ class SettingsDialog(tk.Toplevel):
             else (self._no_btn_dlg, self._yes_btn_dlg)
         on.config(bg=ACCENT, fg=BG, activebackground=ACCENT, activeforeground=BG)
         off.config(bg=BG_INPUT, fg=TEXT_SEC, activebackground=BORDER, activeforeground=TEXT_PRI)
+
+    def _set_theme_dlg(self, theme):
+        self._theme_dlg = theme
+        if self._on_set_theme:
+            self._on_set_theme(theme)  # recolours this dialog too
+        self._apply_theme_style()
+
+    def _apply_theme_style(self):
+        for t, b in self._theme_btns.items():
+            if t == self._theme_dlg:
+                b.config(bg=ACCENT, fg=BG, activebackground=ACCENT, activeforeground=BG)
+            else:
+                b.config(bg=BG_INPUT, fg=TEXT_SEC, activebackground=BORDER, activeforeground=TEXT_PRI)
 
     def _toggle_uvx_dlg(self):
         self._uvx_expanded = not self._uvx_expanded
@@ -1517,19 +1604,28 @@ class TestDialog(tk.Toplevel):
 class CommandLauncherGUI:
     def __init__(self, master):
         self.master = master
+
+        # Load persisted config — contains the llama.cpp folder path
+        self.config    = load_config()
+        self.llama_dir = self.config.get("llama_dir", "")
+
+        # The palette must be set before any widget is built; widgets read it when created.
+        self._theme = theme_setting(self.config)
+        set_palette(resolve_theme(self._theme, windows_light()))
         master.title("")
         master.configure(bg=BG)
         master.resizable(False, False)
         master.iconbitmap(default="")
 
         apply_ttk_style()
+        # Every dialog gets the title bar of the current theme when it first shows.
+        master.bind_class("Toplevel", "<Map>",
+                          lambda e: set_dark_title_bar(e.widget, CURRENT_THEME == "dark"), add="+")
+        master.after_idle(lambda: set_dark_title_bar(master, CURRENT_THEME == "dark"))
+        self._watch_windows_theme()
 
         # Kill all child processes when the window is closed
         master.protocol("WM_DELETE_WINDOW", self._on_close)
-
-        # Load persisted config — contains the llama.cpp folder path
-        self.config    = load_config()
-        self.llama_dir = self.config.get("llama_dir", "")
 
         # A model test lock left by a crash would keep Web UI chat paused.
         clear_test_lock(MODEL_TEST_LOCK)
@@ -1865,6 +1961,7 @@ class CommandLauncherGUI:
             on_open_folders=lambda parent: FoldersDialog(parent, self.agent_policy, self._agents_error),
             previous_build=self.config.get("previous_build"),
             on_rollback=None if self.exit_btn.winfo_manager() else self._start_rollback,
+            theme=self._theme, on_set_theme=self._set_theme,
         )
 
 
@@ -1929,6 +2026,23 @@ class CommandLauncherGUI:
     def _resize_config(self):
         extra = H_NOTICE if self._notice.winfo_manager() else 0
         self.master.geometry(f"{W}x{H_CONFIG + extra}")
+
+    def _set_theme(self, theme):
+        # From Settings: applies at once, like the Web UI's own theme choice.
+        self._theme = theme
+        self.config["theme"] = theme
+        save_config(self.config)
+        name = resolve_theme(theme, windows_light())
+        if name != CURRENT_THEME:
+            apply_theme(self.master, name)
+
+    def _watch_windows_theme(self):
+        # In System mode, follow a change of Windows' setting. Runs on the UI thread (tkinter isn't thread-safe).
+        if self._theme == "system":
+            name = resolve_theme("system", windows_light())
+            if name != CURRENT_THEME:
+                apply_theme(self.master, name)
+        self.master.after(3000, self._watch_windows_theme)
 
     def _set_open_browser(self, open_browser):
         self._open_browser = open_browser
@@ -2133,7 +2247,8 @@ class CommandLauncherGUI:
         def poll_loop():
             browser_opened = False
             shown = set()  # the agents server is optional: its crash shows for one poll, then llama's status returns
-            colors = {"ok": SUCCESS, "warn": "#f7c948", "error": DANGER, "idle": TEXT_MUT}
+            # Role names, looked up when the label updates, so a theme switch can't leave stale colours.
+            colors = {"ok": "SUCCESS", "warn": "WARN", "error": "DANGER", "idle": "TEXT_MUT"}
             while self._polling:
                 try:
                     with urllib.request.urlopen(
@@ -2157,7 +2272,7 @@ class CommandLauncherGUI:
                 if level == "ok" and not browser_opened and self._open_browser:
                     browser_opened = True
                     self.master.after(0, lambda: webbrowser.open("http://127.0.0.1:8080/"))
-                self.master.after(0, lambda c=colors[level], t=text: self._health_label.config(fg=c, text=t))
+                self.master.after(0, lambda c=colors[level], t=text: self._health_label.config(fg=_palette[c], text=t))
                 self.master.after(0, lambda ok=level == "ok": self._set_test_btn(ok))
                 time.sleep(3)
         threading.Thread(target=poll_loop, daemon=True).start()
