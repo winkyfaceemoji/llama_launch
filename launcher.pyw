@@ -148,8 +148,8 @@ PALETTES = {
         "TEXT_PRI":      "#fafafa",
         "TEXT_SEC":      "#d4d4d4",
         "TEXT_MUT":      "#a1a1a1",
-        "SUCCESS":       "#4ade80",
-        "SUCCESS_HOVER": "#22c55e",
+        "SUCCESS":       "#22a35a",
+        "SUCCESS_HOVER": "#1e8f4f",
         "DANGER":        "#ff6467",
         "DANGER_HOVER":  "#ff4d50",
         "WARN":          "#fbbf24",
@@ -167,14 +167,12 @@ def set_palette(name):
     _palette.update(PALETTES[name])
     globals().update(_palette)
     CURRENT_THEME = name
-    return name
 
 
 set_palette("dark")
 
 # Fonts
 FONT_TITLE  = ("Segoe UI", 13, "bold")
-FONT_LABEL  = ("Segoe UI", 9, "bold")
 FONT_SMALL  = ("Segoe UI", 9)
 FONT_BTN    = ("Segoe UI", 10, "bold")
 FONT_BTN_SM = ("Segoe UI", 9)
@@ -789,18 +787,6 @@ class UpdateRunner:
 # SECTION 4 — THEME & SHARED UI HELPERS
 # ============================================================
 
-def contrast(fg, bg):
-    # WCAG contrast ratio of two "#rrggbb" colours (1 to 21).
-    def luminance(colour):
-        def channel(c):
-            c = int(c, 16) / 255
-            return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
-        r, g, b = (channel(colour[i:i + 2]) for i in (1, 3, 5))
-        return 0.2126 * r + 0.7152 * g + 0.0722 * b
-    hi, lo = sorted((luminance(fg), luminance(bg)), reverse=True)
-    return (hi + 0.05) / (lo + 0.05)
-
-
 def theme_setting(config):
     # The saved Settings choice; anything missing or unknown is "system".
     theme = config.get("theme")
@@ -877,7 +863,7 @@ def apply_theme(root, name):
 
 
 def apply_ttk_style():
-    # Style the ttk scrollbar to match the dark theme.
+    # Style the ttk scrollbar from the current palette (apply_theme calls this again on a switch).
     style = ttk.Style()
     style.theme_use("clam")
     style.configure("Vertical.TScrollbar",
@@ -1267,11 +1253,16 @@ class SettingsDialog(tk.Toplevel):
         if self._on_set_open_browser:
             self._on_set_open_browser(open_browser)
 
+    @staticmethod
+    def _style_toggle(button, on):
+        if on:
+            button.config(bg=ACCENT, fg=BG, activebackground=ACCENT, activeforeground=BG)
+        else:
+            button.config(bg=BG_INPUT, fg=TEXT_SEC, activebackground=BORDER, activeforeground=TEXT_PRI)
+
     def _apply_open_browser_style(self):
-        on, off = (self._yes_btn_dlg, self._no_btn_dlg) if self._open_browser_dlg \
-            else (self._no_btn_dlg, self._yes_btn_dlg)
-        on.config(bg=ACCENT, fg=BG, activebackground=ACCENT, activeforeground=BG)
-        off.config(bg=BG_INPUT, fg=TEXT_SEC, activebackground=BORDER, activeforeground=TEXT_PRI)
+        self._style_toggle(self._yes_btn_dlg, self._open_browser_dlg)
+        self._style_toggle(self._no_btn_dlg, not self._open_browser_dlg)
 
     def _set_theme_dlg(self, theme):
         self._theme_dlg = theme
@@ -1281,10 +1272,7 @@ class SettingsDialog(tk.Toplevel):
 
     def _apply_theme_style(self):
         for t, b in self._theme_btns.items():
-            if t == self._theme_dlg:
-                b.config(bg=ACCENT, fg=BG, activebackground=ACCENT, activeforeground=BG)
-            else:
-                b.config(bg=BG_INPUT, fg=TEXT_SEC, activebackground=BORDER, activeforeground=TEXT_PRI)
+            self._style_toggle(b, t == self._theme_dlg)
 
     def _toggle_uvx_dlg(self):
         self._uvx_expanded = not self._uvx_expanded

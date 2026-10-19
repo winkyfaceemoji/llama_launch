@@ -40,5 +40,5 @@ Tkinter launcher (`launcher.pyw`) that starts llama-server, the system prompt pr
 - [0010](docs/adr/0010-one-model-for-chat-and-agents.md) One model serves chat and agent jobs; no separate agent model, no chat priority
 - [0011](docs/adr/0011-time-from-mcp-server.md) Exact time comes from the `time` MCP server; the Auto preset passes no `--tools`
 - [0012](docs/adr/0012-uvx-proxy-host-check.md) mcp-proxy starts through `mcp_guard.py`, which adds a Host check; mcp-proxy pinned to 0.13.0
-- [0013](docs/adr/0013-web-ui-look-in-tk.md) The Web UI look is a Tk restyle: no webview, no controls in the Web UI, no Canvas-drawn rounded widgets
 - [0013](docs/adr/0013-organise-plans-in-batches.md) Organise jobs propose their plan in batches; no longer timeout, no per-plan cap
+- [0014](docs/adr/0014-web-ui-look-in-tk.md) The Web UI look is a Tk restyle: no webview, no controls in the Web UI, no Canvas-drawn rounded widgets

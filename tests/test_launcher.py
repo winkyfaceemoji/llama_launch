@@ -537,6 +537,18 @@ class UpdateRunnerTests(unittest.TestCase):
         self.assertEqual(result, (True, "Rolled back to b9776. Build check failed: build check (boom)."))
 
 
+def contrast(fg, bg):
+    # WCAG contrast ratio of two "#rrggbb" colours (1 to 21).
+    def luminance(colour):
+        def channel(c):
+            c = int(c, 16) / 255
+            return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+        r, g, b = (channel(colour[i:i + 2]) for i in (1, 3, 5))
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    hi, lo = sorted((luminance(fg), luminance(bg)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
 class PaletteTests(unittest.TestCase):
     def test_palettes_have_the_same_roles(self):
         self.assertEqual(set(launcher.PALETTES["light"]), set(launcher.PALETTES["dark"]))
@@ -551,14 +563,14 @@ class PaletteTests(unittest.TestCase):
     def test_text_contrast(self):
         for name, p in launcher.PALETTES.items():
             for bg in ("BG", "BG_PANEL", "BG_INPUT"):
-                self.assertGreaterEqual(launcher.contrast(p["TEXT_PRI"], p[bg]), 7, f"{name} TEXT_PRI on {bg}")
-                self.assertGreaterEqual(launcher.contrast(p["TEXT_MUT"], p[bg]), 4.5, f"{name} TEXT_MUT on {bg}")
+                self.assertGreaterEqual(contrast(p["TEXT_PRI"], p[bg]), 7, f"{name} TEXT_PRI on {bg}")
+                self.assertGreaterEqual(contrast(p["TEXT_MUT"], p[bg]), 4.5, f"{name} TEXT_MUT on {bg}")
             for fill in ("SUCCESS", "DANGER", "ACCENT"):
-                self.assertGreaterEqual(launcher.contrast(p["BG"], p[fill]), 4.5, f"{name} BG on {fill}")
+                self.assertGreaterEqual(contrast(p["BG"], p[fill]), 4.5, f"{name} BG on {fill}")
 
     def test_contrast_of_black_and_white(self):
-        self.assertAlmostEqual(launcher.contrast("#000000", "#ffffff"), 21)
-        self.assertAlmostEqual(launcher.contrast("#ffffff", "#000000"), 21)
+        self.assertAlmostEqual(contrast("#000000", "#ffffff"), 21)
+        self.assertAlmostEqual(contrast("#ffffff", "#000000"), 21)
 
     def test_set_palette_rebinds_the_constants(self):
         try:
