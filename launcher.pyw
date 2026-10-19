@@ -922,10 +922,12 @@ def card(parent, **kw):
 # ============================================================
 
 def _make_tray_image():
-    # Create a 64x64 RGBA icon: dark background with an accent-colored circle.
-    img = Image.new("RGBA", (64, 64), (26, 27, 38, 255))
+    # Create a 64x64 RGBA icon in the dark palette whatever the theme: it sits on the taskbar,
+    # and a near-black square with a light circle reads on both a light and a dark one.
+    dark = PALETTES["dark"]
+    img = Image.new("RGBA", (64, 64), dark["BG"])
     draw = ImageDraw.Draw(img)
-    draw.ellipse([8, 8, 56, 56], fill=(122, 162, 247, 255))
+    draw.ellipse([8, 8, 56, 56], fill=dark["ACCENT"])
     return img
 
 
