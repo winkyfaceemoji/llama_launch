@@ -10,6 +10,7 @@ model test lock, so it refuses to run while one exists.
 import argparse
 import ctypes
 import importlib.machinery
+import importlib.util
 import os
 import sys
 import tkinter as tk
@@ -38,7 +39,9 @@ def main():
         sys.exit("model_test.lock exists: a model test is running. Not building the GUI.")
     os.makedirs(args.out, exist_ok=True)
     sys.path.insert(0, os.path.dirname(path))
-    mod = importlib.machinery.SourceFileLoader("launcher", path).load_module()
+    loader = importlib.machinery.SourceFileLoader("launcher", path)
+    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("launcher", loader))
+    loader.exec_module(mod)
 
     root = tk.Tk()
     app = mod.CommandLauncherGUI(root)
