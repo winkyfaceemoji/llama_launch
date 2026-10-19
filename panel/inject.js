@@ -117,7 +117,8 @@
     badge.className = "ajp-badge " + (review ? "review" : "running");
     badge.textContent = review ? String(review) : "";
     badge.hidden = n === 0;
-    btn.setAttribute("aria-label", n ? `Agent jobs, ${n} ${n === 1 ? "needs" : "need"} attention` : "Agent jobs");
+    const parts = [review && `${review} ${review === 1 ? "plan" : "plans"} to review`, running && `${running} running`];
+    btn.setAttribute("aria-label", ["Agent jobs", ...parts.filter(Boolean)].join(", "));
   });
   apply();
 })();
