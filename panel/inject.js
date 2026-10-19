@@ -3,11 +3,16 @@
   const OPEN_KEY = "agentJobsPanelOpen";
   const css = `
 #ajp-root{all:initial}
-#ajp-root .ajp-btn{position:fixed;top:10px;right:12px;z-index:40;display:flex;align-items:center;gap:6px;
-  font:500 13px/1 system-ui,-apple-system,"Segoe UI",sans-serif;padding:7px 11px;border-radius:8px;cursor:pointer;
-  background:var(--ajp-surface);color:var(--ajp-text);border:0.5px solid var(--ajp-border)}
-#ajp-root .ajp-badge{min-width:16px;padding:1px 5px;border-radius:8px;font-size:11px;text-align:center;
-  background:var(--ajp-warn-bg);color:var(--ajp-warn-text)}
+#ajp-root .ajp-btn{position:fixed;top:16px;right:16px;z-index:9;display:flex;align-items:center;justify-content:center;
+  width:40px;height:40px;padding:0;border:0;border-radius:9999px;cursor:pointer;background:transparent;color:var(--ajp-text)}
+#ajp-root .ajp-btn:hover{background:var(--ajp-hover)}
+#ajp-root .ajp-btn:focus-visible{outline:2px solid var(--ajp-ring);outline-offset:2px}
+#ajp-root .ajp-btn svg{width:18px;height:18px}
+#ajp-root .ajp-badge{position:absolute;top:6px;right:6px;box-shadow:0 0 0 2px var(--ajp-page);
+  font:600 10px/16px system-ui,-apple-system,"Segoe UI",sans-serif;text-align:center}
+#ajp-root .ajp-badge.running{width:8px;height:8px;border-radius:50%;background:var(--ajp-muted)}
+#ajp-root .ajp-badge.review{min-width:16px;height:16px;padding:0 4px;border-radius:8px;top:1px;right:1px;
+  background:var(--ajp-review-bg);color:var(--ajp-review-text)}
 #ajp-root .ajp-badge[hidden]{display:none}
 #ajp-root .ajp-frame{position:fixed;top:0;right:0;width:360px;max-width:100vw;height:100vh;z-index:39;
   border:0;border-left:0.5px solid var(--ajp-border);background:var(--ajp-bg);transform:translateX(100%);
@@ -16,10 +21,14 @@
 #ajp-root.ajp-open .ajp-btn{right:372px}
 #ajp-root.ajp-away .ajp-btn,#ajp-root.ajp-away .ajp-frame{display:none}
 @media (max-width:479px){#ajp-root.ajp-open .ajp-btn{display:none}}
-#ajp-root{color-scheme:light;--ajp-bg:#fafafa;--ajp-surface:#ffffff;--ajp-text:#0a0a0a;--ajp-border:rgba(0,0,0,.15);
-  --ajp-warn-bg:#fef3c7;--ajp-warn-text:#78350f}
-#ajp-root.ajp-dark{color-scheme:dark;--ajp-bg:#141414;--ajp-surface:#1c1c1c;--ajp-text:#fafafa;
-  --ajp-border:rgba(255,255,255,.15);--ajp-warn-bg:#451a03;--ajp-warn-text:#fde68a}`;
+#ajp-root{color-scheme:light;--ajp-page:#ffffff;--ajp-bg:#fafafa;--ajp-text:#0a0a0a;--ajp-border:rgba(0,0,0,.15);
+  --ajp-hover:rgba(0,0,0,.06);--ajp-ring:#a1a1a1;--ajp-muted:#737373;--ajp-review-bg:#b45309;--ajp-review-text:#ffffff}
+#ajp-root.ajp-dark{color-scheme:dark;--ajp-page:#0d0d0d;--ajp-bg:#141414;--ajp-text:#fafafa;--ajp-border:rgba(255,255,255,.15);
+  --ajp-hover:rgba(255,255,255,.1);--ajp-ring:#737373;--ajp-muted:#a1a1a1;--ajp-review-bg:#f59e0b;--ajp-review-text:#0d0d0d}`;
+  // A list-with-checks icon (static markup, not model output).
+  const ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+    'stroke-linejoin="round" aria-hidden="true"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/>' +
+    '<path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg>';
   const style = document.createElement("style");
   style.textContent = css;
   const root = document.createElement("div");
@@ -27,14 +36,14 @@
   const btn = document.createElement("button");
   btn.className = "ajp-btn";
   btn.type = "button";
+  btn.title = "Jobs";
   btn.setAttribute("aria-label", "Agent jobs");
   btn.setAttribute("aria-expanded", "false");
-  const label = document.createElement("span");
-  label.textContent = "Jobs";
+  btn.innerHTML = ICON;
   const badge = document.createElement("span");
   badge.className = "ajp-badge";
   badge.hidden = true;
-  btn.append(label, badge);
+  btn.append(badge);
   const frame = document.createElement("iframe");
   frame.className = "ajp-frame";
   frame.title = "Agent jobs";
@@ -97,8 +106,11 @@
       return;
     }
     if (d.type !== "agent-jobs-counts") return;
-    const n = (d.running | 0) + (d.review | 0);
-    badge.textContent = String(n);
+    // A plan waiting for approval is the one state that must catch the eye: an amber count.
+    // Running jobs only get a quiet dot.
+    const running = d.running | 0, review = d.review | 0, n = running + review;
+    badge.className = "ajp-badge " + (review ? "review" : "running");
+    badge.textContent = review ? String(review) : "";
     badge.hidden = n === 0;
     btn.setAttribute("aria-label", n ? `Agent jobs, ${n} ${n === 1 ? "needs" : "need"} attention` : "Agent jobs");
   });
