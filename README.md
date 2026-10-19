@@ -13,7 +13,7 @@ The launcher starts and manages four processes:
 3. **UVX MCP Proxy** — a middleware server on port `8001` that bridges MCP tools (web search, fetch) to the llama-server Web UI.
 4. **Agents server** (`agents/server.py`) — an MCP server on port `8002` that runs background [agent jobs](#agent-jobs-research-planning-organising). It's optional: if it can't start, everything else still runs.
 
-Once launched, the app shows live output from all four processes in log panes (the agents server shares the UVX pane), monitors server health, and tracks uptime. Closing the window while servers are running minimizes to the system tray rather than killing them.
+Once launched, the app shows live output from all four processes in log panes (the agents server shares the UVX pane), monitors server health, and tracks uptime. Closing the window stops all four servers and exits; minimize it to keep them running. Starting the launcher again while it runs brings up the open window instead of a second launcher.
 
 All four servers listen on `127.0.0.1` only, so other devices on your network can't reach them. Web pages open in your browser still can, so llama-server also requires an API key (see [API key](#api-key)).
 
@@ -103,7 +103,7 @@ If a port the launcher needs (8080, 8081, 8001 or 8002) is still held by a lefto
 Click **Exit Processes** to kill all four servers and return to the launcher screen.
 
 ### System tray
-Closing the window while servers are running minimizes to the system tray. Right-click the tray icon to **Show** the window or **Exit**.
+Right-click the tray icon to **Show** the window or **Exit** (which stops the servers, like closing the window).
 
 ---
 

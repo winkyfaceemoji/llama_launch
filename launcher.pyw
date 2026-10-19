@@ -89,6 +89,7 @@ import threading
 import urllib.request
 import time
 import ctypes
+from ctypes import wintypes
 import winreg
 from agents import jobs as agent_jobs, paths as agent_paths, llm as agent_llm
 
@@ -383,6 +384,44 @@ def is_own_process(image_name, command_line, app_dir):
     norm = lambda s: s.lower().replace("/", "\\")
     return (image_name.lower() == "llama-server.exe"
             or norm(app_dir) in norm(command_line))
+
+
+# One launcher per Windows session (ADR 0017): a named mutex marks the first one, and a
+# named event lets a second one ask it to show its window. A private kernel32 so these
+# argtypes don't touch ctypes.windll.
+_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_kernel32.CreateMutexW.restype = wintypes.HANDLE
+_kernel32.CreateMutexW.argtypes = (ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR)
+_kernel32.CreateEventW.restype = wintypes.HANDLE
+_kernel32.CreateEventW.argtypes = (ctypes.c_void_p, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR)
+_kernel32.SetEvent.argtypes = (wintypes.HANDLE,)
+_kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+_kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+_kernel32.WaitForSingleObject.restype = wintypes.DWORD
+INSTANCE_NAME = "LlamaLauncher"
+
+
+def claim_instance(name=INSTANCE_NAME):
+    # The first launcher gets its show-request event back. A second one signals that event
+    # (so the first shows its window) and gets None. The event is made before the mutex,
+    # so whoever finds the mutex also finds the event.
+    event = _kernel32.CreateEventW(None, False, False, f"Local\\{name}.show")
+    mutex = _kernel32.CreateMutexW(None, False, f"Local\\{name}")
+    if ctypes.get_last_error() != 183:  # ERROR_ALREADY_EXISTS
+        return event  # the mutex stays open, and so held, until this process exits
+    _kernel32.CloseHandle(mutex)
+    ctypes.windll.user32.AllowSetForegroundWindow(-1)  # ASFW_ANY: the first may take the foreground
+    _kernel32.SetEvent(event)
+    _kernel32.CloseHandle(event)
+    return None
+
+
+def watch_show_requests(event, on_show):
+    # on_show runs on this daemon thread, so it must hand UI work to Tk with after(0, ...).
+    def loop():
+        while _kernel32.WaitForSingleObject(event, 0xFFFFFFFF) == 0:  # INFINITE, WAIT_OBJECT_0
+            on_show()
+    threading.Thread(target=loop, daemon=True).start()
 
 
 def load_api_key(path):
@@ -1619,7 +1658,7 @@ class CommandLauncherGUI:
         self._watch_windows_theme()
 
         # Kill all child processes when the window is closed
-        master.protocol("WM_DELETE_WINDOW", self._on_close)
+        master.protocol("WM_DELETE_WINDOW", self._force_exit)
 
         # A model test lock left by a crash would keep Web UI chat paused.
         clear_test_lock(MODEL_TEST_LOCK)
@@ -2343,14 +2382,12 @@ class CommandLauncherGUI:
     def _show_from_tray(self, icon=None, item=None):
         self.master.after(0, self.master.deiconify)
 
-    def _hide_to_tray(self):
-        self.master.withdraw()
-
     def _tray_exit(self, icon=None, item=None):
         self._tray_icon.stop()
         self.master.after(0, self._force_exit)
 
     def _force_exit(self):
+        # The window's X and the tray's Exit both stop every server and exit (ADR 0016).
         if hasattr(self, "_llama_proc"):
             self._kill_all()
         self.master.destroy()
@@ -2413,18 +2450,6 @@ class CommandLauncherGUI:
         except Exception:
             pass
         clear_test_lock(MODEL_TEST_LOCK)  # a leftover from a crash would keep Web UI chat paused
-
-    def _on_close(self):
-        # If servers are running and tray is available, minimize to tray instead of closing.
-        # Alive, not just started: a second launcher's _free_port may have killed them all.
-        procs = (self._llama_proc, self._uvx_proc, self._proxy_proc, self._agents_proc)
-        if any(p is not None and p.poll() is None for p in procs) and _TRAY_AVAILABLE:
-            self._hide_to_tray()
-        else:
-            if hasattr(self, "_llama_proc"):
-                self._kill_all()
-            self.master.destroy()
-
 
     # ── Log helpers ───────────────────────────────────────────
 
@@ -2574,6 +2599,15 @@ class CommandLauncherGUI:
 # ============================================================
 
 if __name__ == "__main__":
+    show_requests = claim_instance()
+    if show_requests is None:
+        sys.exit(0)  # another launcher is running and now shows its window (ADR 0017)
     root = tk.Tk()
     app  = CommandLauncherGUI(root)
+
+    def bring_to_front():
+        root.deiconify()
+        root.lift()
+        root.focus_force()
+    watch_show_requests(show_requests, lambda: root.after(0, bring_to_front))
     root.mainloop()

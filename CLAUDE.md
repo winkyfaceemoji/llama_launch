@@ -43,3 +43,5 @@ Tkinter launcher (`launcher.pyw`) that starts llama-server, the system prompt pr
 - [0013](docs/adr/0013-organise-plans-in-batches.md) Organise jobs propose their plan in batches; no longer timeout, no per-plan cap
 - [0014](docs/adr/0014-web-ui-look-in-tk.md) The Web UI look is a Tk restyle: no webview, no controls in the Web UI, no Canvas-drawn rounded widgets
 - [0015](docs/adr/0015-plan-waiting-toast.md) A waiting plan gets a Windows toast from the launcher (polls `/jobs` with the approval key); no tray badge, no saved toast state
+- [0016](docs/adr/0016-close-stops-servers.md) Closing the window stops the servers and exits; no hide-to-tray
+- [0017](docs/adr/0017-single-launcher-instance.md) One launcher per Windows session (named mutex); a second start shows the first's window

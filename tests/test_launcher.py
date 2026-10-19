@@ -3,6 +3,7 @@ import importlib.util
 import os
 import subprocess
 import tempfile
+import threading
 import unittest
 from unittest import mock
 import sys
@@ -206,28 +207,43 @@ class PortOwnershipTests(unittest.TestCase):
 
 
 class CloseWindowTests(unittest.TestCase):
-    # _on_close on a stub: no window, no tray, no processes of the stack.
+    # _force_exit (the window X) on a stub: no window, no tray, no processes of the stack.
     def close(self, *procs):
         calls = []
         stub = mock.Mock(_llama_proc=procs[0], _uvx_proc=procs[1], _proxy_proc=procs[2],
                          _agents_proc=procs[3])
-        stub._hide_to_tray.side_effect = lambda: calls.append("hide")
         stub._kill_all.side_effect = lambda: calls.append("kill_all")
         stub.master.destroy.side_effect = lambda: calls.append("destroy")
-        with mock.patch.object(launcher, "_TRAY_AVAILABLE", True):
-            launcher.CommandLauncherGUI._on_close(stub)
+        launcher.CommandLauncherGUI._force_exit(stub)
         return calls
 
-    def test_hides_to_tray_while_a_server_runs(self):
-        dead = mock.Mock(**{"poll.return_value": 1})
+    def test_stops_running_servers_and_exits(self):
+        # Hiding to the tray left servers running after the user thought they'd closed it (ADR 0016).
         alive = mock.Mock(**{"poll.return_value": None})
-        self.assertEqual(self.close(dead, alive, dead, None), ["hide"])
+        self.assertEqual(self.close(alive, alive, alive, alive), ["kill_all", "destroy"])
 
     def test_exits_when_every_server_has_exited(self):
-        # A second launcher's _free_port kills this one's servers; closing it must not
-        # leave it in the tray holding dead handles.
         dead = mock.Mock(**{"poll.return_value": 1})
         self.assertEqual(self.close(dead, dead, dead, None), ["kill_all", "destroy"])
+
+
+class SingleInstanceTests(unittest.TestCase):
+    # Real named kernel objects, under a name no launcher uses.
+    def setUp(self):
+        self.name = f"LlamaLauncherTest-{os.getpid()}-{id(self)}"
+
+    def test_first_launcher_gets_the_instance(self):
+        self.assertIsNotNone(launcher.claim_instance(self.name))
+
+    def test_second_launcher_is_refused(self):
+        launcher.claim_instance(self.name)
+        self.assertIsNone(launcher.claim_instance(self.name))
+
+    def test_second_launcher_asks_the_first_to_show_its_window(self):
+        shown = threading.Event()
+        launcher.watch_show_requests(launcher.claim_instance(self.name), shown.set)
+        launcher.claim_instance(self.name)
+        self.assertTrue(shown.wait(5))
 
 
 class RemoveStaleAgentsEntryTests(unittest.TestCase):
