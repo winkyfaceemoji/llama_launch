@@ -18,6 +18,7 @@ MAX_SECONDS = 20 * 60
 MAX_RESULT_CHARS = 6000
 CONTEXT_CHARS = 40000
 ELIDED = "[older tool result removed to save space]"
+ELIDED_ARGS = json.dumps({"removed": "older tool call arguments removed to save space"})  # still valid JSON
 TRUNCATED = "\n[truncated]"
 MAX_CHECKS = 2  # times a final answer can be sent back before it is accepted as is
 CANCELLED = "cancelled"  # run_agent's stop reason after JobStore.request_cancel
@@ -27,8 +28,9 @@ CODE = re.compile(r"(```|~~~).*?(?:\1|\Z)|`[^`\n]*`", re.DOTALL)
 
 
 class Context:
-    def __init__(self, policy, store, chat, mcp_call):
+    def __init__(self, policy, store, chat, mcp_call, n_ctx=lambda: None):
         self.policy, self.store, self.chat, self.mcp_call = policy, store, chat, mcp_call
+        self.n_ctx = n_ctx  # the loaded model's context in tokens, or None
 
 
 def tool(name, description, params, required, fn):
@@ -50,16 +52,44 @@ def _invoke(fns, name, raw_args):
         return f"error: {type(e).__name__}: {e}"
 
 
-def _trim(messages):
-    """Keep the history inside CONTEXT_CHARS by dropping the oldest tool results (never the last 4 messages)."""
-    total = sum(len(m.get("content") or "") for m in messages)
+def context_chars(n_ctx):
+    """The history budget: half the server's context at 3 characters a token (the rest is left for the reply),
+    never above CONTEXT_CHARS. --fit can pick a context far smaller than CONTEXT_CHARS assumes."""
+    return min(CONTEXT_CHARS, n_ctx * 3 // 2) if n_ctx else CONTEXT_CHARS
+
+
+def _args(call):
+    fn = call.get("function") if isinstance(call, dict) else None
+    args = fn.get("arguments") if isinstance(fn, dict) else None
+    return args if isinstance(args, str) else ""
+
+
+def _size(m):
+    return len(m.get("content") or "") + sum(len(_args(c)) for c in m.get("tool_calls") or [])
+
+
+def _without_args(call):
+    if len(_args(call)) <= len(ELIDED_ARGS):
+        return call
+    return {**call, "function": {**call["function"], "arguments": ELIDED_ARGS}}
+
+
+def _trim(messages, limit=CONTEXT_CHARS):
+    """Keep the history inside limit by dropping the oldest tool results and tool-call arguments (a plan batch
+    is all arguments), never the last 4 messages."""
+    total = sum(_size(m) for m in messages)
     for i in range(len(messages) - 4):
-        if total <= CONTEXT_CHARS:
+        if total <= limit:
             break
         m = messages[i]
         if m.get("role") == "tool" and m.get("content") != ELIDED:
-            total -= len(m.get("content") or "") - len(ELIDED)
-            messages[i] = {**m, "content": ELIDED}
+            short = {**m, "content": ELIDED}
+        elif m.get("tool_calls"):
+            short = {**m, "tool_calls": [_without_args(c) for c in m["tool_calls"]]}
+        else:
+            continue
+        total -= _size(m) - _size(short)
+        messages[i] = short
 
 
 def _name_of(path):
@@ -75,8 +105,8 @@ def step_text(name, args, result):
         if result.startswith("error:"):
             lines = [l for l in result.splitlines()[1:] if l.strip()]
             return "Plan rejected: " + (lines[0] if lines else result[len("error:"):].strip())
-        n = result.split("with ", 1)[-1].split(" ", 1)[0]
-        return f"Proposed plan: {n} changes"
+        m = re.match(r"added (\d+) operations; the plan now has (\d+)", result)
+        return f"Added {m[1]} changes to the plan ({m[2]} in all)" if m else "Proposed plan changes"
     if result.startswith("error:"):
         return "Failed: " + result[len("error:"):].strip()
     if name == "web_search":
@@ -109,7 +139,7 @@ def _parse_args(raw):
 
 
 def run_agent(chat, system, task, tools, max_calls=MAX_CALLS, max_seconds=MAX_SECONDS, clock=time.monotonic,
-              on_step=None, check=None, max_checks=MAX_CHECKS, cancelled=lambda: False):
+              on_step=None, check=None, max_checks=MAX_CHECKS, cancelled=lambda: False, context_chars=CONTEXT_CHARS):
     """check(final_text) returns None to accept a final answer, or a message that sends it back (max_checks times).
     cancelled() is asked before each model call; when true the loop stops with stop "cancelled"."""
     schemas = [t[1] for t in tools]
@@ -126,7 +156,7 @@ def run_agent(chat, system, task, tools, max_calls=MAX_CALLS, max_seconds=MAX_SE
     while True:
         if cancelled():
             return last_text, CANCELLED
-        _trim(messages)
+        _trim(messages, context_chars)
         try:
             reply = chat(messages, schemas)
         except (RuntimeError, OSError) as e:
@@ -170,7 +200,7 @@ def run_agent(chat, system, task, tools, max_calls=MAX_CALLS, max_seconds=MAX_SE
             if cancelled():
                 return last_text, CANCELLED
             messages.append({"role": "user", "content": "You are out of tool calls. Write your final answer now from what you have."})
-            _trim(messages)
+            _trim(messages, context_chars)
             try:
                 return finish(chat(messages, None).get("content") or "", reason)
             except (RuntimeError, OSError) as e:
@@ -280,14 +310,19 @@ PLAN_PROMPT = (
 
 ORGANIZE_PROMPT = (
     "You organise files inside {folder}. Look around with list_dir and read_file, then call propose_plan "
-    "once with the full list of operations, using absolute paths:\n"
+    "with the operations, using absolute paths:\n"
     '{{"op": "mkdir", "path": ...}}, {{"op": "move", "src": ..., "dst": ...}} (also for renames), '
     '{{"op": "remove", "path": ...}} (goes to a trash the user can restore).\n'
     "A move's dst is the item's full new path, not just the folder. Example for {folder}\\a.pdf:\n"
     '{{"op": "mkdir", "path": "{folder}\\PDFs"}}, '
     '{{"op": "move", "src": "{folder}\\a.pdf", "dst": "{folder}\\PDFs\\a.pdf"}}\n'
-    "Nothing runs until the user approves. If propose_plan reports errors, fix them and call it again. "
-    "Finish with a short summary of the plan.")
+    "Send at most {batch} operations per propose_plan call; each call adds to the plan, so call it again for "
+    "the rest. Nothing runs until the user approves. If propose_plan reports errors, fix that batch and send it "
+    "again. When every operation is in, finish with a short summary of the plan.")
+
+# Operations per propose_plan call that the prompt asks for. A whole 200-file plan in one reply ran past
+# llm.chat's 900 s timeout (O4, 2026-10-16), and a small --fit context leaves little room for a long reply.
+PLAN_BATCH = 25
 
 REVIEW_PROMPT = (
     "You review a file-organising plan before a person approves it. The goal was: {goal}\n"
@@ -356,7 +391,7 @@ def run_research(job, ctx):
     on_fetch, check, finish = _source_check(job, ctx, must_read=True)
     tools = web_tools(ctx.mcp_call, on_fetch) + sandbox_tools(ctx.policy)
     text, stop = run_agent(ctx.chat, _dated(RESEARCH_PROMPT), job["args"]["topic"], tools, on_step=_steps(job, ctx),
-                           check=check, cancelled=_cancelled(job, ctx))
+                           check=check, cancelled=_cancelled(job, ctx), context_chars=context_chars(ctx.n_ctx()))
     text, note = finish(text, stop)
     ctx.store.write_text(job["id"], "result.md", text)
     ctx.store.update(job["id"], state="done", note=note)
@@ -369,6 +404,8 @@ def run_plan(job, ctx):
         good = [s for s in steps if isinstance(s, dict) and (
             (s.get("kind") == "research" and s.get("topic"))
             or (s.get("kind") == "organize" and s.get("folder") and s.get("goal")))]
+        if not good:  # a later empty call wiped valid steps (Ministral, 2026-10-16)
+            return f"error: no valid follow-up jobs in that list; the {len(saved)} saved earlier are kept"
         saved[:] = good
         return f"saved {len(good)} follow-up jobs"
 
@@ -378,7 +415,7 @@ def run_plan(job, ctx):
     tools = web_tools(ctx.mcp_call, on_fetch) + sandbox_tools(ctx.policy) + [
         tool("propose_steps", "Save follow-up jobs for the user to queue.", steps_param, ["steps"], propose_steps)]
     text, stop = run_agent(ctx.chat, _dated(PLAN_PROMPT), job["args"]["goal"], tools, on_step=_steps(job, ctx),
-                           check=check, cancelled=_cancelled(job, ctx))
+                           check=check, cancelled=_cancelled(job, ctx), context_chars=context_chars(ctx.n_ctx()))
     text, note = finish(text, stop)
     ctx.store.write_text(job["id"], "result.md", text)
     ctx.store.write_json(job["id"], "steps.json", saved)
@@ -387,23 +424,28 @@ def run_plan(job, ctx):
 
 def run_organize(job, ctx):
     folder, goal = job["args"]["folder"], job["args"]["goal"]
-    proposed = []
+    saved, proposed = [], []  # saved: the accepted batches; proposed: the plan kept if the job ends now
 
     def propose_plan(operations):
-        operations = plans.expand_folder_destinations(operations)
-        errors = plans.validate_plan(operations, ctx.policy, root=folder)
+        # Each call adds a batch; the whole plan so far is expanded and validated together.
+        ops = plans.expand_folder_destinations(saved + operations) if isinstance(operations, list) else operations
+        errors = plans.validate_plan(ops, ctx.policy, root=folder)
         if errors:
-            proposed[:] = []  # an earlier plan must not survive under a summary of this one
-            return "error: plan rejected:\n" + "\n".join(errors)
-        proposed[:] = operations
-        return f"plan saved with {len(operations)} operations"
+            proposed[:] = []  # earlier batches must not survive under a summary written after this one
+            return (f"error: batch rejected, not added. The plan still has {len(saved)} operations from earlier "
+                    "batches; numbers below count those first:\n" + "\n".join(errors))
+        added = len(ops) - len(saved)
+        saved[:] = ops
+        proposed[:] = ops
+        return f"added {added} operations; the plan now has {len(ops)}"
 
     ops_param = {"operations": {"type": "array", "items": {"type": "object"}}}
     # No write_file: the model must not copy listed-folder contents into the sandbox, which web-enabled jobs read.
     tools = [t for t in file_tools(ctx.policy) if t[0] != "write_file"] + [
-        tool("propose_plan", "Propose the full list of file operations.", ops_param, ["operations"], propose_plan)]
-    text, stop = run_agent(ctx.chat, ORGANIZE_PROMPT.format(folder=folder), goal, tools, on_step=_steps(job, ctx),
-                           cancelled=_cancelled(job, ctx))
+        tool("propose_plan", f"Add a batch of file operations (at most {PLAN_BATCH}) to the plan.", ops_param,
+             ["operations"], propose_plan)]
+    text, stop = run_agent(ctx.chat, ORGANIZE_PROMPT.format(folder=folder, batch=PLAN_BATCH), goal, tools, on_step=_steps(job, ctx),
+                           cancelled=_cancelled(job, ctx), context_chars=context_chars(ctx.n_ctx()))
     if stop:
         ctx.store.append_step(job["id"], f"Stopped: {stop}")
     ctx.store.write_text(job["id"], "result.md", text)

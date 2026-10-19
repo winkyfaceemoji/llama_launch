@@ -9,6 +9,7 @@ import urllib.request
 from .paths import APP_DIR
 
 LLAMA_URL = "http://127.0.0.1:8081/v1/chat/completions"
+PROPS_URL = "http://127.0.0.1:8081/props"
 MCP_URL = "http://127.0.0.1:8001/servers/{server}/mcp"
 API_KEY_FILE = os.path.join(APP_DIR, "api_key.txt")
 # The jobs panel's key for the agents server's routes, never the llama API key (ADR 0009).
@@ -78,6 +79,20 @@ def chat(messages, tools=None, url=LLAMA_URL, key_file=API_KEY_FILE, timeout=900
         return data["choices"][0]["message"]
     except (KeyError, IndexError, TypeError):
         raise RuntimeError(f"unexpected reply from llama-server: {_snippet(data)}") from None
+
+
+def n_ctx(url=PROPS_URL, key_file=API_KEY_FILE, timeout=10):
+    """The loaded model's context in tokens, as --fit picked it, or None if llama-server can't say."""
+    try:
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {read_key(key_file)}"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            props = json.loads(r.read().decode("utf-8"))
+        # Builds differ: top-level n_ctx, or only under default_generation_settings (per slot). The smaller is safe.
+        values = [int(v) for v in (props.get("n_ctx"), (props.get("default_generation_settings") or {}).get("n_ctx"))
+                  if v]
+        return min(values) if values else None
+    except (OSError, ValueError, AttributeError, TypeError, http.client.HTTPException):
+        return None
 
 
 def mcp_call(server, tool, args, url=MCP_URL, timeout=120):

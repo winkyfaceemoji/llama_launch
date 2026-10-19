@@ -75,6 +75,20 @@ class RunAgentTests(unittest.TestCase):
         self.assertEqual(last[3]["content"], runner.ELIDED)
         self.assertNotEqual(last[-1]["content"], runner.ELIDED)  # the newest result is kept
 
+    def test_old_tool_call_arguments_count_and_are_dropped_too(self):
+        # A batched plan sits in the assistant's tool-call arguments, not in message content.
+        chat = Script(*[call("echo", {"text": "x" * 10000}, f"c{i}") for i in range(8)], final("done"))
+        runner.run_agent(chat, "s", "t", [self.echo_tool()])
+        last = chat.seen[-1][0]
+        self.assertEqual(last[2]["tool_calls"][0]["function"]["arguments"], runner.ELIDED_ARGS)
+        json.loads(runner.ELIDED_ARGS)  # llama-server parses arguments as JSON
+        self.assertIn("x" * 10000, last[-2]["tool_calls"][0]["function"]["arguments"])  # the newest call is kept
+
+    def test_context_budget_follows_a_smaller_server_context(self):
+        self.assertEqual(runner.context_chars(None), runner.CONTEXT_CHARS)
+        self.assertEqual(runner.context_chars(262144), runner.CONTEXT_CHARS)  # never grows
+        self.assertLess(runner.context_chars(8704), 8704 * 2)  # half the context, at 3 chars a token or fewer
+
     def test_model_error_after_first_turn_returns_what_it_has(self):
         reply = call("echo", {"text": "x"})
         reply["content"] = "working on it"
@@ -167,7 +181,8 @@ class RunAgentTests(unittest.TestCase):
         self.assertEqual(st("list_dir", {"path": "C:\\Users\\me\\Downloads\\"}, "a.pdf"), "Looked in Downloads")
         self.assertEqual(st("read_file", {"path": "C:\\x\\notes.txt"}, "text"), "Read notes.txt")
         self.assertEqual(st("write_file", {"path": "report.md", "content": "x"}, "wrote"), "Wrote report.md")
-        self.assertEqual(st("propose_plan", {"operations": []}, "plan saved with 4 operations"), "Proposed plan: 4 changes")
+        self.assertEqual(st("propose_plan", {"operations": []}, "added 4 operations; the plan now has 9"),
+                         "Added 4 changes to the plan (9 in all)")
         self.assertEqual(st("propose_plan", {}, "error: plan rejected:\n1: not allowed\n2: x"), "Plan rejected: 1: not allowed")
         self.assertEqual(st("propose_steps", {}, "saved 3 follow-up jobs"), "Saved 3 follow-up jobs")
         self.assertEqual(st("read_file", {"path": "x"}, "error: no read access to x"), "Failed: no read access to x")
@@ -315,6 +330,27 @@ class JobKindTests(unittest.TestCase):
         runner.run_job(job, ctx)
         self.assertIn("https://x.test/a", self.store.get(job["id"])["note"])
 
+    def test_job_budget_comes_from_the_server_context(self):
+        # gemma-4-26B got n_ctx 8704 from --fit; a 40000-char history earned HTTP 400 (2026-10-16).
+        job = self.start("plan", {"goal": "g"})  # a plan may finish without having read a page
+        page = runner.tool("fetch_url", "Read", {"url": {"type": "string"}}, ["url"], lambda url: "p" * 6000)
+        chat = Script(*[call("fetch_url", {"url": f"https://x.test/{i}"}, f"c{i}") for i in range(4)], final("r"))
+        ctx = runner.Context(self.policy, self.store, chat, None, n_ctx=lambda: 8704)
+        with mock.patch.object(runner, "web_tools", return_value=[page]):
+            runner.run_job(job, ctx)
+        self.assertEqual(chat.seen[-1][0][3]["content"], runner.ELIDED)
+
+    def test_plan_keeps_earlier_steps_when_a_later_proposal_is_empty(self):
+        # Ministral on 2026-10-16: "Saved 3 follow-up jobs", then "Saved 0 follow-up jobs" left steps.json [].
+        job = self.start("plan", {"goal": "g"})
+        steps = [{"kind": "research", "topic": "t"}]
+        chat = Script(call("propose_steps", {"steps": steps}), call("propose_steps", {"steps": []}, "c2"),
+                      call("propose_steps", {"steps": [{"kind": "hack"}]}, "c3"), final("1. do it"))
+        runner.run_job(job, self.ctx(chat))
+        self.assertEqual(self.store.read_json(job["id"], "steps.json"), steps)
+        for messages, _ in chat.seen[2:]:
+            self.assertTrue(messages[-1]["content"].startswith("error:"), messages[-1]["content"])
+
     def test_plan_saves_steps(self):
         job = self.start("plan", {"goal": "g"})
         steps = [{"kind": "research", "topic": "t"}, {"kind": "organize", "folder": self.dl, "goal": "tidy"},
@@ -402,7 +438,7 @@ class JobKindTests(unittest.TestCase):
     def test_organize_records_review_step(self):
         job_id = self.organize([{"op": "remove", "path": os.path.join(self.dl, "a.pdf")}])
         _, last = self.store.read_steps(job_id)
-        self.assertEqual(last[-2:], ["Proposed plan: 1 changes", "Reviewed the plan"])
+        self.assertEqual(last[-2:], ["Added 1 changes to the plan (1 in all)", "Reviewed the plan"])
 
     def test_capped_job_records_stop(self):
         job = self.start("research", {"topic": "t"})
@@ -452,6 +488,37 @@ class JobKindTests(unittest.TestCase):
         runner.run_job(job, self.ctx(chat))
         self.assertEqual(self.store.get(job["id"])["state"], "failed")
         self.assertIn("not allowed", chat.seen[1][0][-1]["content"])
+
+    def test_organize_adds_batches_to_one_plan(self):
+        # O4 (about 200 files): one reply holding the whole plan ran past llm.chat's 900 s timeout (2026-10-16).
+        with open(os.path.join(self.dl, "b.pdf"), "w") as f:
+            f.write("x")
+        pdfs = os.path.join(self.dl, "PDFs")
+        job = self.start("organize", {"folder": self.dl, "goal": "tidy"})
+        first = [{"op": "mkdir", "path": pdfs}, {"op": "move", "src": os.path.join(self.dl, "a.pdf"), "dst": pdfs}]
+        second = [{"op": "move", "src": os.path.join(self.dl, "b.pdf"), "dst": pdfs}]  # into the earlier mkdir
+        chat = Script(call("propose_plan", {"operations": first}), call("propose_plan", {"operations": second}, "c2"),
+                      final("summary"), final("looks fine"))
+        runner.run_job(job, self.ctx(chat))
+        self.assertEqual(self.store.get(job["id"])["state"], "awaiting_approval")
+        self.assertEqual(self.store.read_json(job["id"], "plan.json"), [
+            {"op": "mkdir", "path": pdfs},
+            {"op": "move", "src": os.path.join(self.dl, "a.pdf"), "dst": os.path.join(pdfs, "a.pdf")},
+            {"op": "move", "src": os.path.join(self.dl, "b.pdf"), "dst": os.path.join(pdfs, "b.pdf")}])
+        self.assertIn("now has 3", chat.seen[2][0][-1]["content"])
+
+    def test_a_rejected_batch_keeps_earlier_batches_for_a_retry(self):
+        with open(os.path.join(self.dl, "b.pdf"), "w") as f:
+            f.write("x")
+        job = self.start("organize", {"folder": self.dl, "goal": "tidy"})
+        first = [{"op": "remove", "path": os.path.join(self.dl, "a.pdf")}]
+        fixed = [{"op": "remove", "path": os.path.join(self.dl, "b.pdf")}]
+        chat = Script(call("propose_plan", {"operations": first}),
+                      call("propose_plan", {"operations": [{"op": "remove", "path": "C:\\Windows"}]}, "c2"),
+                      call("propose_plan", {"operations": fixed}, "c3"), final("summary"), final("looks fine"))
+        runner.run_job(job, self.ctx(chat))
+        self.assertIn("still has 1", chat.seen[2][0][-1]["content"])
+        self.assertEqual(self.store.read_json(job["id"], "plan.json"), first + fixed)
 
     def test_rejected_later_proposal_clears_the_saved_plan(self):
         job = self.start("organize", {"folder": self.dl, "goal": "tidy"})

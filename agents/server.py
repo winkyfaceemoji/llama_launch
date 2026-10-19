@@ -30,7 +30,7 @@ try:
     store.cancel_unfinished()  # anything left from a previous run was killed with it
 except Exception as e:
     sys.exit(f"agents server can't start: {type(e).__name__}: {e}")
-ctx = runner.Context(policy, store, llm.chat, llm.mcp_call)
+ctx = runner.Context(policy, store, llm.chat, llm.mcp_call, llm.n_ctx)
 worker = jobs.Worker(store, lambda job: runner.run_job(job, ctx))
 
 MAX_FILE_CHARS = 8000  # per file in job_result; keeps big plans out of the chat model's context

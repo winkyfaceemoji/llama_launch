@@ -15,6 +15,14 @@ SSE_BODY = ('event: message\ndata: {"jsonrpc":"2.0","id":1,"result":{"content":'
 
 
 class Fake(BaseHTTPRequestHandler):
+    def do_GET(self):
+        SEEN["auth"] = self.headers.get("Authorization")
+        props = {"/top/props": {"n_ctx": 8704},
+                 "/nested/props": {"default_generation_settings": {"n_ctx": 16384}}}.get(self.path)
+        if props is None:
+            return self._reply(500, "text/plain", b"no")
+        self._reply(200, "application/json", json.dumps(props).encode())
+
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         SEEN["auth"], SEEN["body"] = self.headers.get("Authorization"), body
@@ -79,6 +87,17 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(msg["content"], "hi")
         self.assertEqual(SEEN["auth"], "Bearer k123")
         self.assertEqual(SEEN["body"]["tools"], [{"type": "function"}])
+
+    def test_n_ctx_reads_both_props_shapes_and_none_on_failure(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+            f.write("k123\n")
+        try:
+            got = [llm.n_ctx(url=self.base + p, key_file=f.name) for p in ("/top/props", "/nested/props", "/bad/props")]
+            self.assertEqual(SEEN["auth"], "Bearer k123")
+            got.append(llm.n_ctx(url=self.base + "/top/props", key_file=f.name + ".missing"))
+        finally:
+            os.unlink(f.name)
+        self.assertEqual(got, [8704, 16384, None, None])
 
     def test_mcp_call_joins_text(self):
         text = llm.mcp_call("ddg-search", "search", {"query": "q"}, url=self.base + "/servers/{server}/mcp")
