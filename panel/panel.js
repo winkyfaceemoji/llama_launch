@@ -279,9 +279,20 @@
     disarmTrash();
     act("trash/empty");
   });
+  // Theme: the OS's until the Web UI page says which one it shows, then only the page's.
+  const osDark = matchMedia("(prefers-color-scheme: dark)");
+  let themeFromPage = false;
+  const setDark = (dark) => document.documentElement.classList.toggle("dark", dark);
+  setDark(osDark.matches);
+  osDark.addEventListener("change", () => { if (!themeFromPage) setDark(osDark.matches); });
   window.addEventListener("message", (e) => {
     if (e.origin !== location.origin || e.source !== window.parent) return;
     const d = e.data || {};
+    if (d.type === "agent-jobs-theme") {
+      themeFromPage = true;
+      setDark(!!d.dark);
+      return;
+    }
     if (d.type !== "agent-jobs-visible") return;
     const was = visible;
     visible = !!d.visible;

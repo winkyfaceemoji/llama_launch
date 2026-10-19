@@ -16,10 +16,10 @@
 #ajp-root.ajp-open .ajp-btn{right:372px}
 #ajp-root.ajp-away .ajp-btn,#ajp-root.ajp-away .ajp-frame{display:none}
 @media (max-width:479px){#ajp-root.ajp-open .ajp-btn{display:none}}
-#ajp-root{color-scheme:light dark;--ajp-bg:#faf9f5;--ajp-surface:#ffffff;--ajp-text:#1f1e1d;--ajp-border:rgba(31,30,29,.18);
-  --ajp-warn-bg:#faeeda;--ajp-warn-text:#633806}
-@media (prefers-color-scheme:dark){#ajp-root{--ajp-bg:#262624;--ajp-surface:#30302e;--ajp-text:#faf9f5;
-  --ajp-border:rgba(250,249,245,.18);--ajp-warn-bg:#633806;--ajp-warn-text:#faeeda}}`;
+#ajp-root{color-scheme:light;--ajp-bg:#fafafa;--ajp-surface:#ffffff;--ajp-text:#0a0a0a;--ajp-border:rgba(0,0,0,.15);
+  --ajp-warn-bg:#fef3c7;--ajp-warn-text:#78350f}
+#ajp-root.ajp-dark{color-scheme:dark;--ajp-bg:#141414;--ajp-surface:#1c1c1c;--ajp-text:#fafafa;
+  --ajp-border:rgba(255,255,255,.15);--ajp-warn-bg:#451a03;--ajp-warn-text:#fde68a}`;
   const style = document.createElement("style");
   style.textContent = css;
   const root = document.createElement("div");
@@ -79,6 +79,15 @@
   window.addEventListener("popstate", routeChanged);
   setInterval(routeChanged, 300);
   frame.addEventListener("load", tell);
+  // Follow the Web UI's own theme (System / Light / Dark), which it marks with a "dark" class on <html>.
+  const syncTheme = () => {
+    const dark = document.documentElement.classList.contains("dark");
+    root.classList.toggle("ajp-dark", dark);
+    try { frame.contentWindow.postMessage({type: "agent-jobs-theme", dark}, location.origin); } catch (e) {}
+  };
+  new MutationObserver(syncTheme).observe(document.documentElement, {attributes: true, attributeFilter: ["class"]});
+  frame.addEventListener("load", syncTheme);
+  syncTheme();
   window.addEventListener("message", (e) => {
     if (e.origin !== location.origin || e.source !== frame.contentWindow) return;
     const d = e.data || {};
