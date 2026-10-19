@@ -46,6 +46,7 @@ def main():
     root = tk.Tk()
     app = mod.CommandLauncherGUI(root)
     if args.theme and hasattr(mod, "apply_theme"):
+        app._theme = args.theme  # else the System-mode watcher switches back to Windows' theme
         mod.apply_theme(root, args.theme)
 
     def shot(win, name):
