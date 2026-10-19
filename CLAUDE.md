@@ -8,6 +8,7 @@ Tkinter launcher (`launcher.pyw`) that starts llama-server, the system prompt pr
 - Tests: `python -m unittest discover -s tests`. They cover `agents/` (job store, path policy, plans, runner, HTTP helpers including the approval-route check) and the pure helpers in `launcher.pyw` (it's loaded with `SourceFileLoader` because of the `.pyw` extension). The GUI and `agents/server.py` (needs `mcp`) have no unit tests; smoke-test the server on a spare port.
 - Syntax check: `python -m py_compile launcher.pyw proxy.py`.
 - Run the proxy alone: `python proxy.py 8080 8081` (listen port, upstream port).
+- GUI screenshots: `python dev/gui_shot.py launcher.pyw <out dir> [--theme light|dark]` builds the window without launching anything and saves the home, Settings and running views. Building the window clears the model test lock, so it refuses to run during a test.
 - Agents MCP server: the launcher starts it on `127.0.0.1:8002` (`uv run --script agents/server.py`, MCP at `/mcp`). **Never run it by hand while the launcher is running**: its startup cancels unfinished jobs in the real sandbox, including one the live server is applying. With the launcher stopped, use a spare port (`--port 18002`); it still touches the real sandbox.
 - Model test: `python eval/model_test.py` (the launcher's **Test this model** runs it). Needs the launcher stack running; 15 to 60 minutes of GPU, depending on the model.
 - Smoke-test a model without the GUI: run the Auto preset command (`AUTO_COMMAND` in `launcher.pyw`) with `-m` set to a real `.gguf`, then stream a `/v1/chat/completions` request through `:8080` and `:8081` and compare. The llama-server log shows the context `--fit` picked (`n_ctx = ...` up to b9776, `n_ctx_slot = ...` from b11636).
@@ -39,4 +40,5 @@ Tkinter launcher (`launcher.pyw`) that starts llama-server, the system prompt pr
 - [0010](docs/adr/0010-one-model-for-chat-and-agents.md) One model serves chat and agent jobs; no separate agent model, no chat priority
 - [0011](docs/adr/0011-time-from-mcp-server.md) Exact time comes from the `time` MCP server; the Auto preset passes no `--tools`
 - [0012](docs/adr/0012-uvx-proxy-host-check.md) mcp-proxy starts through `mcp_guard.py`, which adds a Host check; mcp-proxy pinned to 0.13.0
+- [0013](docs/adr/0013-web-ui-look-in-tk.md) The Web UI look is a Tk restyle: no webview, no controls in the Web UI, no Canvas-drawn rounded widgets
 - [0013](docs/adr/0013-organise-plans-in-batches.md) Organise jobs propose their plan in batches; no longer timeout, no per-plan cap
