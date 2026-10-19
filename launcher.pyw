@@ -115,17 +115,57 @@ except Exception:
 # easy to find and change without touching any logic.
 # ============================================================
 
-# Tokyo Night color palette — a dark blue-grey theme
-BG        = "#1a1b26"
-BG_PANEL  = "#24283b"
-BG_INPUT  = "#1f2335"
-ACCENT    = "#7aa2f7"
-SUCCESS   = "#9ece6a"
-DANGER    = "#f7768e"
-TEXT_PRI  = "#c0caf5"
-TEXT_SEC  = "#a9b1d6"
-TEXT_MUT  = "#565f89"
-BORDER    = "#292e42"
+# Neutral greys from the llama Web UI, light and dark. set_palette() rebinds the
+# module constants (BG, TEXT_PRI, ...) to one of them. Every colour must be unique
+# within its palette: apply_theme() finds a widget's role by its colour, which is why
+# BG_PANEL is one step off BG.
+PALETTES = {
+    "light": {
+        "BG":            "#ffffff",
+        "BG_PANEL":      "#fefefe",   # boxes
+        "BG_INPUT":      "#f5f5f5",
+        "HOVER":         "#eeeeee",
+        "BORDER":        "#e5e5e5",
+        "ACCENT":        "#171717",   # primary: filled buttons, selection, links
+        "TEXT_PRI":      "#0a0a0a",
+        "TEXT_SEC":      "#404040",
+        "TEXT_MUT":      "#6b6b6b",
+        "SUCCESS":       "#15803d",
+        "SUCCESS_HOVER": "#166534",
+        "DANGER":        "#e7000b",
+        "DANGER_HOVER":  "#c10007",
+        "WARN":          "#b45309",
+    },
+    "dark": {
+        "BG":            "#0d0d0d",
+        "BG_PANEL":      "#0e0e0e",
+        "BG_INPUT":      "#171717",
+        "HOVER":         "#262626",
+        "BORDER":        "#2e2e2e",
+        "ACCENT":        "#e5e5e5",
+        "TEXT_PRI":      "#fafafa",
+        "TEXT_SEC":      "#d4d4d4",
+        "TEXT_MUT":      "#a1a1a1",
+        "SUCCESS":       "#4ade80",
+        "SUCCESS_HOVER": "#22c55e",
+        "DANGER":        "#ff6467",
+        "DANGER_HOVER":  "#ff4d50",
+        "WARN":          "#fbbf24",
+    },
+}
+THEMES = ("system", "light", "dark")   # the Settings choice; resolve_theme() turns it into a palette name
+_palette = {}
+
+
+def set_palette(name):
+    # Rebind the colour constants. Code reads them when it builds a widget, so set this first.
+    _palette.clear()
+    _palette.update(PALETTES[name])
+    globals().update(_palette)
+    return name
+
+
+set_palette("dark")
 
 # Fonts
 FONT_TITLE  = ("Segoe UI", 13, "bold")
@@ -743,6 +783,44 @@ class UpdateRunner:
 # ============================================================
 # SECTION 4 — THEME & SHARED UI HELPERS
 # ============================================================
+
+def contrast(fg, bg):
+    # WCAG contrast ratio of two "#rrggbb" colours (1 to 21).
+    def luminance(colour):
+        def channel(c):
+            c = int(c, 16) / 255
+            return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+        r, g, b = (channel(colour[i:i + 2]) for i in (1, 3, 5))
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    hi, lo = sorted((luminance(fg), luminance(bg)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def theme_setting(config):
+    # The saved Settings choice; anything missing or unknown is "system".
+    theme = config.get("theme")
+    return theme if theme in THEMES else "system"
+
+
+def resolve_theme(setting, windows_light):
+    # "light"/"dark" win; otherwise follow Windows. windows_light is None when the registry
+    # can't be read, which counts as light (Windows' default).
+    if setting in ("light", "dark"):
+        return setting
+    return "dark" if windows_light is False else "light"
+
+
+def remap_colors(options, old, new):
+    # options: {option: value} read from a widget. Returns the options whose value is a
+    # colour of the old palette, each mapped to the same role's colour in the new one.
+    roles = {colour: role for role, colour in old.items()}
+    changed = {}
+    for option, value in options.items():
+        role = roles.get(str(value).lower())
+        if role:
+            changed[option] = new[role]
+    return changed
+
 
 def apply_ttk_style():
     # Style the ttk scrollbar to match the dark theme.

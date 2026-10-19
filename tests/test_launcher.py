@@ -537,5 +537,74 @@ class UpdateRunnerTests(unittest.TestCase):
         self.assertEqual(result, (True, "Rolled back to b9776. Build check failed: build check (boom)."))
 
 
+class PaletteTests(unittest.TestCase):
+    def test_palettes_have_the_same_roles(self):
+        self.assertEqual(set(launcher.PALETTES["light"]), set(launcher.PALETTES["dark"]))
+
+    def test_colours_are_lowercase_hex_and_unique_per_palette(self):
+        # remap_colors finds a widget's role by its colour, so no two roles may share one.
+        for name, palette in launcher.PALETTES.items():
+            for role, colour in palette.items():
+                self.assertRegex(colour, r"^#[0-9a-f]{6}$", f"{name} {role}")
+            self.assertEqual(len(set(palette.values())), len(palette), name)
+
+    def test_text_contrast(self):
+        for name, p in launcher.PALETTES.items():
+            for bg in ("BG", "BG_PANEL", "BG_INPUT"):
+                self.assertGreaterEqual(launcher.contrast(p["TEXT_PRI"], p[bg]), 7, f"{name} TEXT_PRI on {bg}")
+                self.assertGreaterEqual(launcher.contrast(p["TEXT_MUT"], p[bg]), 4.5, f"{name} TEXT_MUT on {bg}")
+            for fill in ("SUCCESS", "DANGER", "ACCENT"):
+                self.assertGreaterEqual(launcher.contrast(p["BG"], p[fill]), 4.5, f"{name} BG on {fill}")
+
+    def test_contrast_of_black_and_white(self):
+        self.assertAlmostEqual(launcher.contrast("#000000", "#ffffff"), 21)
+        self.assertAlmostEqual(launcher.contrast("#ffffff", "#000000"), 21)
+
+    def test_set_palette_rebinds_the_constants(self):
+        try:
+            launcher.set_palette("light")
+            self.assertEqual(launcher.BG, launcher.PALETTES["light"]["BG"])
+            launcher.set_palette("dark")
+            self.assertEqual(launcher.BG, launcher.PALETTES["dark"]["BG"])
+        finally:
+            launcher.set_palette("dark")
+
+
+class ThemeTests(unittest.TestCase):
+    def test_explicit_setting_wins(self):
+        self.assertEqual(launcher.resolve_theme("light", False), "light")
+        self.assertEqual(launcher.resolve_theme("dark", True), "dark")
+
+    def test_system_follows_windows(self):
+        self.assertEqual(launcher.resolve_theme("system", True), "light")
+        self.assertEqual(launcher.resolve_theme("system", False), "dark")
+
+    def test_unreadable_registry_counts_as_light(self):
+        self.assertEqual(launcher.resolve_theme("system", None), "light")
+
+    def test_unknown_setting_counts_as_system(self):
+        self.assertEqual(launcher.resolve_theme("purple", False), "dark")
+        self.assertEqual(launcher.resolve_theme(None, True), "light")
+
+    def test_theme_setting_from_config(self):
+        self.assertEqual(launcher.theme_setting({}), "system")
+        self.assertEqual(launcher.theme_setting({"theme": "dark"}), "dark")
+        self.assertEqual(launcher.theme_setting({"theme": "Dark"}), "system")
+        self.assertEqual(launcher.theme_setting({"theme": 3}), "system")
+
+
+class RemapColorsTests(unittest.TestCase):
+    OLD = {"BG": "#000000", "TEXT_PRI": "#ffffff"}
+    NEW = {"BG": "#fefefe", "TEXT_PRI": "#0a0a0a"}
+
+    def test_maps_each_colour_to_its_role_in_the_new_palette(self):
+        self.assertEqual(launcher.remap_colors({"bg": "#000000", "fg": "#FFFFFF"}, self.OLD, self.NEW),
+                         {"bg": "#fefefe", "fg": "#0a0a0a"})
+
+    def test_leaves_other_values_alone(self):
+        options = {"bg": "", "fg": "SystemButtonFace", "highlightcolor": "#123456"}
+        self.assertEqual(launcher.remap_colors(options, self.OLD, self.NEW), {})
+
+
 if __name__ == "__main__":
     unittest.main()
