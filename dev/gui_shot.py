@@ -3,9 +3,11 @@
     python dev/gui_shot.py <launcher.pyw> <out dir> [--theme light|dark]
 
 Builds the window from the given launcher.pyw (any version) and saves home.png,
-settings.png and running.png. It never clicks Launch or starts a process; the running
-view is only the layout, with a few sample log lines. Building the window clears the
-model test lock, so it refuses to run while one exists.
+dropdown.png, settings.png, preset.png, folders.png, update.png and running.png. A view
+an older version can't build is skipped with a note. It never clicks Launch or starts a
+process: the running view is only the layout with a few sample log lines, and the update
+dialog runs a fake job. Building the window clears the model test lock, so it refuses to
+run while one exists.
 """
 import argparse
 import ctypes
@@ -56,27 +58,72 @@ def main():
         ImageGrab.grab(window_rect(win)).save(os.path.join(args.out, name))
         win.attributes("-topmost", False)
 
-    def home():
-        shot(root, "home.png")
-        app._open_settings()
-        root.after(600, settings)
+    def newest_dialog():
+        return [w for w in root.winfo_children() if isinstance(w, tk.Toplevel)][-1]
 
-    def settings():
-        dlg = [w for w in root.winfo_children() if isinstance(w, tk.Toplevel)][-1]
-        shot(dlg, "settings.png")
+    def shot_dialog(name):
+        dlg = newest_dialog()
+        shot(dlg, name)
         dlg.destroy()
+
+    def dropdown():
+        root.focus_force()
+        app.model_menu._show_popup()
+        popup = app.model_menu._popup
+        popup.unbind("<FocusOut>")  # the grab below would otherwise close it
+        popup.update()
+        left, top, right, bottom = window_rect(root)
+        bottom = max(bottom, popup.winfo_rooty() + popup.winfo_height() + 8)
+        ImageGrab.grab((left, top, right, bottom)).save(os.path.join(args.out, "dropdown.png"))
+        popup.destroy()
+        app.model_menu._popup = None
+
+    def preset():
+        mod.PresetDialog(root, "Edit preset", name="Auto", command="llama-server -m {model} --fit on",
+                         model_keywords=[], available_models=sorted(app._models)[:6])
+
+    def update():
+        mod.UpdateDialog(root, "Update to b99999", lambda report: (report("winget upgrade ..."),
+                                                                  (True, "Updated. Build check passed."))[1])
+
+    def running():
         app._enter_running_state()
         for line in ("main: server is listening on http://127.0.0.1:8081",
                      "srv  update_slots: all slots are idle"):
             app._append_log(app.llama_log, line)
         app._append_log(app.proxy_log, "Proxy listening on 127.0.0.1:8080 -> 127.0.0.1:8081")
-        root.after(600, running)
 
-    def running():
-        shot(root, "running.png")
-        os._exit(0)  # skip _on_close: nothing was started, and the update check thread may still run
+    # (open the view, its screenshot) in order; the running view changes the layout, so it goes last.
+    steps = [
+        (lambda: None, lambda: shot(root, "home.png")),
+        (dropdown, lambda: None),
+        (app._open_settings, lambda: shot_dialog("settings.png")),
+        (preset, lambda: shot_dialog("preset.png")),
+        (lambda: mod.FoldersDialog(root, app.agent_policy, None), lambda: shot_dialog("folders.png")),
+        (update, lambda: shot_dialog("update.png")),
+        (running, lambda: shot(root, "running.png")),
+    ]
 
-    root.after(1200, home)
+    def run(i=0):
+        if i == len(steps):
+            os._exit(0)  # skip _on_close: nothing was started, and the update check thread may still run
+        open_view, take = steps[i]
+        try:
+            open_view()
+        except Exception as e:  # an older launcher.pyw may lack this view
+            print(f"skipped step {i + 1}: {e}", flush=True)
+            root.after(0, run, i + 1)
+            return
+
+        def capture():
+            try:
+                take()
+            except Exception as e:
+                print(f"skipped step {i + 1}: {e}", flush=True)
+            run(i + 1)
+        root.after(700, capture)
+
+    root.after(1200, run)
     root.mainloop()
 
 
