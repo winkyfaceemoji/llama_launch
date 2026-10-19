@@ -462,11 +462,44 @@ def run_organize(job, ctx):
         warnings = []
     # Saved once: the panel polls every 2 s and must not re-walk a big folder each time.
     ctx.store.write_json(job["id"], "warnings.json", warnings)
-    review = ctx.chat([{"role": "system", "content": REVIEW_PROMPT.format(goal=goal)},
-                       {"role": "user", "content": json.dumps(proposed, indent=2)}], None)
-    ctx.store.append_step(job["id"], "Reviewed the plan")
-    ctx.store.write_text(job["id"], "review.md", review.get("content") or "")
-    ctx.store.update(job["id"], state="awaiting_approval", note=stop)
+    review, failed = _review(proposed, REVIEW_PROMPT.format(goal=goal), ctx)
+    ctx.store.append_step(job["id"], f"Review failed: {failed}" if failed else "Reviewed the plan")
+    ctx.store.write_text(job["id"], "review.md", review)
+    note = "; ".join(n for n in (stop, failed and f"review failed: {failed}") if n)
+    ctx.store.update(job["id"], state="awaiting_approval", note=note)
+
+
+def _review_parts(ops, budget):
+    """The plan as numbered lines, cut into (first, last, text) parts of at most budget characters."""
+    parts, lines = [], []
+    for n, op in enumerate(ops, 1):
+        line = f"\n{n}. {json.dumps(op)}"
+        if lines and sum(map(len, lines)) + len(line) > budget:
+            parts.append((n - len(lines), n - 1, "".join(lines)))
+            lines = []
+        lines.append(line)
+    parts.append((len(ops) - len(lines) + 1, len(ops), "".join(lines)))
+    return parts
+
+
+def _review(ops, system, ctx):
+    """Review the plan in parts that fit the context: a 205-operation plan in one prompt overflowed gemma-4-26B's
+    8704 tokens (O4, 2026-10-16). A failed call keeps the plan for approval. Returns review.md and the error."""
+    header = "Operations {} to {} of {}:"
+    budget = context_chars(ctx.n_ctx()) - len(system) - len(header.format(len(ops), len(ops), len(ops)))
+    parts = _review_parts(ops, budget)
+    replies = []
+    for first, last, text in parts:
+        try:
+            reply = ctx.chat([{"role": "system", "content": system},
+                              {"role": "user", "content": header.format(first, last, len(ops)) + text}], None)
+        except (RuntimeError, OSError) as e:
+            error = f"{type(e).__name__}: {e}"
+            replies.append(f"> The review of operations {first} to {last} and later failed: {error}")
+            return "\n\n".join(replies), error
+        content = reply.get("content") or ""
+        replies.append(f"## Operations {first} to {last}\n\n{content}" if len(parts) > 1 else content)
+    return "\n\n".join(replies), ""
 
 
 KINDS = {"research": run_research, "plan": run_plan, "organize": run_organize}

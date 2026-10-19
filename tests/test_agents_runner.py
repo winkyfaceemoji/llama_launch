@@ -428,6 +428,37 @@ class JobKindTests(unittest.TestCase):
         self.assertEqual(self.store.read_text(job_id, "review.md"), "looks fine")
         self.assertTrue(os.path.exists(os.path.join(self.dl, "a.pdf")))  # nothing changed yet
 
+    def test_a_big_plan_is_reviewed_in_chunks_that_fit_the_context(self):
+        # gemma-4-26B got n_ctx 8704 from --fit; O4's 205-operation plan in one review prompt overflowed it.
+        job = self.start("organize", {"folder": self.dl, "goal": "tidy"})
+        ops = [{"op": "mkdir", "path": os.path.join(self.dl, f"Folder {i:03}")} for i in range(200)]
+        chat = Script(call("propose_plan", {"operations": ops}), final("summary"),
+                      *[final(f"review {i}") for i in range(20)])
+        ctx = runner.Context(self.policy, self.store, chat, None, n_ctx=lambda: 8704)
+        runner.run_job(job, ctx)
+        self.assertEqual(self.store.get(job["id"])["state"], "awaiting_approval")
+        reviews = [messages for messages, _ in chat.seen[2:]]
+        self.assertGreater(len(reviews), 1)
+        for messages in reviews:
+            self.assertLessEqual(sum(len(m["content"]) for m in messages), runner.context_chars(8704))
+        sent = "\n".join(messages[1]["content"] for messages in reviews)
+        for n, op in enumerate(ops, 1):
+            self.assertEqual(sent.count(f"\n{n}. {json.dumps(op)}"), 1, n)  # numbered across the whole plan
+        review = self.store.read_text(job["id"], "review.md")
+        for i in range(len(reviews)):
+            self.assertIn(f"review {i}", review)
+
+    def test_a_failed_review_still_waits_for_approval(self):
+        job = self.start("organize", {"folder": self.dl, "goal": "tidy"})
+        ops = [{"op": "remove", "path": os.path.join(self.dl, "a.pdf")}]
+        chat = Script(call("propose_plan", {"operations": ops}), final("summary"), RuntimeError("HTTP 400"))
+        runner.run_job(job, self.ctx(chat))
+        got = self.store.get(job["id"])
+        self.assertEqual(got["state"], "awaiting_approval")
+        self.assertIn("HTTP 400", got["note"])
+        self.assertEqual(self.store.read_json(job["id"], "plan.json"), ops)
+        self.assertIn("HTTP 400", self.store.read_text(job["id"], "review.md"))
+
     def test_research_records_steps(self):
         job = self.start("research", {"topic": "llama"})
         runner.run_job(job, self.ctx(Script(call("web_search", {"query": "llama"}), final("# Report"),
