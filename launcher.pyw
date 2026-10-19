@@ -894,7 +894,7 @@ def flat_btn(parent, text, command, color=None, fg=None, **kw):
     return tk.Button(
         parent, text=text, command=command,
         bg=color, fg=fg, activebackground=color, activeforeground=fg,
-        font=FONT_BTN, relief="flat", bd=0,
+        disabledforeground=TEXT_MUT, font=FONT_BTN, relief="flat", bd=0,
         padx=14, pady=7, cursor="hand2", **kw
     )
 
@@ -905,7 +905,7 @@ def small_btn(parent, text, command, color=None, fg=None, **kw):
     return tk.Button(
         parent, text=text, command=command,
         bg=color, fg=fg, activebackground=HOVER, activeforeground=TEXT_PRI,
-        font=FONT_BTN_SM, relief="flat", bd=0,
+        disabledforeground=TEXT_MUT, font=FONT_BTN_SM, relief="flat", bd=0,
         padx=10, pady=5, cursor="hand2", **kw
     )
 
@@ -961,7 +961,7 @@ class _MenuProxy:
 class DropdownButton(tk.Frame):
     # A custom dropdown: a Button + arrow Label that opens a borderless popup window.
     def __init__(self, parent, var):
-        super().__init__(parent, bg=BG, padx=1, pady=1)
+        super().__init__(parent, bg=BORDER, padx=1, pady=1)
         self._var   = var
         self._popup = None
         self.menu   = _MenuProxy()
@@ -997,7 +997,7 @@ class DropdownButton(tk.Frame):
         # overrideredirect strips all OS window chrome so we control the border fully
         popup = tk.Toplevel(self)
         popup.overrideredirect(True)
-        popup.configure(bg=BG)
+        popup.configure(bg=BORDER)
 
         inner = tk.Frame(popup, bg=BG_INPUT)
         inner.pack(fill="both", expand=True, padx=1, pady=1)
@@ -1056,7 +1056,7 @@ class PresetDialog(tk.Toplevel):
         self.result_models  = None
         self._available_models = available_models or []
 
-        section_label(self, "PRESET NAME").pack(fill="x", padx=20, pady=(16, 2))
+        section_label(self, "Preset name").pack(fill="x", padx=20, pady=(16, 2))
         self.name_var = tk.StringVar(value=name)
         tk.Entry(self, textvariable=self.name_var,
                  font=FONT_MONO, bg=BG_INPUT, fg=TEXT_PRI,
@@ -1064,14 +1064,13 @@ class PresetDialog(tk.Toplevel):
                  highlightthickness=1, highlightbackground=BORDER,
                  highlightcolor=ACCENT).pack(fill="x", padx=20, ipady=6)
 
-        section_label(self, "APPLIES TO MODELS").pack(fill="x", padx=20, pady=(14, 2))
+        section_label(self, "Applies to models").pack(fill="x", padx=20, pady=(14, 2))
         tk.Label(self, text="Select models this preset applies to — leave none selected to match all",
                  font=FONT_SMALL, fg=TEXT_MUT, bg=BG).pack(padx=20, anchor="w", pady=(0, 4))
 
         list_frame = tk.Frame(self, bg=BORDER)
         list_frame.pack(fill="x", padx=20)
-        scrollbar = tk.Scrollbar(list_frame, orient="vertical", bg=BG_PANEL,
-                                 troughcolor=BG_INPUT, relief="flat")
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical")
         self.models_listbox = tk.Listbox(
             list_frame, selectmode=tk.MULTIPLE,
             bg=BG_INPUT, fg=TEXT_PRI,
@@ -1099,7 +1098,7 @@ class PresetDialog(tk.Toplevel):
             self.models_listbox.insert(tk.END, "(no models found — will match all)")
             self.models_listbox.config(fg=TEXT_MUT)
 
-        section_label(self, "COMMAND TEMPLATE  --  use {model} as the model path placeholder").pack(
+        section_label(self, "Command template: use {model} as the model path placeholder").pack(
             fill="x", padx=20, pady=(14, 2)
         )
         self.cmd_text = tk.Text(
@@ -1165,7 +1164,7 @@ class SettingsDialog(tk.Toplevel):
         self._uvx_expanded   = False
 
         # ── Llama.cpp folder ─────────────────────────────────────
-        section_label(self, "LLAMA.CPP FOLDER").pack(fill="x", padx=20, pady=(20, 6))
+        section_label(self, "llama.cpp folder").pack(fill="x", padx=20, pady=(20, 6))
         tk.Label(self, text="The working directory used when launching llama-server.",
                  font=FONT_SMALL, fg=TEXT_MUT, bg=BG).pack(padx=20, anchor="w", pady=(0, 10))
 
@@ -1182,7 +1181,7 @@ class SettingsDialog(tk.Toplevel):
         small_btn(path_row, "Browse", self._browse).grid(row=0, column=1, padx=(8, 0))
 
         # ── Launch options ────────────────────────────────────────
-        section_label(self, "LAUNCH OPTIONS").pack(fill="x", padx=20, pady=(20, 6))
+        section_label(self, "Launch options").pack(fill="x", padx=20, pady=(20, 6))
 
         # Web UI row: label left, equal-width Yes/No buttons right
         web_row = tk.Frame(self, bg=BG)
@@ -1340,7 +1339,7 @@ class FoldersDialog(tk.Toplevel):
         self.grab_set()
         self._parent = parent
         self._policy = policy
-        section_label(self, "FOLDERS AGENTS CAN READ").pack(fill="x", padx=20, pady=(20, 6))
+        section_label(self, "Folders agents can read").pack(fill="x", padx=20, pady=(20, 6))
         note = f"Agents always write only to {policy.sandbox}. Local drives only."
         if error:
             note += f" The sandbox can't be created: {error}"
@@ -1409,7 +1408,7 @@ class UpdateDialog(tk.Toplevel):
         self.grab_set()
         self._on_done = on_done
         self._working = True
-        section_label(self, title.upper()).pack(fill="x", padx=20, pady=(20, 6))
+        section_label(self, title).pack(fill="x", padx=20, pady=(20, 6))
         border = tk.Frame(self, bg=BORDER, padx=1, pady=1)
         border.pack(fill="both", expand=True, padx=20)
         self._log = tk.Text(border, font=FONT_LOG, bg=BG_INPUT, fg=TEXT_PRI, height=10,
@@ -1471,7 +1470,7 @@ class TestDialog(tk.Toplevel):
         self._phase = "running"  # running / stopping / done
         self._report_path = None
         self._last = ""
-        section_label(self, "MODEL TEST").pack(fill="x", padx=20, pady=(20, 6))
+        section_label(self, "Model test").pack(fill="x", padx=20, pady=(20, 6))
         border = tk.Frame(self, bg=BORDER, padx=1, pady=1)
         border.pack(fill="both", expand=True, padx=20)
         self._log = tk.Text(border, font=FONT_LOG, bg=BG_INPUT, fg=TEXT_PRI, height=10,
