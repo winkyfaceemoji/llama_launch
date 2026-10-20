@@ -210,6 +210,7 @@ class Handler(BaseHTTPRequestHandler):
         if body is not None:
             hdrs["Content-Length"] = str(len(body))
 
+        started = False
         try:
             # no timeout: long prompts can take minutes before the first byte
             conn = http.client.HTTPConnection("127.0.0.1", _UP, timeout=None)
@@ -220,6 +221,7 @@ class Handler(BaseHTTPRequestHandler):
                 if k.lower() != "transfer-encoding":
                     self.send_header(k, v)
             self.end_headers()
+            started = True
             while True:
                 # read1 returns whatever has arrived; read(n) would hold
                 # streamed tokens back until n bytes had accumulated
@@ -232,6 +234,8 @@ class Handler(BaseHTTPRequestHandler):
         except (ConnectionAbortedError, BrokenPipeError):
             pass  # client disconnected mid-stream, normal
         except Exception as e:
+            if started:
+                return  # the reply is under way: a 502 now would land inside the body; closing ends it
             try:
                 self.send_error(502, str(e))
             except Exception:

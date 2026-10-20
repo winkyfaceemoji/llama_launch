@@ -2,6 +2,7 @@ import gzip
 import http.client
 import json
 import os
+import socket
 import sys
 import tempfile
 import threading
@@ -20,6 +21,13 @@ SEEN = {}
 class FakeLlama(BaseHTTPRequestHandler):
     def do_POST(self):
         self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        if "dies" in self.path:  # llama-server crashing mid-reply: headers and part of the stream, then gone
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", "1000")
+            self.end_headers()
+            self.wfile.write(b"data: {}\n\n")
+            return
         body = b'{"choices": []}'
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -141,6 +149,26 @@ class ProxyIntegrationTests(unittest.TestCase):
         body = r.read()
         c.close()
         return r, body
+
+    def test_upstream_dying_mid_stream_adds_no_second_response(self):
+        real_read1 = http.client.HTTPResponse.read1
+        calls = []
+
+        def read1_then_reset(resp, n=-1):  # a killed llama-server: the next read after the first chunk fails
+            calls.append(n)
+            if len(calls) > 1:
+                raise ConnectionResetError(10054, "connection reset by peer")
+            return real_read1(resp, n)
+
+        with mock.patch.object(http.client.HTTPResponse, "read1", read1_then_reset), \
+                socket.create_connection(("127.0.0.1", self.proxy.server_port), timeout=10) as s:
+            s.sendall(b"POST /v1/dies HTTP/1.1\r\nHost: x\r\nContent-Length: 2\r\n\r\n{}")
+            data = b""
+            while chunk := s.recv(65536):
+                data += chunk
+        self.assertTrue(data.startswith(b"HTTP/1.0 200"), data[:40])
+        self.assertEqual(data.count(b"HTTP/1."), 1, data)  # no "HTTP/1.0 502" written into the stream
+        self.assertTrue(data.endswith(b"data: {}\n\n"), data[-40:])
 
     def test_webui_page_gets_script_and_no_store(self):
         r, body = self.get("GET", "/")
