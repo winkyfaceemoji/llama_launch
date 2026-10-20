@@ -405,9 +405,10 @@ def run_plan(job, ctx):
             (s.get("kind") == "research" and s.get("topic"))
             or (s.get("kind") == "organize" and s.get("folder") and s.get("goal")))]
         if not good:  # a later empty call wiped valid steps (Ministral, 2026-10-16)
-            return f"error: no valid follow-up jobs in that list; the {len(saved)} saved earlier are kept"
+            kept = "is" if len(saved) == 1 else "are"
+            return f"error: no valid follow-up jobs in that list; the {len(saved)} saved earlier {kept} kept"
         saved[:] = good
-        return f"saved {len(good)} follow-up jobs"
+        return f"saved {len(good)} follow-up {'job' if len(good) == 1 else 'jobs'}"
 
     # A plan needn't read anything, but any page it cites must have been read.
     on_fetch, check, finish = _source_check(job, ctx, must_read=False)

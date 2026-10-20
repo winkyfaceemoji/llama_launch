@@ -146,7 +146,7 @@
     c.append(head);
     if (job.steps && job.steps.length) c.append(stepsList(job));
     if (ACTIVE.has(job.state) || job.step_count) {
-      c.append(el("div", "meta", `${job.step_count} of ${MAX_CALLS} ${job.step_count === 1 ? "step" : "steps"} · ${minutes(job)}`));
+      c.append(el("div", "meta", `${job.step_count} of ${MAX_CALLS} steps · ${minutes(job)}`));
     }
     if (job.note) c.append(el("div", "note", job.note));
     if (job.state === "awaiting_approval") {

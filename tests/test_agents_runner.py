@@ -351,6 +351,16 @@ class JobKindTests(unittest.TestCase):
         for messages, _ in chat.seen[2:]:
             self.assertTrue(messages[-1]["content"].startswith("error:"), messages[-1]["content"])
 
+    def test_one_follow_up_job_is_singular(self):
+        # The panel showed "Saved 1 follow-up jobs" (2026-10-19).
+        job = self.start("plan", {"goal": "g"})
+        chat = Script(call("propose_steps", {"steps": [{"kind": "research", "topic": "t"}]}),
+                      call("propose_steps", {"steps": []}, "c2"), final("1. do it"))
+        runner.run_job(job, self.ctx(chat))
+        self.assertEqual(chat.seen[1][0][-1]["content"], "saved 1 follow-up job")
+        self.assertEqual(chat.seen[2][0][-1]["content"],
+                         "error: no valid follow-up jobs in that list; the 1 saved earlier is kept")
+
     def test_plan_saves_steps(self):
         job = self.start("plan", {"goal": "g"})
         steps = [{"kind": "research", "topic": "t"}, {"kind": "organize", "folder": self.dl, "goal": "tidy"},
