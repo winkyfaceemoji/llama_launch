@@ -1980,10 +1980,12 @@ class CommandLauncherGUI:
 
     def _open_settings(self):
         def on_save(new_path):
+            changed = new_path != self.llama_dir
             self.llama_dir = new_path
             self.config["llama_dir"] = new_path
             save_config(self.config)
-            self._refresh_models()  # the model list and launch command must come from the new folder
+            if changed:
+                self._refresh_models()  # the model list and launch command must come from the new folder
 
         def on_save_uvx(cmd):
             self.uvx_command = cmd
@@ -2404,7 +2406,8 @@ class CommandLauncherGUI:
         self._tray_icon = pystray.Icon(
             "Llama Launcher", _make_tray_image(), "Llama Launcher", menu
         )
-        threading.Thread(target=self._tray_icon.run, daemon=True).start()
+        self._tray_thread = threading.Thread(target=self._tray_icon.run, daemon=True)
+        self._tray_thread.start()
 
     def _show_from_tray(self, icon=None, item=None):
         self.master.after(0, self.master.deiconify)
@@ -2417,8 +2420,13 @@ class CommandLauncherGUI:
         if hasattr(self, "_llama_proc"):
             self._kill_all()
         # Without stop() the icon outlives the process in the tray until the mouse passes over it.
+        # stop() only asks the tray thread to remove it, so wait for that thread (briefly) before exiting.
         if getattr(self, "_tray_icon", None):
-            self._tray_icon.stop()
+            try:
+                self._tray_icon.stop()
+                self._tray_thread.join(timeout=2)
+            except Exception:
+                pass  # cosmetic: never keep the window from closing
         self.master.destroy()
 
 
