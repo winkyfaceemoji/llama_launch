@@ -1790,6 +1790,7 @@ class CommandLauncherGUI:
         self._proxy_proc   = None
         self._agents_proc  = None
         self._polling      = False
+        self._poll_gen     = 0      # each launch's health poll has its own number; an older loop stops
         self._launch_time  = None
         self._test_dialog  = None
 
@@ -1982,6 +1983,7 @@ class CommandLauncherGUI:
             self.llama_dir = new_path
             self.config["llama_dir"] = new_path
             save_config(self.config)
+            self._refresh_models()  # the model list and launch command must come from the new folder
 
         def on_save_uvx(cmd):
             self.uvx_command = cmd
@@ -2159,6 +2161,8 @@ class CommandLauncherGUI:
                     self.model_var.set(last)
                 else:
                     self.model_var.set(display[0])
+            else:
+                self._load_preset()  # same model, but its path or mmproj may have changed
         else:
             menu.add_command(label="(no .gguf models found)",
                              command=lambda: self.model_var.set("(no .gguf models found)"))
@@ -2237,6 +2241,11 @@ class CommandLauncherGUI:
         if not name or name not in self.presets:
             messagebox.showwarning("No Preset", "Please select a preset to edit.")
             return
+        if name == AUTO_PRESET:
+            # load_presets restores Auto from the code at every start, so an edit would quietly vanish.
+            messagebox.showinfo("Auto Preset",
+                "The Auto preset is built in and can't be edited. Use + Add for a preset of your own.")
+            return
         data   = self.presets[name]
         models = sorted(detect_models(self.llama_dir), key=str.lower)
         dlg    = PresetDialog(self.master, "Edit Preset", name=name,
@@ -2280,12 +2289,20 @@ class CommandLauncherGUI:
 
     def _start_health_poll(self):
         self._polling = True
+        self._poll_gen += 1
+        gen = self._poll_gen
+        current = lambda: self._polling and gen == self._poll_gen
+
+        def on_ui(fn):
+            # Run fn on the UI thread unless this poll was stopped or replaced meanwhile (Exit, a quick relaunch).
+            self.master.after(0, lambda: current() and fn())
+
         def poll_loop():
             browser_opened = False
             shown = set()  # the agents server is optional: its crash shows for one poll, then llama's status returns
             # Role names, looked up when the label updates, so a theme switch can't leave stale colours.
             colors = {"ok": "SUCCESS", "warn": "WARN", "error": "DANGER", "idle": "TEXT_MUT"}
-            while self._polling:
+            while current():
                 try:
                     with urllib.request.urlopen(
                         "http://127.0.0.1:8080/health", timeout=2
@@ -2301,15 +2318,17 @@ class CommandLauncherGUI:
                 codes = {n: p.poll() for n, p in procs.items() if p is not None}
                 text, level = health_status(codes, health, shown)
                 agents_code = codes.get("agents server")
-                if agents_code is not None and "agents server" not in shown and self._polling:
+                if not current():
+                    break  # stopped while the request above was in flight
+                if agents_code is not None and "agents server" not in shown:
                     shown.add("agents server")
                     note = f"[agents] exited (code {agents_code}); agent jobs and the Jobs panel are off until the next launch"
-                    self.master.after(0, lambda n=note: self._append_log(self.uvx_log, n))
+                    on_ui(lambda n=note: self._append_log(self.uvx_log, n))
                 if level == "ok" and not browser_opened and self._open_browser:
                     browser_opened = True
-                    self.master.after(0, lambda: webbrowser.open("http://127.0.0.1:8080/"))
-                self.master.after(0, lambda c=colors[level], t=text: self._health_label.config(fg=_palette[c], text=t))
-                self.master.after(0, lambda ok=level == "ok": self._set_test_btn(ok))
+                    on_ui(lambda: webbrowser.open("http://127.0.0.1:8080/"))
+                on_ui(lambda c=colors[level], t=text: self._health_label.config(fg=_palette[c], text=t))
+                on_ui(lambda ok=level == "ok": self._set_test_btn(ok))
                 time.sleep(3)
         threading.Thread(target=poll_loop, daemon=True).start()
 
@@ -2391,13 +2410,15 @@ class CommandLauncherGUI:
         self.master.after(0, self.master.deiconify)
 
     def _tray_exit(self, icon=None, item=None):
-        self._tray_icon.stop()
         self.master.after(0, self._force_exit)
 
     def _force_exit(self):
         # The window's X and the tray's Exit both stop every server and exit (ADR 0016).
         if hasattr(self, "_llama_proc"):
             self._kill_all()
+        # Without stop() the icon outlives the process in the tray until the mouse passes over it.
+        if getattr(self, "_tray_icon", None):
+            self._tray_icon.stop()
         self.master.destroy()
 
 
@@ -2598,7 +2619,8 @@ class CommandLauncherGUI:
         except Exception as e:
             self._append_log(self.llama_log, f"LAUNCH FAILED: {e}")
             self._kill_all()
-            self._exit_running_state()
+            self._exit_running_state()  # hides the log panes, so the reason goes in a dialog too
+            messagebox.showerror("Launch failed", str(e))
 
 
 # ============================================================
