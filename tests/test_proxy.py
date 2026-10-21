@@ -20,7 +20,13 @@ SEEN = {}
 
 class FakeLlama(BaseHTTPRequestHandler):
     def do_POST(self):
-        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        sent = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        if b'"stream": true' in sent:  # a streamed chat reply, set by the test
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(SEEN["stream_reply"])
+            return
         if "dies" in self.path:  # llama-server crashing mid-reply: headers and part of the stream, then gone
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -124,6 +130,79 @@ class InjectTests(unittest.TestCase):
                              ("POST", "/agent-jobs/api/jobs/..%2F..%2Fx/apply"), ("POST", "/agent-jobs/api/jobs/20261014-182345-3014/delete"),
                              ("GET", "/agent-jobs/api/mcp"), ("DELETE", "/agent-jobs/api/trash/empty")]:
             self.assertIsNone(t(method, path), (method, path))
+
+
+def fetch_call(url, name="fetch"):
+    # An assistant turn as the Web UI sends it back: the tool call, then the tool's result.
+    return [{"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "type": "function", "function": {
+                "name": name, "arguments": json.dumps({"url": url})}}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "page text"}]
+
+
+class UnopenedCitationTests(unittest.TestCase):
+    def test_a_cited_page_the_conversation_never_opened_is_reported(self):
+        messages = [{"role": "user", "content": "latest llama.cpp?"}, *fetch_call("https://a.test/read")]
+        answer = "See https://a.test/read/ and https://b.test/snippet-only."
+        self.assertEqual(proxy.unopened_citations(messages, answer), ["https://b.test/snippet-only"])
+
+    def test_pages_opened_earlier_in_the_chat_or_by_any_url_tool_count(self):
+        messages = [*fetch_call("https://a.test/x"), {"role": "assistant", "content": "ok"},
+                    {"role": "user", "content": "and more?"}, *fetch_call("https://b.test/y", name="fetch_content")]
+        self.assertEqual(proxy.unopened_citations(messages, "https://a.test/x https://b.test/y#part"), [])
+
+    def test_a_link_the_user_gave_is_not_reported(self):
+        messages = [{"role": "user", "content": "Summarise https://u.test/doc please"}]
+        self.assertEqual(proxy.unopened_citations(messages, "From https://u.test/doc: ..."), [])
+
+    def test_urls_in_code_are_not_citations(self):
+        self.assertEqual(proxy.unopened_citations([], "Run `curl https://c.test/install.sh`."), [])
+
+
+def sse(*deltas, done=True):
+    # A streamed reply as llama-server sends it: one data line per chunk, then [DONE].
+    out = b"".join(b"data: " + json.dumps({"id": "chatcmpl-1", "object": "chat.completion.chunk",
+                                           "choices": [{"index": 0, "delta": d}]}).encode() + b"\n\n" for d in deltas)
+    return out + (b"data: [DONE]\n\n" if done else b"")
+
+
+def through(stream, data, size=7):
+    # Feed the filter in small uneven pieces, as read1 returns them.
+    return b"".join(stream.feed(data[i:i + size]) for i in range(0, len(data), size)) + stream.finish()
+
+
+def content_of(data):
+    text = ""
+    for line in data.split(b"\n"):
+        if line.startswith(b"data: {"):
+            text += json.loads(line[6:])["choices"][0]["delta"].get("content") or ""
+    return text
+
+
+class CitationStreamTests(unittest.TestCase):
+    def test_a_final_answer_citing_an_unopened_page_ends_with_a_warning_before_done(self):
+        data = sse({"content": "See https://b.test/"}, {"content": "snippet."}, {})
+        out = through(proxy.CitationStream([]), data)
+        self.assertTrue(out.startswith(data[:-len(b"data: [DONE]\n\n")]))
+        self.assertTrue(out.endswith(b"data: [DONE]\n\n"))
+        self.assertEqual(content_of(out), "See https://b.test/snippet.\n\n> Warning: cites pages that were never "
+                                          "opened: https://b.test/snippet")
+
+    def test_a_reply_that_calls_a_tool_or_cites_only_opened_pages_passes_unchanged(self):
+        calls = sse({"content": "Let me check https://b.test/x"},
+                    {"tool_calls": [{"index": 0, "function": {"name": "fetch", "arguments": "{}"}}]})
+        self.assertEqual(through(proxy.CitationStream([]), calls), calls)
+        opened = sse({"content": "From https://a.test/read."})
+        self.assertEqual(through(proxy.CitationStream(fetch_call("https://a.test/read")), opened), opened)
+
+    def test_a_failing_check_never_cuts_the_reply_short(self):
+        data = sse({"content": "See https://b.test/x"})
+        with mock.patch.object(proxy, "unopened_citations", side_effect=RuntimeError("bug")):
+            self.assertEqual(through(proxy.CitationStream([]), data), data)
+
+    def test_bytes_are_passed_on_as_soon_as_a_line_is_complete(self):
+        stream = proxy.CitationStream([])
+        line = sse({"content": "hi"}, done=False)
+        self.assertEqual(stream.feed(line), line)
 
 
 class ProxyIntegrationTests(unittest.TestCase):
@@ -314,6 +393,19 @@ class ProxyIntegrationTests(unittest.TestCase):
             for path in self.CHAT_PATHS:
                 r, _ = self.post(path)
                 self.assertEqual(r.status, 200, path)
+
+    def test_a_streamed_chat_answer_citing_an_unopened_page_gets_the_warning(self):
+        SEEN["stream_reply"] = sse({"content": "Per https://b.test/news and https://a.test/read."})
+        body = json.dumps({"stream": True, "messages": [{"role": "user", "content": "news?"},
+                                                         *fetch_call("https://a.test/read")]})
+        with mock.patch.object(proxy, "MODEL_TEST_LOCK", os.path.join(os.path.dirname(__file__), "no-such.lock")):
+            c = http.client.HTTPConnection("127.0.0.1", self.proxy.server_port, timeout=10)
+            c.request("POST", "/v1/chat/completions", body=body, headers={"Content-Type": "application/json"})
+            out = c.getresponse().read()
+            c.close()
+        self.assertTrue(out.endswith(b"data: [DONE]\n\n"))
+        self.assertIn("never opened: https://b.test/news", content_of(out))
+        self.assertNotIn("a.test", content_of(out).split("Warning")[1])
 
     def test_api_returns_502_when_agents_server_down(self):
         saved = proxy._AGENTS

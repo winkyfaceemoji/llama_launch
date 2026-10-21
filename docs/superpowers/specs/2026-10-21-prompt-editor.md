@@ -44,17 +44,17 @@ See every prompt the models get, from the launcher, and change any of them witho
 
 ## Chat citation check (proxy)
 
-- **Fetched URLs:** from the request's `messages`, the `url` argument of every assistant tool call to the fetch tool, in the whole conversation the Web UI sends. URLs that appear in the user's own messages also count as known.
+- **Fetched URLs:** from the request's `messages`, the `url` argument of every assistant tool call that has one (`fetch`, ddg-search's `fetch_content`), in the whole conversation the Web UI sends. URLs that appear in the user's own messages also count as known.
 - **Cited URLs:** `runner.cited_urls` on the answer text (same rules as agents: URLs in code don't count, a link alone in backticks does).
 - **Only the final answer is checked** (a reply with no tool calls). If it cites URLs that weren't fetched, the proxy adds one line at the end:
   `> Warning: cites pages that were never opened: <urls>`
   - **Streaming:** bytes still go to the browser as they arrive. The proxy keeps a copy of the content deltas and sends one extra content chunk just before `data: [DONE]`.
-  - **Non-streaming:** the warning is appended to the message content.
+  - **Non-streaming:** untouched. The Web UI streams every reply it shows; its non-streamed requests are `n_predict: 0`.
 - Nothing is sent back to the model; the Web UI drives the tool loop, not the proxy.
 
 ## Before building: verify
 
-- How the Web UI sends fetch tool calls through `:8080`: the tool's name as the model sees it, its arguments, and whether earlier turns' tool calls stay in `messages`. Capture one real request with a fetch, then design the parser against it. If tool calls never pass through the proxy, the citation check is dropped and this spec is amended.
+- How the Web UI sends fetch tool calls through `:8080`. Checked in the Web UI bundle llama-server served on 2026-10-21: chat goes to `./v1/chat/completions`, earlier turns keep their OpenAI-style `tool_calls` and `tool` messages, tool names are the MCP servers' own (`fetch`), and every `data:` content chunk is appended until `[DONE]`.
 
 ## Build order
 

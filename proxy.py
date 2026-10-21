@@ -3,6 +3,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
+from agents import runner  # cited_urls: chat citations follow the agent jobs' rules
+
 _SP = ""
 _UP = 8081
 _AGENTS = 8002  # agents server; argv[3] overrides
@@ -64,6 +66,85 @@ def api_target(method, path):
         if method == m and match:
             return target(match)
     return None
+
+
+def _text_of(content):
+    # A message's text: a string, or the Web UI's list of parts ({"type": "text", "text": ...}).
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(p.get("text", "") for p in content if isinstance(p, dict) and isinstance(p.get("text"), str))
+    return ""
+
+
+def unopened_citations(messages, answer):
+    """URLs the answer cites that no tool call in the conversation opened (any tool with a url argument: fetch,
+    ddg-search's fetch_content) and the user didn't give. Search results are only snippets, so citing a page
+    from them is citing a page the model never read. Same citation rules as agent jobs (runner.cited_urls)."""
+    known = set()
+    for m in messages if isinstance(messages, list) else []:
+        if not isinstance(m, dict):
+            continue
+        if m.get("role") == "user":
+            known.update(runner.cited_urls(_text_of(m.get("content"))))
+        for call in m.get("tool_calls") or []:
+            try:
+                url = json.loads(call["function"]["arguments"]).get("url")
+            except (KeyError, TypeError, ValueError, AttributeError):
+                continue
+            if isinstance(url, str):
+                known.update(runner.cited_urls(url))
+    return [u for u in runner.cited_urls(answer) if u not in known]
+
+
+class CitationStream:
+    """Passes a streamed chat reply through line by line. If the reply is a final answer (no tool calls) that
+    cites pages the conversation never opened, one more content chunk with a warning goes out just before
+    [DONE]; the Web UI appends every content chunk until [DONE]. Nothing goes back to the model: the Web UI,
+    not the proxy, runs the tool loop."""
+
+    def __init__(self, messages):
+        self._messages, self._partial, self._answer, self._calls, self._last = messages, b"", [], False, {}
+
+    def feed(self, chunk):
+        lines = (self._partial + chunk).split(b"\n")
+        self._partial = lines.pop()  # an unfinished line waits for the rest
+        return b"".join(self._line(line + b"\n") for line in lines)
+
+    def finish(self):
+        rest, self._partial = self._partial, b""
+        return self._line(rest) if rest else b""
+
+    def _line(self, line):
+        data = line.strip()
+        if data == b"data: [DONE]":
+            try:
+                return self._warning() + line
+            except Exception:
+                return line  # a bug in the check must never cut a chat reply short
+        if data.startswith(b"data: {"):
+            try:
+                chunk = json.loads(data[6:])
+                delta = chunk["choices"][0].get("delta") or {}
+            except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+                return line
+            self._last = chunk
+            if delta.get("tool_calls"):
+                self._calls = True
+            if isinstance(delta.get("content"), str):
+                self._answer.append(delta["content"])
+        return line
+
+    def _warning(self):
+        if self._calls:
+            return b""
+        missing = unopened_citations(self._messages, "".join(self._answer))
+        if not missing:
+            return b""
+        text = "\n\n> Warning: cites pages that were never opened: " + ", ".join(missing[:10])
+        chunk = {k: self._last[k] for k in ("id", "object", "created", "model") if k in self._last}
+        chunk["choices"] = [{"index": 0, "delta": {"content": text}, "finish_reason": None}]
+        return b"data: " + json.dumps(chunk).encode() + b"\n\n"
 
 
 def _load():
@@ -205,6 +286,17 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
+        # Streamed chat replies get a warning line when they cite pages the chat never opened. The Web UI
+        # streams every real reply; its non-streamed requests generate no text, so they pass untouched.
+        citations = None
+        if self.command == "POST" and "/v1/chat/completions" in self.path and body:
+            try:
+                d = json.loads(body)
+                if d.get("stream") is True and isinstance(d.get("messages"), list):
+                    citations = CitationStream(d["messages"])
+            except (ValueError, AttributeError):
+                pass
+
         hdrs = {k: v for k, v in self.headers.items()
                 if k.lower() not in ("host", "content-length", "transfer-encoding")}
         if body is not None:
@@ -228,7 +320,12 @@ class Handler(BaseHTTPRequestHandler):
                 chunk = r.read1(65536)
                 if not chunk:
                     break
-                self.wfile.write(chunk)
+                out = citations.feed(chunk) if citations else chunk
+                if out:
+                    self.wfile.write(out)
+                    self.wfile.flush()
+            if citations:
+                self.wfile.write(citations.finish())
                 self.wfile.flush()
             conn.close()
         except (ConnectionAbortedError, BrokenPipeError):

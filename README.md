@@ -182,6 +182,8 @@ Use the **+ Add**, **Edit**, and **Delete** buttons next to the preset dropdown 
 
 The system prompt is stored in `config.json` under the `"system_prompt"` key. The proxy puts today's date at the top of it on every request, so the model always knows the date without calling a tool. Only the date is injected — a timestamp that changed every minute would force llama-server to reprocess the whole conversation.
 
+If a chat answer cites a page that no tool opened in that chat (for example one it only saw in search results), the proxy adds a line at the end: **Warning: cites pages that were never opened**, followed by the links. A link you pasted yourself doesn't count. Agent reports get the same check.
+
 The proxy replaces any system message sent by the Web UI with this prompt, so edit it in **Settings → Prompts** (or `config.json`) rather than in the Web UI's settings. Edits apply at the next launch.
 
 ---
