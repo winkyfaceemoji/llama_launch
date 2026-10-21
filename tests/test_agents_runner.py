@@ -6,7 +6,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from agents import jobs, paths, runner
+from agents import jobs, paths, prompts, runner
 
 
 def call(name, args, cid="c1"):
@@ -253,6 +253,21 @@ class JobKindTests(unittest.TestCase):
         self.assertEqual((got["state"], got["note"]), ("done", ""))
         self.assertEqual(self.store.read_text(job["id"], "result.md"), "# Report\nSources: https://x.test/a")
         self.assertIn("ddg-search/search", chat.seen[1][0][-1]["content"])
+
+    def test_jobs_use_the_prompts_the_server_loaded(self):
+        edited = dict(prompts.SHIPPED, research="Research carefully.",
+                      organize="Sort {folder}, {batch} at a time.", review="Check against: {goal}")
+        job = self.start("research", {"topic": "llama"})
+        chat = Script(call("fetch_url", {"url": "https://x.test/a"}), final("Report https://x.test/a"))
+        runner.run_job(job, runner.Context(self.policy, self.store, chat, lambda s, t, a: "page", prompts=edited))
+        self.assertTrue(chat.seen[0][0][0]["content"].endswith("\n\nResearch carefully."))
+
+        job = self.start("organize", {"folder": self.dl, "goal": "tidy"})
+        chat = Script(call("propose_plan", {"operations": [{"op": "mkdir", "path": os.path.join(self.dl, "X")}]}),
+                      final("summary"), final("looks fine"))
+        runner.run_job(job, runner.Context(self.policy, self.store, chat, None, prompts=edited))
+        self.assertEqual(chat.seen[0][0][0]["content"], f"Sort {self.dl}, {runner.PLAN_BATCH} at a time.")
+        self.assertEqual(chat.seen[2][0][0]["content"], "Check against: tidy")
 
     def test_research_from_snippets_only_is_sent_back_to_read_its_sources(self):
         # Job 20261015-165707-2a6e: one search, then a report citing pages it never fetched.

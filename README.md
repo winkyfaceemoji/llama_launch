@@ -13,7 +13,7 @@ The launcher starts and manages four processes:
 3. **UVX MCP Proxy** — a middleware server on port `8001` that bridges MCP tools (web search, fetch) to the llama-server Web UI.
 4. **Agents server** (`agents/server.py`) — an MCP server on port `8002` that runs background [agent jobs](#agent-jobs-research-planning-organising). It's optional: if it can't start, everything else still runs.
 
-Once launched, the app shows live output from all four processes in log panes (the agents server shares the UVX pane), monitors server health, and tracks uptime. Closing the window stops all four servers and exits; minimize it to keep them running. Starting the launcher again while it runs brings up the open window instead of a second launcher.
+Once launched, the app shows live output from all four processes in log tabs (the agents server shares the UVX tab), monitors server health, and tracks uptime. Closing the window stops all four servers and exits; minimize it to keep them running. Starting the launcher again while it runs brings up the open window instead of a second launcher.
 
 All four servers listen on `127.0.0.1` only, so other devices on your network can't reach them. Web pages open in your browser still can, so llama-server also requires an API key (see [API key](#api-key)).
 
@@ -92,12 +92,13 @@ The **PRESET** dropdown is set to **Auto** whenever you pick a model. Auto lets 
 Click **Launch Server**. The window switches to the running view, which shows:
 
 - **Status bar** — server health (`● online`, `● loading model`, `● offline`, or `● <process> exited (code N)` if one of the four crashed, for example `● agents server exited (code 1)`), uptime counter, and an **Auto-scroll** toggle.
-- **Agent API** — the direct llama-server address for agents (`http://127.0.0.1:8081/v1`). Click it to copy.
-- **API key** — click **click to copy** to put the key on the clipboard. The key itself is never shown.
+- **Agent API** — the direct llama-server address for agents (`http://127.0.0.1:8081/v1`). **Copy** puts it on the clipboard.
+- **API key** — **Copy** puts the key on the clipboard. The key itself is never shown.
 - **Approval key (Jobs panel)** — the same, for the key the Jobs panel needs (see [Approval key](#approval-key)).
-- **Three log panes** — live output from `llama-server`, the UVX proxy (with the agents server's lines, marked `[agents]`), and the system prompt proxy. Drag the dividers to resize. The llama-server pane header shows the active model name and PID.
+- **Log tabs** — live output from `llama-server`, the UVX proxy (with the agents server's lines, marked `[agents]`), and the system prompt proxy, one tab each. A red dot on a tab means it logged an error line while you were looking at another; opening the tab clears it. The line under the tabs shows the process's name and PID (and the model, for llama-server).
+- **Keyboard:** Enter launches from the home view, Esc closes a dialog (as its X would), Ctrl+, opens Settings.
 
-If a port the launcher needs (8080, 8081, 8001 or 8002) is still held by a leftover llama-server, proxy or agents server from an earlier run, the launcher stops it first. If any other program holds 8080, 8081 or 8001, the launch is cancelled and the llama-server log pane names that program and its PID. If another program holds 8002, only the agents server is skipped, and the UVX pane says why.
+If a port the launcher needs (8080, 8081, 8001 or 8002) is still held by a leftover llama-server, proxy or agents server from an earlier run, the launcher stops it first. If any other program holds 8080, 8081 or 8001, the launch is cancelled and a dialog names that program and its PID. If another program holds 8002, only the agents server is skipped, and the UVX tab says why.
 
 ### Stopping
 Click **Exit Processes** to kill all four servers and return to the launcher screen.
@@ -161,7 +162,7 @@ Presets are stored in `config.json` under the `"presets"` key. Each preset has:
 llama-server -m "{model}" --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 --webui-mcp-proxy --port 8081
 ```
 
-Auto deliberately leaves context size (`-c`) and GPU layers (`-ngl`) unset. llama-server's `--fit` (on by default) then picks the largest context that fits in free VRAM, keeping a 1 GB margin. The chosen context size appears in the llama-server log pane. Auto always exists, is pre-selected for every model, and can't be deleted.
+Auto deliberately leaves context size (`-c`) and GPU layers (`-ngl`) unset. llama-server's `--fit` (on by default) then picks the largest context that fits in free VRAM, keeping a 1 GB margin. The chosen context size appears in the llama-server log tab. Auto always exists, is pre-selected for every model, and can't be deleted.
 
 Avoid adding `-c` or `-ngl` to a preset unless you mean to: setting either turns off `--fit` for that value, and a context that doesn't fit will spill out of VRAM and run far slower.
 
@@ -207,7 +208,7 @@ The chat model in the Web UI can start background jobs that run on your local mo
 
 ### Setup (once)
 
-1. Launch the server. The launcher starts the agents server itself on port `8002`. The first launch takes a little longer while `uv` installs the `mcp` package; the UVX pane shows its progress on lines marked `[agents]`.
+1. Launch the server. The launcher starts the agents server itself on port `8002`. The first launch takes a little longer while `uv` installs the `mcp` package; the UVX tab shows its progress on lines marked `[agents]`.
 2. In the Web UI's **MCP Servers** page, add `http://127.0.0.1:8002/mcp` and switch on **Use llama-server proxy**, as for the other servers (see [MCP web UI setup](#mcp-web-ui-setup)). If you added the old `http://127.0.0.1:8001/servers/agents/mcp` before, delete it.
 3. In the launcher, open **Settings → Agent folders → Manage…** and add the local folders agents may read and organise. The chat model can also ask for a folder with `request_folder_access`; approving that tool call adds it.
 4. Paste your [API key](#api-key) into the Web UI under **Settings → General** if you haven't, and the [approval key](#approval-key) into the Jobs panel the first time it asks.
@@ -250,7 +251,7 @@ After updating the launcher, press Ctrl+F5 once in the Web UI so the browser dro
 llama-server allows requests from every web origin, so without a key any web page open in your browser could chat with your model or use its `/cors-proxy` to read pages on your home network. The launcher therefore starts llama-server with an API key.
 
 - **Where it comes from:** on first run the launcher generates a random key and saves it to `api_key.txt` next to `config.json`. It's gitignored.
-- **Getting it:** click **click to copy** next to **API key** in the running view.
+- **Getting it:** click **Copy** next to **API key** in the running view.
 - **Web UI:** paste it once into the Web UI under **Settings → General → API Key**. The Web UI saves it in your browser.
 - **Agents:** send it as a Bearer token (see [Agents](#agents)).
 - **Replacing it:** delete `api_key.txt` and relaunch. A new key is generated; paste it into the Web UI and your agents again.
@@ -262,7 +263,7 @@ llama-server allows requests from every web origin, so without a key any web pag
 The Jobs panel uses a second key, so a program you give the API key to can't approve plans that change your files.
 
 - **Where it comes from:** the launcher generates it on first run into `approval_key.txt` (gitignored).
-- **Getting it:** click **click to copy** next to **Approval key (Jobs panel)** in the running view.
+- **Getting it:** click **Copy** next to **Approval key (Jobs panel)** in the running view.
 - **Jobs panel:** paste it into the field the panel shows the first time, or after the key changes. The panel saves it in your browser.
 - **Replacing it:** delete `approval_key.txt` and restart the launcher, then paste the new key into the panel.
 

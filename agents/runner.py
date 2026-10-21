@@ -8,6 +8,7 @@ from datetime import datetime
 from urllib.parse import urlsplit, urlunsplit
 
 from . import plans
+from .prompts import SHIPPED as _SHIPPED
 
 # Held while plan files move (apply, restore) and while the trash is emptied, so Empty trash
 # can never delete files an apply or restore is moving, wherever that was started.
@@ -28,8 +29,10 @@ CODE = re.compile(r"(```|~~~).*?(?:\1|\Z)|`[^`\n]*`", re.DOTALL)
 
 
 class Context:
-    def __init__(self, policy, store, chat, mcp_call, n_ctx=lambda: None):
+    def __init__(self, policy, store, chat, mcp_call, n_ctx=lambda: None, prompts=None):
         self.policy, self.store, self.chat, self.mcp_call = policy, store, chat, mcp_call
+        # Each job kind's system prompt; the server passes the user's (prompts.load), tests the shipped ones.
+        self.prompts = dict(prompts if prompts is not None else _SHIPPED)
         self.n_ctx = n_ctx  # the loaded model's context in tokens, or None
 
 
@@ -294,43 +297,9 @@ def cited_urls(text):
     return list(dict.fromkeys(_same_page(u) for u in URL.findall(CODE.sub(_outside_code, text or ""))))
 
 
-RESEARCH_PROMPT = (
-    "You are a careful research assistant. Use web_search to find primary sources (official docs, papers, "
-    "first-party pages), then read them with fetch_url. Search results are only leads: never report what a "
-    "snippet says. Then write a Markdown report: a short summary first, then the findings, then a Sources list. "
-    "Cite a URL you read with fetch_url for every claim, and say where sources disagree.")
-
-PLAN_PROMPT = (
-    "You plan projects. Research as needed, then write a Markdown plan with numbered steps. Cite only pages you "
-    "read with fetch_url; search results are only leads. You cannot look "
-    "inside the user's own folders. Before your final answer, call propose_steps once with follow-up jobs "
-    "worth running, each either "
-    '{"kind": "research", "topic": "..."} or {"kind": "organize", "folder": "<absolute path>", "goal": "..."}. '
-    "Name a folder in an organize step only if the goal text gives its path.")
-
-ORGANIZE_PROMPT = (
-    "You organise files inside {folder}. Look around with list_dir and read_file, then call propose_plan "
-    "with the operations, using absolute paths:\n"
-    '{{"op": "mkdir", "path": ...}}, {{"op": "move", "src": ..., "dst": ...}} (also for renames), '
-    '{{"op": "remove", "path": ...}} (goes to a trash the user can restore).\n'
-    "A move's dst is the item's full new path, not just the folder. Example for {folder}\\a.pdf:\n"
-    '{{"op": "mkdir", "path": "{folder}\\PDFs"}}, '
-    '{{"op": "move", "src": "{folder}\\a.pdf", "dst": "{folder}\\PDFs\\a.pdf"}}\n'
-    "Send at most {batch} operations per propose_plan call; each call adds to the plan, so call it again for "
-    "the rest. Nothing runs until the user approves. If propose_plan reports errors, fix that batch and send it "
-    "again. When every operation is in, finish with a short summary of the plan.")
-
 # Operations per propose_plan call that the prompt asks for. A whole 200-file plan in one reply ran past
 # llm.chat's 900 s timeout (O4, 2026-10-16), and a small --fit context leaves little room for a long reply.
 PLAN_BATCH = 25
-
-REVIEW_PROMPT = (
-    "You review a file-organising plan before a person approves it. The goal was: {goal}\n"
-    "First, list every remove operation by number and say whether the goal explicitly asked to remove that "
-    "file. A remove the goal didn't ask for is a problem. Removing most or all files is always worth a "
-    "warning, even when asked, so say plainly how many files would be removed. Then list any other operation "
-    "that looks wrong, risky, or unrelated to the goal, with its number and the reason. Only if there are no "
-    "removes and nothing else is wrong, say in one line that the plan looks right.")
 
 
 def _today():
@@ -390,7 +359,7 @@ def _source_check(job, ctx, must_read):
 def run_research(job, ctx):
     on_fetch, check, finish = _source_check(job, ctx, must_read=True)
     tools = web_tools(ctx.mcp_call, on_fetch) + sandbox_tools(ctx.policy)
-    text, stop = run_agent(ctx.chat, _dated(RESEARCH_PROMPT), job["args"]["topic"], tools, on_step=_steps(job, ctx),
+    text, stop = run_agent(ctx.chat, _dated(ctx.prompts["research"]), job["args"]["topic"], tools, on_step=_steps(job, ctx),
                            check=check, cancelled=_cancelled(job, ctx), context_chars=context_chars(ctx.n_ctx()))
     text, note = finish(text, stop)
     ctx.store.write_text(job["id"], "result.md", text)
@@ -415,7 +384,7 @@ def run_plan(job, ctx):
     steps_param = {"steps": {"type": "array", "items": {"type": "object"}}}
     tools = web_tools(ctx.mcp_call, on_fetch) + sandbox_tools(ctx.policy) + [
         tool("propose_steps", "Save follow-up jobs for the user to queue.", steps_param, ["steps"], propose_steps)]
-    text, stop = run_agent(ctx.chat, _dated(PLAN_PROMPT), job["args"]["goal"], tools, on_step=_steps(job, ctx),
+    text, stop = run_agent(ctx.chat, _dated(ctx.prompts["plan"]), job["args"]["goal"], tools, on_step=_steps(job, ctx),
                            check=check, cancelled=_cancelled(job, ctx), context_chars=context_chars(ctx.n_ctx()))
     text, note = finish(text, stop)
     ctx.store.write_text(job["id"], "result.md", text)
@@ -445,7 +414,7 @@ def run_organize(job, ctx):
     tools = [t for t in file_tools(ctx.policy) if t[0] != "write_file"] + [
         tool("propose_plan", f"Add a batch of file operations (at most {PLAN_BATCH}) to the plan.", ops_param,
              ["operations"], propose_plan)]
-    text, stop = run_agent(ctx.chat, ORGANIZE_PROMPT.format(folder=folder, batch=PLAN_BATCH), goal, tools, on_step=_steps(job, ctx),
+    text, stop = run_agent(ctx.chat, ctx.prompts["organize"].format(folder=folder, batch=PLAN_BATCH), goal, tools, on_step=_steps(job, ctx),
                            cancelled=_cancelled(job, ctx), context_chars=context_chars(ctx.n_ctx()))
     if stop:
         ctx.store.append_step(job["id"], f"Stopped: {stop}")
@@ -463,7 +432,7 @@ def run_organize(job, ctx):
         warnings = []
     # Saved once: the panel polls every 2 s and must not re-walk a big folder each time.
     ctx.store.write_json(job["id"], "warnings.json", warnings)
-    review, failed = _review(proposed, REVIEW_PROMPT.format(goal=goal), ctx)
+    review, failed = _review(proposed, ctx.prompts["review"].format(goal=goal), ctx)
     ctx.store.append_step(job["id"], f"Review failed: {failed}" if failed else "Reviewed the plan")
     ctx.store.write_text(job["id"], "review.md", review)
     note = "; ".join(n for n in (stop, failed and f"review failed: {failed}") if n)
