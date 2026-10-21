@@ -19,7 +19,7 @@ from mcp.server.mcpserver import MCPServer  # noqa: E402
 from mcp.server.transport_security import TransportSecuritySettings  # noqa: E402
 from starlette.responses import JSONResponse  # noqa: E402
 
-from agents import jobs, llm, panel_api, paths, runner  # noqa: E402
+from agents import jobs, llm, panel_api, paths, prompts, runner  # noqa: E402
 
 PORT = llm.AGENTS_PORT  # --port replaces it; the approval routes check Host against it
 
@@ -30,7 +30,11 @@ try:
     store.cancel_unfinished()  # anything left from a previous run was killed with it
 except Exception as e:
     sys.exit(f"agents server can't start: {type(e).__name__}: {e}")
-ctx = runner.Context(policy, store, llm.chat, llm.mcp_call, llm.n_ctx)
+# Read once: the launcher only lets the user edit prompts while the servers are stopped.
+agent_prompts, notes = prompts.load(os.path.join(paths.APP_DIR, "config.json"))
+for note in notes:
+    print(note, flush=True)
+ctx = runner.Context(policy, store, llm.chat, llm.mcp_call, llm.n_ctx, prompts=agent_prompts)
 worker = jobs.Worker(store, lambda job: runner.run_job(job, ctx))
 
 MAX_FILE_CHARS = 8000  # per file in job_result; keeps big plans out of the chat model's context
