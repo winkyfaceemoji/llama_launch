@@ -3,7 +3,8 @@
     python dev/gui_shot.py <launcher.pyw> <out dir> [--theme light|dark]
 
 Builds the window from the given launcher.pyw (any version) and saves home.png,
-dropdown.png, settings.png, preset.png, folders.png, update.png and running.png. A view
+dropdown.png, settings.png, preset.png, folders.png, prompts.png (editable),
+prompts_running.png (read-only), update.png and running.png. A view
 an older version can't build is skipped with a note. It never clicks Launch or starts a
 process: the running view is only the layout with a few sample log lines, and the update
 dialog runs a fake job. Building the window clears the model test lock, so it refuses to
@@ -82,6 +83,10 @@ def main():
         mod.PresetDialog(root, "Edit preset", name="Auto", command="llama-server -m {model} --fit on",
                          model_keywords=[], available_models=sorted(app._models)[:6])
 
+    def prompts(editable):
+        texts = dict(mod.agent_prompts.effective(app.config), chat=app.config.get("system_prompt", ""))
+        mod.PromptsDialog(root, texts, mod.shipped_prompts(), editable, lambda texts: None)
+
     def update():
         mod.UpdateDialog(root, "Update to b99999", lambda report: (report("winget upgrade ..."),
                                                                   (True, "Updated. Build check passed."))[1])
@@ -101,6 +106,8 @@ def main():
         (app._open_settings, lambda: shot_dialog("settings.png")),
         (preset, lambda: shot_dialog("preset.png")),
         (lambda: mod.FoldersDialog(root, app.agent_policy, None), lambda: shot_dialog("folders.png")),
+        (lambda: prompts(True), lambda: shot_dialog("prompts.png")),
+        (lambda: prompts(False), lambda: shot_dialog("prompts_running.png")),
         (update, lambda: shot_dialog("update.png")),
         (running, lambda: shot(root, "running.png")),
     ]

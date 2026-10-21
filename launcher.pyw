@@ -92,7 +92,7 @@ import collections
 import ctypes
 from ctypes import wintypes
 import winreg
-from agents import jobs as agent_jobs, paths as agent_paths, llm as agent_llm
+from agents import jobs as agent_jobs, paths as agent_paths, llm as agent_llm, prompts as agent_prompts
 
 
 # ── System tray bootstrap (pystray + Pillow)
@@ -186,8 +186,8 @@ W           = 480
 H_SETUP     = 280    # height of the first-run setup screen
 H_CONFIG    = 270    # height of the main config view
 H_NOTICE    = 70     # added while the llama.cpp update notice shows
-H_SETTINGS      = 460   # settings dialog, UVX collapsed
-H_SETTINGS_UVX  = 550   # settings dialog, UVX expanded
+H_SETTINGS      = 504   # settings dialog, UVX collapsed
+H_SETTINGS_UVX  = 594   # settings dialog, UVX expanded
 H_ROLLBACK      = 44    # added to both while the roll back row shows
 W_SETTINGS      = 460   # settings dialog width
 H_RUNNING   = 750   # height of the running/log view
@@ -292,6 +292,47 @@ def save_config(config: dict) -> None:
             json.dump(config, f, indent=2, ensure_ascii=False)
     except IOError as e:
         messagebox.showerror("Save Error", f"Could not save settings:\n{e}")
+
+
+# The prompts the Prompts dialog shows: (key, tab name). "chat" is config["system_prompt"], which the proxy sends
+# with Web UI chat; the rest are agent job kinds (agents/prompts.py), kept in config["agent_prompts"].
+PROMPT_TABS = [("chat", "Chat"), ("research", "Research"), ("plan", "Plan"),
+               ("organize", "Organize"), ("review", "Review")]
+
+
+def shipped_prompts() -> dict:
+    """What Reset to default restores for each prompt."""
+    return dict(agent_prompts.SHIPPED, chat=_DEFAULT_CONFIG["system_prompt"])
+
+
+def set_prompts(config: dict, texts: dict):
+    """Store the dialog's texts in config. An agent prompt that is blank or the shipped text is dropped, so a
+    later improvement to the shipped prompt reaches it. Returns a reason and changes nothing if any agent prompt
+    can't be filled in by the runner."""
+    for key, name in PROMPT_TABS:
+        problem = agent_prompts.check(key, texts[key]) if key in texts and texts[key].strip() else None
+        if problem:
+            return f"{name}: {problem}"
+    edits = dict(config.get("agent_prompts") or {})
+    for key, text in texts.items():
+        if key == "chat":
+            config["system_prompt"] = text
+        elif not text.strip() or text == agent_prompts.SHIPPED[key]:
+            edits.pop(key, None)
+        else:
+            edits[key] = text
+    if edits:
+        config["agent_prompts"] = edits
+    else:
+        config.pop("agent_prompts", None)
+    return None
+
+
+def backup_config(path: str = CONFIG_FILE) -> None:
+    """Copy config.json to config.json.bak before the prompts are saved: config.json isn't in git, so this is
+    the only way back from a bad edit. One backup, replaced each time."""
+    if os.path.exists(path):
+        shutil.copyfile(path, path + ".bak")
 
 
 def load_presets(config: dict) -> dict:
@@ -1217,7 +1258,7 @@ class SettingsDialog(tk.Toplevel):
                  uvx_command="", on_save_uvx=None,
                  open_browser=True, on_set_open_browser=None,
                  on_open_folders=None, previous_build=None, on_rollback=None,
-                 theme="system", on_set_theme=None):
+                 theme="system", on_set_theme=None, on_open_prompts=None, prompts_editable=True):
         super().__init__(parent)
         self.title("Settings")
         self.configure(bg=BG)
@@ -1302,6 +1343,13 @@ class SettingsDialog(tk.Toplevel):
             agents_row.pack(fill="x", padx=20, pady=(0, 14))
             tk.Label(agents_row, text="Agent folders", font=FONT_SMALL, fg=TEXT_PRI, bg=BG).pack(side="left")
             small_btn(agents_row, "Manage…", lambda: on_open_folders(self)).pack(side="right")
+
+        if on_open_prompts:
+            prompts_row = tk.Frame(self, bg=BG)
+            prompts_row.pack(fill="x", padx=20, pady=(0, 14))
+            tk.Label(prompts_row, text="Prompts", font=FONT_SMALL, fg=TEXT_PRI, bg=BG).pack(side="left")
+            small_btn(prompts_row, "Edit…" if prompts_editable else "View…",
+                      lambda: on_open_prompts(self)).pack(side="right")
 
         if self._rollback_build:
             rollback_row = tk.Frame(self, bg=BG)
@@ -1460,6 +1508,127 @@ class FoldersDialog(tk.Toplevel):
             except (OSError, ValueError) as e:
                 messagebox.showerror("Not removed", str(e), parent=self)
             self._refresh()
+
+
+class PromptsDialog(tk.Toplevel):
+    # Every prompt the models get. The proxy and agents server read them once at startup, so editing is
+    # only allowed while the servers are stopped; while they run, this shows exactly what they use.
+    FEEDS = {
+        "chat": "Web UI chat, through the proxy on 8080. The proxy puts “Current date: {today}” above it.",
+        "research": "Research jobs. “Current date: {today}” is added above it.",
+        "plan": "Plan jobs. “Current date: {today}” is added above it.",
+        "organize": "Organize jobs. Must use {{folder}} and {{batch}}; write any other brace twice ({{{{ }}}}).",
+        "review": "The model's check of an organize plan before you approve it. Must use {{goal}}; "
+                  "write any other brace twice ({{{{ }}}}).",
+    }
+
+    def __init__(self, parent, texts, shipped, editable, on_save):
+        super().__init__(parent)
+        self.title("Prompts")
+        self.configure(bg=BG)
+        self.resizable(True, True)
+        self.geometry("760x580")
+        self.protocol("WM_DELETE_WINDOW", self._close)
+        self.grab_set()
+        self._parent, self._shipped, self._editable, self._on_save = parent, shipped, editable, on_save
+        self._texts, self._saved = dict(texts), dict(texts)
+        self._key = None
+
+        tabs = tk.Frame(self, bg=BG)
+        tabs.pack(fill="x", padx=20, pady=(20, 8))
+        self._tab_btns = {}
+        for key, name in PROMPT_TABS:
+            b = tk.Button(tabs, text=name, font=FONT_BTN_SM, relief="flat", bd=0, padx=10, pady=5,
+                          cursor="hand2", command=lambda k=key: self._select(k))
+            b.pack(side="left", padx=(0, 3))
+            self._tab_btns[key] = b
+
+        self._feeds = tk.Label(self, font=FONT_SMALL, fg=TEXT_MUT, bg=BG, justify="left", anchor="w")
+        self._feeds.pack(fill="x", padx=20)
+        self._feeds.bind("<Configure>", lambda e: self._feeds.config(wraplength=e.width))
+        self._status = tk.Label(self, font=FONT_SMALL, fg=TEXT_SEC, bg=BG, anchor="w")
+        self._status.pack(fill="x", padx=20, pady=(2, 8))
+
+        box = tk.Frame(self, bg=BG)
+        box.pack(fill="both", expand=True, padx=20)
+        scrollbar = ttk.Scrollbar(box, orient="vertical")
+        self._text = tk.Text(box, font=FONT_MONO, bg=BG_INPUT, fg=TEXT_PRI, insertbackground=TEXT_PRI,
+                             relief="flat", wrap="word", padx=8, pady=6, undo=True,
+                             highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT,
+                             yscrollcommand=scrollbar.set)
+        scrollbar.config(command=self._text.yview)
+        scrollbar.pack(side="right", fill="y")
+        self._text.pack(side="left", fill="both", expand=True)
+        self._text.bind("<<Modified>>", self._on_modified)
+
+        row = tk.Frame(self, bg=BG)
+        row.pack(fill="x", padx=20, pady=14)
+        if editable:
+            flat_btn(row, "Save", self._save, color=ACCENT, fg=BG).pack(side="left", padx=(0, 8))
+            small_btn(row, "Reset to default", self._reset).pack(side="left")
+        else:
+            tk.Label(row, text="The servers are running, so these are read-only. Stop them to edit.",
+                     font=FONT_SMALL, fg=TEXT_SEC, bg=BG).pack(side="left")
+        small_btn(row, "Close", self._close).pack(side="right")
+        self._select("chat")
+
+    def _current(self):
+        return self._text.get("1.0", "end-1c")
+
+    def _select(self, key):
+        if self._key is not None and self._editable:
+            self._texts[self._key] = self._current()
+        self._key = key
+        self._text.config(state="normal")
+        self._text.delete("1.0", "end")
+        self._text.insert("1.0", self._texts.get(key, ""))
+        self._text.edit_reset()
+        if not self._editable:
+            self._text.config(state="disabled")
+        for k, b in self._tab_btns.items():
+            style_toggle(b, k == key)
+        self._feeds.config(text=self.FEEDS[key].format(today=time.strftime("%A, %B %d, %Y")))
+        self._update_status()
+
+    def _on_modified(self, _event=None):
+        self._text.edit_modified(False)
+        self._update_status()
+
+    def _update_status(self):
+        text = self._current()
+        # A blank agent prompt means the shipped one, so it isn't "modified".
+        modified = text != self._shipped[self._key] and (self._key == "chat" or text.strip())
+        state = "Modified from the default" if modified else "Default"
+        self._status.config(text=f"{state}  ·  {len(text):,} characters")
+
+    def _reset(self):
+        self._text.delete("1.0", "end")
+        self._text.insert("1.0", self._shipped[self._key])
+
+    def _all_texts(self):
+        if self._editable:
+            self._texts[self._key] = self._current()
+        return self._texts
+
+    def _save(self):
+        problem = self._on_save(dict(self._all_texts()))
+        if problem:
+            messagebox.showerror("Not saved", problem, parent=self)
+            return
+        self._saved = dict(self._texts)
+        self._close()
+
+    def _close(self):
+        if self._editable and self._all_texts() != self._saved:
+            if not messagebox.askyesno("Prompts", "Discard your unsaved changes?", parent=self):
+                return
+        # Tk drops the grab when this window goes; hand it back to Settings.
+        self.destroy()
+        try:
+            if self._parent.winfo_exists():
+                self._parent.grab_set()
+        except tk.TclError:
+            pass
 
 
 class UpdateDialog(tk.Toplevel):
@@ -2021,6 +2190,13 @@ class CommandLauncherGUI:
             self.config["uvx_command"] = cmd
             save_config(self.config)
 
+        # The proxy and agents server read the prompts once at startup: edit only while they're stopped.
+        running = bool(self.exit_btn.winfo_manager())
+
+        def open_prompts(parent):
+            texts = dict(agent_prompts.effective(self.config), chat=self.config.get("system_prompt", ""))
+            PromptsDialog(parent, texts, shipped_prompts(), not running, self._save_prompts)
+
         SettingsDialog(
             self.master, self.llama_dir, on_save,
             uvx_command=self.uvx_command,
@@ -2029,9 +2205,21 @@ class CommandLauncherGUI:
             on_set_open_browser=self._set_open_browser,
             on_open_folders=lambda parent: FoldersDialog(parent, self.agent_policy, self._agents_error),
             previous_build=self.config.get("previous_build"),
-            on_rollback=None if self.exit_btn.winfo_manager() else self._start_rollback,
+            on_rollback=None if running else self._start_rollback,
             theme=self._theme, on_set_theme=self._set_theme,
+            on_open_prompts=open_prompts, prompts_editable=not running,
         )
+
+    def _save_prompts(self, texts):
+        problem = set_prompts(self.config, texts)
+        if problem:
+            return problem
+        try:
+            backup_config()
+        except OSError as e:
+            return f"Couldn't back up config.json first, so nothing was saved: {e}"
+        save_config(self.config)
+        return None
 
 
     # ── llama.cpp updates ─────────────────────────────────────
