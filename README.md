@@ -103,7 +103,7 @@ If a port the launcher needs (8080, 8081, 8001 or 8002) is still held by a lefto
 Click **Exit Processes** to kill all four servers and return to the launcher screen.
 
 ### System tray
-Right-click the tray icon to **Show** the window or **Exit** (which stops the servers, like closing the window).
+The launcher has its own llama icon on the taskbar, in the window corner and in the tray. Right-click the tray icon to **Show** the window or **Exit** (which stops the servers, like closing the window).
 
 ---
 

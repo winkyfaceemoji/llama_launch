@@ -106,7 +106,7 @@ def _bootstrap():
 try:
     _bootstrap()
     import pystray
-    from PIL import Image, ImageDraw
+    from PIL import Image
     _TRAY_AVAILABLE = True
 except Exception:
     _TRAY_AVAILABLE = False
@@ -219,6 +219,9 @@ AGENT_API_URL = "http://127.0.0.1:8081/v1"
 # holds a random token that lets the test's own chat requests through.
 MODEL_TEST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "eval", "model_test.py")
 MODEL_TEST_LOCK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model_test.lock")
+
+# The window, taskbar and tray icon. Drawn by dev/make_icon.py; rerun it after a palette change.
+ICON_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")
 
 
 # ============================================================
@@ -969,13 +972,8 @@ def card(parent, **kw):
 # ============================================================
 
 def _make_tray_image():
-    # Create a 64x64 RGBA icon in the dark palette whatever the theme: it sits on the taskbar,
-    # and a near-black square with a light circle reads on both a light and a dark one.
-    dark = PALETTES["dark"]
-    img = Image.new("RGBA", (64, 64), dark["BG"])
-    draw = ImageDraw.Draw(img)
-    draw.ellipse([8, 8, 56, 56], fill=dark["ACCENT"])
-    return img
+    # The app icon (its largest frame); pystray scales it to the tray's size.
+    return Image.open(ICON_FILE)
 
 
 # ============================================================
@@ -1655,7 +1653,7 @@ class CommandLauncherGUI:
         master.title("")
         master.configure(bg=BG)
         master.resizable(False, False)
-        master.iconbitmap(default="")
+        master.iconbitmap(default=ICON_FILE)  # default= gives every dialog the icon too
 
         apply_ttk_style()
         # Every dialog gets the title bar of the current theme when it first shows.
@@ -2641,6 +2639,9 @@ if __name__ == "__main__":
     show_requests = claim_instance()
     if show_requests is None:
         sys.exit(0)  # another launcher is running and now shows its window (ADR 0017)
+    # Our own taskbar button and icon; without this, Windows groups the window under
+    # pythonw.exe's icon. It must be set before the first window exists.
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("LlamaLauncher")
     root = tk.Tk()
     app  = CommandLauncherGUI(root)
 
