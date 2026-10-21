@@ -119,6 +119,7 @@ The directory scanned for `.gguf` model files and used as the working directory 
 
 - **Web UI** — set to **Yes** to automatically open `http://127.0.0.1:8080/` in the browser once the server comes online. Set to **No** to skip this. The choice is saved between launches and has no other effect.
 - **Theme** — **System** (the default) follows Windows' light or dark setting and switches when Windows does; **Light** and **Dark** stay put. It applies at once to the launcher and its dialogs. The Jobs panel follows the Web UI's own theme setting instead.
+- **Prompts** — **Edit…** opens every prompt the models get: Chat (the system prompt below) and the Research, Plan, Organize and Review prompts of [agent jobs](#agent-jobs-research-planning-organising). Each tab says what the prompt feeds, whether it differs from the default, and its length (a long agent prompt leaves a job less room on small models). **Reset to default** brings back the shipped text. Save refuses an Organize or Review prompt the jobs couldn't fill in (a missing `{folder}`, `{batch}` or `{goal}`, or a single brace) and copies `config.json` to `config.json.bak` first. While the servers run the button says **View…** and the prompts are read-only: the proxy and agents server read them once at launch, so what you see is what they use.
 - **UVX Settings** — click **▶ Show command** to expand and edit the command that starts mcp-proxy. Changes are saved when you click **Save**.
 - **llama.cpp** — **Roll back to bNNNN** shows after an update, while the servers are stopped. See [Updating llama.cpp](#updating-llamacpp).
 
@@ -180,7 +181,7 @@ Use the **+ Add**, **Edit**, and **Delete** buttons next to the preset dropdown 
 
 The system prompt is stored in `config.json` under the `"system_prompt"` key. The proxy puts today's date at the top of it on every request, so the model always knows the date without calling a tool. Only the date is injected — a timestamp that changed every minute would force llama-server to reprocess the whole conversation.
 
-The proxy replaces any system message sent by the Web UI with this prompt, so edit it in `config.json` rather than in the Web UI's settings.
+The proxy replaces any system message sent by the Web UI with this prompt, so edit it in **Settings → Prompts** (or `config.json`) rather than in the Web UI's settings. Edits apply at the next launch.
 
 ---
 
@@ -278,6 +279,7 @@ All settings live in a single `config.json` next to the launcher:
 | `llama_dir` | Path to the folder containing your `.gguf` model files |
 | `presets` | Saved launch presets |
 | `system_prompt` | System prompt injected into every Web UI chat request |
+| `agent_prompts` | Your edits to the agent job prompts (`research`, `plan`, `organize`, `review`); a missing one means the default. Edit them in Settings → Prompts |
 | `mcpServers` | MCP tool definitions used by the UVX proxy |
 | `uvx_command` | The command that starts mcp-proxy at launch (editable in Settings). `{config}` stands for the path to `config.json`, `{guard}` for `mcp_guard.py`, which adds the Host check |
 | `open_browser` | Whether to open the Web UI when the server comes online |

@@ -8,3 +8,4 @@ test_jobs.json
 model_test.lock
 __pycache__/
 eval/results/
+config.json.bak

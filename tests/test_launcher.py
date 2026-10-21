@@ -702,3 +702,35 @@ class TrimLogTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PromptSaveTests(unittest.TestCase):
+    def test_backup_copies_the_config_before_a_save(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "config.json")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write('{"system_prompt": "old"}')
+            launcher.backup_config(path)
+            with open(path + ".bak", encoding="utf-8") as f:
+                self.assertEqual(f.read(), '{"system_prompt": "old"}')
+
+    def test_backup_of_a_missing_config_does_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            launcher.backup_config(os.path.join(d, "config.json"))
+            self.assertEqual(os.listdir(d), [])
+
+    def test_edits_are_stored_and_the_shipped_text_is_not(self):
+        config = {"system_prompt": "old", "agent_prompts": {"plan": "Plan briefly."}}
+        texts = {"chat": "Cite fetched pages only.", "research": "Research carefully.",
+                 "plan": launcher.agent_prompts.SHIPPED["plan"], "organize": "  ",
+                 "review": launcher.agent_prompts.SHIPPED["review"]}
+        self.assertIsNone(launcher.set_prompts(config, texts))
+        self.assertEqual(config["system_prompt"], "Cite fetched pages only.")
+        self.assertEqual(config["agent_prompts"], {"research": "Research carefully."})
+
+    def test_a_prompt_the_runner_cannot_fill_is_refused_and_nothing_changes(self):
+        config = {"system_prompt": "old"}
+        problem = launcher.set_prompts(config, {"chat": "new", "organize": "Sort {folder}."})
+        self.assertIn("Organize", problem)
+        self.assertIn("{batch}", problem)
+        self.assertEqual(config, {"system_prompt": "old"})
