@@ -175,21 +175,19 @@ set_palette("dark")
 
 # Fonts
 FONT_TITLE  = ("Segoe UI", 13, "bold")
-FONT_SMALL  = ("Segoe UI", 9)
+FONT_SMALL  = ("Segoe UI", 10)
 FONT_BTN    = ("Segoe UI", 10, "bold")
-FONT_BTN_SM = ("Segoe UI", 9)
+FONT_BTN_SM = ("Segoe UI", 10)
+FONT_ICON   = ("Segoe UI Symbol", 13)   # one-glyph buttons such as the preset "⋯"
 FONT_MONO   = ("Cascadia Code", 10)
 FONT_LOG    = ("Cascadia Code", 10)
 
 # Window dimensions — fixed size, no manual resizing
 W           = 480
 H_SETUP     = 280    # height of the first-run setup screen
-H_CONFIG    = 270    # height of the main config view
-H_NOTICE    = 70     # added while the llama.cpp update notice shows
-H_SETTINGS      = 504   # settings dialog, UVX collapsed
-H_SETTINGS_UVX  = 594   # settings dialog, UVX expanded
-H_ROLLBACK      = 44    # added to both while the roll back row shows
-W_SETTINGS      = 460   # settings dialog width
+H_CONFIG    = 280    # height of the main config view
+H_NOTICE    = 76     # added while the llama.cpp update notice shows
+W_SETTINGS      = 460   # settings dialog width (its height follows the page shown)
 H_RUNNING   = 750   # height of the running/log view
 LOG_MAX_LINES = 5000  # lines each log pane keeps; older ones are dropped so a long session stays responsive
 
@@ -1071,6 +1069,54 @@ class _MenuProxy:
         self._items.append((label, command or (lambda: None)))
 
 
+def popup_menu(anchor, items, width=None, right=False, on_close=None):
+    # A themed borderless menu under anchor; items are (label, command) or (label, command, fg).
+    # It closes on a pick, on focus loss or on Esc, and returns the popup window.
+    anchor.update_idletasks()
+    popup = tk.Toplevel(anchor)
+    popup.overrideredirect(True)  # no OS chrome, so the border is ours
+    popup.configure(bg=BORDER)
+    inner = tk.Frame(popup, bg=BG_INPUT)
+    inner.pack(fill="both", expand=True, padx=1, pady=1)
+
+    def close():
+        if popup.winfo_exists():
+            popup.destroy()
+        if on_close:
+            on_close()
+
+    for label, command, *fg in items:
+        def pick(c=command):
+            close()  # first, so a dialog the command opens doesn't sit under the menu
+            c()
+        tk.Button(inner, text=label, anchor="w",
+                  bg=BG_INPUT, fg=fg[0] if fg else TEXT_PRI,
+                  activebackground=ACCENT, activeforeground=BG,
+                  font=FONT_SMALL, relief="flat", bd=0,
+                  highlightthickness=0, padx=10, pady=5,
+                  cursor="hand2", command=pick).pack(fill="x")
+    popup.update_idletasks()
+    w = width or inner.winfo_reqwidth() + 2
+    h = inner.winfo_reqheight() + 2
+    x = anchor.winfo_rootx() + (anchor.winfo_width() - w if right else 0)
+    y = anchor.winfo_rooty() + anchor.winfo_height()
+    popup.geometry(f"{w}x{h}+{x}+{y}")
+
+    # 50ms delay lets the click handler fire before the popup is destroyed on focus loss
+    def on_focus_out(event):
+        def check():
+            if not popup.winfo_exists():
+                return
+            focused = popup.focus_get()
+            if focused is None or not str(focused).startswith(str(popup)):
+                close()
+        popup.after(50, check)
+
+    popup.bind("<FocusOut>", on_focus_out)
+    popup.focus_set()
+    return popup
+
+
 class DropdownButton(tk.Frame):
     # A custom dropdown: a Button + arrow Label that opens a borderless popup window.
     def __init__(self, parent, var):
@@ -1103,51 +1149,10 @@ class DropdownButton(tk.Frame):
 
     def _show_popup(self):
         self.update_idletasks()
-        x = self.winfo_rootx()
-        y = self.winfo_rooty() + self.winfo_height()
-        w = self.winfo_width()
+        self._popup = popup_menu(self, self.menu._items, width=self.winfo_width(), on_close=self._forget_popup)
 
-        # overrideredirect strips all OS window chrome so we control the border fully
-        popup = tk.Toplevel(self)
-        popup.overrideredirect(True)
-        popup.configure(bg=BORDER)
-
-        inner = tk.Frame(popup, bg=BG_INPUT)
-        inner.pack(fill="both", expand=True, padx=1, pady=1)
-
-        for label, cmd in self.menu._items:
-            def on_select(c=cmd, p=popup):
-                c()
-                p.destroy()
-                self._popup = None
-
-            tk.Button(
-                inner, text=label, anchor="w",
-                bg=BG_INPUT, fg=TEXT_PRI,
-                activebackground=ACCENT, activeforeground=BG,
-                font=FONT_SMALL, relief="flat", bd=0,
-                highlightthickness=0, padx=8, pady=4,
-                cursor="hand2", command=on_select,
-            ).pack(fill="x")
-
-        popup.update_idletasks()
-        h = inner.winfo_reqheight() + 2
-        popup.geometry(f"{w}x{h}+{x}+{y}")
-
-        # 50ms delay lets the click handler fire before the popup is destroyed on focus loss
-        def on_focus_out(event):
-            def check():
-                if not popup.winfo_exists():
-                    return
-                focused = popup.focus_get()
-                if focused is None or not str(focused).startswith(str(popup)):
-                    popup.destroy()
-                    self._popup = None
-            popup.after(50, check)
-
-        popup.bind("<FocusOut>", on_focus_out)
-        popup.focus_set()
-        self._popup = popup
+    def _forget_popup(self):
+        self._popup = None
 
 
 # ============================================================
@@ -1254,19 +1259,20 @@ class PresetDialog(tk.Toplevel):
 # ============================================================
 
 class SettingsDialog(tk.Toplevel):
+    # A drill-down: General, which links to Agents, llama.cpp and Advanced. Every page's changes wait for
+    # Save; the theme previews at once and Cancel (or the X, or Esc) restores it. Agent folders and Prompts
+    # are editors with their own Save. All pages are built once and swapped, so unsaved values survive.
     def __init__(self, parent, current_path, on_save,
                  uvx_command="", on_save_uvx=None,
                  open_browser=True, on_set_open_browser=None,
                  on_open_folders=None, previous_build=None, on_rollback=None,
-                 theme="system", on_set_theme=None, on_open_prompts=None, prompts_editable=True):
+                 theme="system", on_set_theme=None, on_preview_theme=None,
+                 on_open_prompts=None, prompts_editable=True):
         super().__init__(parent)
         self.title("Settings")
         self.configure(bg=BG)
         self.resizable(False, False)
-        # on_rollback is None while the servers run (Windows locks llama-server.exe).
-        self._rollback_build = parse_build(previous_build or "") if on_rollback else None
-        self._extra_h = H_ROLLBACK if self._rollback_build else 0
-        self.geometry(f"{W_SETTINGS}x{H_SETTINGS + self._extra_h}")
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
         self.grab_set()
 
         self._on_save        = on_save
@@ -1274,17 +1280,86 @@ class SettingsDialog(tk.Toplevel):
         self._on_save_uvx    = on_save_uvx
         self._on_set_open_browser = on_set_open_browser
         self._on_set_theme   = on_set_theme
-        self._uvx_expanded   = False
+        self._on_preview_theme = on_preview_theme
+        self._theme_saved    = theme
+        # on_rollback is None while the servers run (Windows locks llama-server.exe).
+        self._previous_build = parse_build(previous_build or "")
+        self._rollback_build = self._previous_build if on_rollback else None
 
-        # ── Llama.cpp folder ─────────────────────────────────────
-        section_label(self, "llama.cpp folder").pack(fill="x", padx=20, pady=(20, 6))
-        tk.Label(self, text="The working directory used when launching llama-server.",
-                 font=FONT_SMALL, fg=TEXT_MUT, bg=BG).pack(padx=20, anchor="w", pady=(0, 10))
+        body = tk.Frame(self, bg=BG)
+        body.pack(fill="both", expand=True)
+        self._pages = {
+            "general":  self._general_page(body, current_path, open_browser, theme),
+            "agents":   self._agents_page(body, on_open_folders, on_open_prompts, prompts_editable),
+            "llama":    self._llama_page(body),
+            "advanced": self._advanced_page(body, uvx_command),
+        }
 
-        path_row = tk.Frame(self, bg=BG)
-        path_row.pack(fill="x", padx=20)
+        # ── Save / Cancel, for every page ─────────────────────
+        btn_row = tk.Frame(self, bg=BG)
+        btn_row.pack(padx=20, pady=(10, 20), fill="x")
+        flat_btn(btn_row, "Save", self._save, color=ACCENT, fg=BG).pack(side="left", padx=(0, 8))
+        small_btn(btn_row, "Cancel", self._cancel).pack(side="left")
+        self._show("general")
+
+    def _show(self, name):
+        for page in self._pages.values():
+            page.pack_forget()
+        self._pages[name].pack(fill="both", expand=True)
+        self.update_idletasks()
+        self.geometry(f"{W_SETTINGS}x{self.winfo_reqheight()}")
+
+    # ── page building blocks ──────────────────────────────────
+
+    def _page(self, body, title, back=False):
+        page = tk.Frame(body, bg=BG)
+        if back:
+            top = tk.Frame(page, bg=BG)
+            top.pack(fill="x", padx=12, pady=(12, 0))
+            small_btn(top, "‹ General", lambda: self._show("general")).pack(side="left")
+        tk.Label(page, text=title, font=FONT_BTN, fg=TEXT_PRI, bg=BG).pack(
+            anchor="w", padx=20, pady=(8 if back else 20, 12))
+        return page
+
+    def _row(self, page, label, note=None):
+        # A label on the left (its control goes on the right of the returned row), then a muted note under it.
+        row = tk.Frame(page, bg=BG)
+        row.pack(fill="x", padx=20, pady=(0, 4 if note else 14))
+        tk.Label(row, text=label, font=FONT_SMALL, fg=TEXT_PRI, bg=BG).pack(side="left")
+        if note:
+            tk.Label(page, text=note, font=FONT_SMALL, fg=TEXT_MUT, bg=BG, wraplength=W_SETTINGS - 40,
+                     justify="left").pack(padx=20, anchor="w", pady=(0, 14))
+        return row
+
+    def _link(self, page, title, note, target):
+        # A whole-row link to a sub-page: title, a muted note, and a chevron.
+        row = tk.Frame(page, bg=BG, cursor="hand2")
+        row.pack(fill="x", padx=12, pady=1)
+        parts = [row,
+                 tk.Label(row, text=title, font=FONT_SMALL, fg=TEXT_PRI, bg=BG, cursor="hand2"),
+                 tk.Label(row, text=note, font=FONT_SMALL, fg=TEXT_MUT, bg=BG, cursor="hand2"),
+                 tk.Label(row, text="›", font=FONT_BTN, fg=TEXT_MUT, bg=BG, cursor="hand2")]
+        parts[1].pack(side="left", padx=(8, 0), pady=8)
+        parts[2].pack(side="left", padx=(10, 0))
+        parts[3].pack(side="right", padx=(0, 8))
+
+        def hover(on):
+            for w in parts:
+                w.config(bg=HOVER if on else BG)
+        for w in parts:
+            w.bind("<Button-1>", lambda e: self._show(target))
+            w.bind("<Enter>", lambda e: hover(True))
+            w.bind("<Leave>", lambda e: hover(False))
+
+    # ── pages ─────────────────────────────────────────────────
+
+    def _general_page(self, body, current_path, open_browser, theme):
+        page = self._page(body, "General")
+
+        self._row(page, "llama.cpp folder")
+        path_row = tk.Frame(page, bg=BG)
+        path_row.pack(fill="x", padx=20, pady=(0, 4))
         path_row.columnconfigure(0, weight=1)
-
         self._path_var = tk.StringVar(value=current_path)
         tk.Entry(path_row, textvariable=self._path_var,
                  font=FONT_MONO, bg=BG_INPUT, fg=TEXT_PRI,
@@ -1292,45 +1367,30 @@ class SettingsDialog(tk.Toplevel):
                  highlightthickness=1, highlightbackground=BORDER,
                  highlightcolor=ACCENT).grid(row=0, column=0, sticky="ew", ipady=6)
         small_btn(path_row, "Browse", self._browse).grid(row=0, column=1, padx=(8, 0))
+        tk.Label(page, text="Where your models are; llama-server runs from here.",
+                 font=FONT_SMALL, fg=TEXT_MUT, bg=BG).pack(padx=20, anchor="w", pady=(0, 14))
 
-        # ── Launch options ────────────────────────────────────────
-        section_label(self, "Launch options").pack(fill="x", padx=20, pady=(20, 6))
-
-        # Web UI row: label left, equal-width Yes/No buttons right
-        web_row = tk.Frame(self, bg=BG)
-        web_row.pack(fill="x", padx=20, pady=(0, 4))
-        tk.Label(web_row, text="Web UI", font=FONT_SMALL, fg=TEXT_PRI, bg=BG).pack(side="left")
-
-        btn_grp = tk.Frame(web_row, bg=BG)
-        btn_grp.pack(side="right")
-        self._yes_btn_dlg = tk.Button(
-            btn_grp, text="Yes", width=5,
-            font=FONT_BTN_SM, relief="flat", bd=0, padx=6, pady=5, cursor="hand2",
-            command=lambda: self._set_open_browser_dlg(True),
-        )
+        web_row = self._row(page, "Open the Web UI on launch",
+                            "Opens the browser when the server comes online.")
+        grp = tk.Frame(web_row, bg=BG)
+        grp.pack(side="right")
+        self._yes_btn_dlg = tk.Button(grp, text="Yes", width=5, font=FONT_BTN_SM, relief="flat", bd=0,
+                                      padx=6, pady=5, cursor="hand2",
+                                      command=lambda: self._set_open_browser_dlg(True))
         self._yes_btn_dlg.pack(side="left", padx=(0, 3))
-        self._no_btn_dlg = tk.Button(
-            btn_grp, text="No", width=5,
-            font=FONT_BTN_SM, relief="flat", bd=0, padx=6, pady=5, cursor="hand2",
-            command=lambda: self._set_open_browser_dlg(False),
-        )
+        self._no_btn_dlg = tk.Button(grp, text="No", width=5, font=FONT_BTN_SM, relief="flat", bd=0,
+                                     padx=6, pady=5, cursor="hand2",
+                                     command=lambda: self._set_open_browser_dlg(False))
         self._no_btn_dlg.pack(side="left")
-
         self._open_browser_dlg = open_browser
         self._apply_open_browser_style()
 
-        tk.Label(self, text="Open the browser automatically when the server comes online.",
-                 font=FONT_SMALL, fg=TEXT_MUT, bg=BG).pack(padx=20, anchor="w", pady=(0, 14))
-
-        # Theme row: System follows Windows' light/dark setting, like the Web UI's choice.
-        theme_row = tk.Frame(self, bg=BG)
-        theme_row.pack(fill="x", padx=20, pady=(0, 14))
-        tk.Label(theme_row, text="Theme", font=FONT_SMALL, fg=TEXT_PRI, bg=BG).pack(side="left")
-        theme_grp = tk.Frame(theme_row, bg=BG)
-        theme_grp.pack(side="right")
+        theme_row = self._row(page, "Theme")
+        grp = tk.Frame(theme_row, bg=BG)
+        grp.pack(side="right")
         self._theme_btns = {}
         for i, t in enumerate(THEMES):
-            b = tk.Button(theme_grp, text=t.capitalize(), width=6,
+            b = tk.Button(grp, text=t.capitalize(), width=6,
                           font=FONT_BTN_SM, relief="flat", bd=0, padx=6, pady=5, cursor="hand2",
                           command=lambda t=t: self._set_theme_dlg(t))
             b.pack(side="left", padx=(0, 3) if i < len(THEMES) - 1 else 0)
@@ -1338,54 +1398,54 @@ class SettingsDialog(tk.Toplevel):
         self._theme_dlg = theme
         self._apply_theme_style()
 
+        tk.Frame(page, bg=BORDER, height=1).pack(fill="x", padx=20, pady=(0, 6))
+        self._link(page, "Agents", "Agent folders and prompts", "agents")
+        self._link(page, "llama.cpp", "Roll back to an earlier build", "llama")
+        self._link(page, "Advanced", "The MCP proxy command", "advanced")
+        return page
+
+    def _agents_page(self, body, on_open_folders, on_open_prompts, prompts_editable):
+        page = self._page(body, "Agents", back=True)
         if on_open_folders:
-            agents_row = tk.Frame(self, bg=BG)
-            agents_row.pack(fill="x", padx=20, pady=(0, 14))
-            tk.Label(agents_row, text="Agent folders", font=FONT_SMALL, fg=TEXT_PRI, bg=BG).pack(side="left")
-            small_btn(agents_row, "Manage…", lambda: on_open_folders(self)).pack(side="right")
-
+            row = self._row(page, "Agent folders", "The folders agents may read and organise.")
+            small_btn(row, "Manage…", lambda: on_open_folders(self)).pack(side="right")
         if on_open_prompts:
-            prompts_row = tk.Frame(self, bg=BG)
-            prompts_row.pack(fill="x", padx=20, pady=(0, 14))
-            tk.Label(prompts_row, text="Prompts", font=FONT_SMALL, fg=TEXT_PRI, bg=BG).pack(side="left")
-            small_btn(prompts_row, "Edit…" if prompts_editable else "View…",
+            row = self._row(page, "Prompts", "What the chat and each agent job are told. Saved in their own dialog.")
+            small_btn(row, "Edit…" if prompts_editable else "View…",
                       lambda: on_open_prompts(self)).pack(side="right")
+        return page
 
+    def _llama_page(self, body):
+        page = self._page(body, "llama.cpp", back=True)
         if self._rollback_build:
-            rollback_row = tk.Frame(self, bg=BG)
-            rollback_row.pack(fill="x", padx=20, pady=(0, 14))
-            tk.Label(rollback_row, text="llama.cpp", font=FONT_SMALL, fg=TEXT_PRI, bg=BG).pack(side="left")
-            small_btn(rollback_row, f"Roll back to b{self._rollback_build}", self._rollback).pack(side="right")
+            row = self._row(page, "Roll back",
+                            "Reinstalls the build you had before the last update, then runs the build check.")
+            small_btn(row, f"Roll back to b{self._rollback_build}", self._rollback).pack(side="right")
+        else:
+            note = ("Roll back is available while the servers are stopped." if self._previous_build
+                    else "No earlier build is recorded. After an update, you can roll back here.")
+            tk.Label(page, text=note, font=FONT_SMALL, fg=TEXT_MUT, bg=BG, wraplength=W_SETTINGS - 40,
+                     justify="left").pack(padx=20, anchor="w", pady=(0, 14))
+        return page
 
-        # UVX Settings: label + description + accordion toggle
-        uvx_hdr = tk.Frame(self, bg=BG)
-        uvx_hdr.pack(fill="x", padx=20, pady=(0, 4))
-        tk.Label(uvx_hdr, text="UVX Settings", font=FONT_SMALL, fg=TEXT_PRI, bg=BG).pack(side="left")
-        self._uvx_btn = small_btn(uvx_hdr, "▶ Show command", self._toggle_uvx_dlg)
-        self._uvx_btn.pack(side="right")
-
-        tk.Label(self, text="Command used to start the MCP proxy bridge on port 8001.",
-                 font=FONT_SMALL, fg=TEXT_MUT, bg=BG).pack(padx=20, anchor="w", pady=(0, 6))
-
+    def _advanced_page(self, body, uvx_command):
+        page = self._page(body, "Advanced", back=True)
+        self._row(page, "UVX command", "Starts the MCP proxy bridge on port 8001.")
         self._uvx_text = tk.Text(
-            self, height=4, font=FONT_MONO,
+            page, height=5, font=FONT_MONO,
             bg=BG_INPUT, fg=TEXT_PRI, insertbackground=TEXT_PRI,
             relief="flat", wrap="word", padx=8, pady=6,
             highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT,
         )
+        self._uvx_text.pack(fill="x", padx=20, pady=(0, 6))
         self._uvx_text.insert("1.0", uvx_command)
+        return page
 
-        # ── Save / Cancel ─────────────────────────────────────────
-        self._btn_row = tk.Frame(self, bg=BG)
-        self._btn_row.pack(padx=20, pady=(10, 20), fill="x")
-        flat_btn(self._btn_row, "Save", self._save, color=ACCENT, fg=BG).pack(side="left", padx=(0, 8))
-        small_btn(self._btn_row, "Cancel", self.destroy).pack(side="left")
+    # ── choices, Save and Cancel ──────────────────────────────
 
     def _set_open_browser_dlg(self, open_browser):
         self._open_browser_dlg = open_browser
         self._apply_open_browser_style()
-        if self._on_set_open_browser:
-            self._on_set_open_browser(open_browser)
 
     def _apply_open_browser_style(self):
         style_toggle(self._yes_btn_dlg, self._open_browser_dlg)
@@ -1393,24 +1453,13 @@ class SettingsDialog(tk.Toplevel):
 
     def _set_theme_dlg(self, theme):
         self._theme_dlg = theme
-        if self._on_set_theme:
-            self._on_set_theme(theme)  # recolours this dialog too
+        if self._on_preview_theme:
+            self._on_preview_theme(theme)  # recolours this dialog too
         self._apply_theme_style()
 
     def _apply_theme_style(self):
         for t, b in self._theme_btns.items():
             style_toggle(b, t == self._theme_dlg)
-
-    def _toggle_uvx_dlg(self):
-        self._uvx_expanded = not self._uvx_expanded
-        if self._uvx_expanded:
-            self._uvx_text.pack(fill="x", padx=20, pady=(0, 6), before=self._btn_row)
-            self._uvx_btn.config(text="▼ Hide command")
-            self.geometry(f"{W_SETTINGS}x{H_SETTINGS_UVX + self._extra_h}")
-        else:
-            self._uvx_text.pack_forget()
-            self._uvx_btn.config(text="▶ Show command")
-            self.geometry(f"{W_SETTINGS}x{H_SETTINGS + self._extra_h}")
 
     def _rollback(self):
         build = self._rollback_build
@@ -1419,27 +1468,36 @@ class SettingsDialog(tk.Toplevel):
                 f"Reinstall llama.cpp b{build} through WinGet, then run the build check? "
                 "This accepts the package's terms and uses the GPU for about 30 seconds.",
                 parent=self):
-            # Settings closes first, so the progress dialog takes the grab from the main window.
-            self.destroy()
+            # Settings closes first (unsaved changes dropped), so the progress dialog takes the grab.
+            self._cancel()
             self._on_rollback(build)
 
     def _browse(self):
-        path = filedialog.askdirectory(title="Select llama.cpp folder")
+        path = filedialog.askdirectory(title="Select llama.cpp folder", parent=self)
         if path:
             self._path_var.set(path)
 
+    def _cancel(self):
+        # Drop every unsaved change; a previewed theme goes back to the saved one.
+        if self._theme_dlg != self._theme_saved and self._on_preview_theme:
+            self._on_preview_theme(None)
+        self.destroy()
+
     def _save(self):
         path = self._path_var.get().strip()
-        if not path:
-            messagebox.showerror("Required", "Please enter a path.", parent=self)
-            return
-        if not os.path.isdir(path):
-            messagebox.showerror("Invalid Path",
-                "That folder doesn't exist. Please choose a valid directory.", parent=self)
+        if not path or not os.path.isdir(path):
+            self._show("general")
+            messagebox.showerror("Invalid Path" if path else "Required",
+                "That folder doesn't exist. Please choose a valid directory." if path
+                else "Please enter a path.", parent=self)
             return
         self._on_save(path)
         if self._on_save_uvx:
             self._on_save_uvx(self._uvx_text.get("1.0", "end").strip())
+        if self._on_set_open_browser:
+            self._on_set_open_browser(self._open_browser_dlg)
+        if self._on_set_theme and self._theme_dlg != self._theme_saved:
+            self._on_set_theme(self._theme_dlg)
         self.destroy()
 
 
@@ -1846,6 +1904,7 @@ class CommandLauncherGUI:
 
         # The palette must be set before any widget is built; widgets read it when created.
         self._theme = theme_setting(self.config)
+        self._theme_preview = None  # a theme picked in Settings but not saved yet
         set_palette(resolve_theme(self._theme, windows_light()))
         master.title("")
         master.configure(bg=BG)
@@ -2032,11 +2091,10 @@ class CommandLauncherGUI:
         self.preset_menu = DropdownButton(preset_card, self.preset_var)
         self.preset_menu.grid(row=0, column=1, sticky="ew", pady=10)
 
-        preset_btns = tk.Frame(preset_card, bg=BG_PANEL)
-        preset_btns.grid(row=0, column=2, padx=(6, 12), pady=10)
-        small_btn(preset_btns, "+ Add",  self._add_preset).pack(side="left", padx=(0, 6))
-        small_btn(preset_btns, "Edit",   self._edit_preset).pack(side="left", padx=(0, 6))
-        small_btn(preset_btns, "Delete", self._delete_preset, fg=DANGER).pack(side="left")
+        # + Add, Edit and Delete live behind one "⋯" button, so the row holds just the choice.
+        self._preset_more = small_btn(preset_card, "⋯", self._open_preset_menu, width=3)
+        self._preset_more.config(font=FONT_ICON, pady=0)
+        self._preset_more.grid(row=0, column=2, padx=(6, 12), pady=10)
 
         # ── Row 4: Launch Server button
         self.run_button = tk.Button(
@@ -2081,7 +2139,11 @@ class CommandLauncherGUI:
         # Below the status row: the direct API address for agents (bypasses the
         # proxy, so no system prompt or date injection), and the two keys, each with a Copy button.
         self.api_bar = tk.Frame(self.master, bg=BG)
-        api_row = tk.Frame(self.api_bar, bg=BG)
+        self._conn_btn = small_btn(self.api_bar, "Connection  ▸", self._toggle_connection)
+        self._conn_btn.config(padx=4)
+        self._conn_btn.pack(anchor="w")
+        self._conn_body = tk.Frame(self.api_bar, bg=BG)  # packed only while open
+        api_row = tk.Frame(self._conn_body, bg=BG)
         api_row.pack(fill="x")
         tk.Label(api_row, text="Agent API", font=FONT_SMALL,
                  fg=TEXT_MUT, bg=BG).pack(side="left")
@@ -2089,7 +2151,7 @@ class CommandLauncherGUI:
                  fg=TEXT_SEC, bg=BG).pack(side="left", padx=(8, 0))
         copy_btn(api_row, lambda: AGENT_API_URL).pack(side="left", padx=(4, 0))
         # The keys themselves are never shown, only copied. A second row: three pairs don't fit 480 px.
-        key_row = tk.Frame(self.api_bar, bg=BG)
+        key_row = tk.Frame(self._conn_body, bg=BG)
         key_row.pack(fill="x", pady=(2, 0))
         tk.Label(key_row, text="API key", font=FONT_SMALL,
                  fg=TEXT_MUT, bg=BG).pack(side="left")
@@ -2206,7 +2268,7 @@ class CommandLauncherGUI:
             on_open_folders=lambda parent: FoldersDialog(parent, self.agent_policy, self._agents_error),
             previous_build=self.config.get("previous_build"),
             on_rollback=None if running else self._start_rollback,
-            theme=self._theme, on_set_theme=self._set_theme,
+            theme=self._theme, on_set_theme=self._set_theme, on_preview_theme=self._preview_theme,
             on_open_prompts=open_prompts, prompts_editable=not running,
         )
 
@@ -2299,8 +2361,16 @@ class CommandLauncherGUI:
         if self.run_button.winfo_manager():
             self.run_commands()
 
+    def _preview_theme(self, theme):
+        # From Settings, before Save: show theme (None = back to the saved one) without saving it.
+        self._theme_preview = theme
+        name = resolve_theme(theme or self._theme, windows_light())
+        if name != CURRENT_THEME:
+            apply_theme(self.master, name)
+
     def _set_theme(self, theme):
-        # From Settings: applies at once, like the Web UI's own theme choice.
+        # From Settings' Save.
+        self._theme_preview = None
         self._theme = theme
         self.config["theme"] = theme
         save_config(self.config)
@@ -2310,7 +2380,8 @@ class CommandLauncherGUI:
 
     def _watch_windows_theme(self):
         # In System mode, follow a change of Windows' setting. Runs on the UI thread (tkinter isn't thread-safe).
-        if self._theme == "system":
+        # A Settings preview counts as the setting, or the watcher would undo it.
+        if (self._theme_preview or self._theme) == "system":
             name = resolve_theme("system", windows_light())
             if name != CURRENT_THEME:
                 apply_theme(self.master, name)
@@ -2331,6 +2402,7 @@ class CommandLauncherGUI:
         self._update_btn.config(state=tk.DISABLED)
         self.status_bar.grid(row=5, column=0,
                              sticky="ew", padx=24, pady=(16, 0))
+        self._toggle_connection(False)  # closed on every launch
         self.api_bar.grid(row=6, column=0, sticky="ew", padx=24, pady=(8, 0))
         self.master.grid_rowconfigure(7, weight=1)
         self.log_pane.grid(row=7, column=0,
@@ -2439,6 +2511,11 @@ class CommandLauncherGUI:
 
 
     # ── Preset CRUD ───────────────────────────────────────────
+
+    def _open_preset_menu(self):
+        return popup_menu(self._preset_more, [("+ Add preset", self._add_preset),
+                                              ("Edit", self._edit_preset),
+                                              ("Delete", self._delete_preset, DANGER)], right=True)
 
     def _add_preset(self):
         models = sorted(detect_models(self.llama_dir), key=str.lower)
@@ -2714,6 +2791,15 @@ class CommandLauncherGUI:
         clear_test_lock(MODEL_TEST_LOCK)  # a leftover from a crash would keep Web UI chat paused
 
     # ── Log helpers ───────────────────────────────────────────
+
+    def _toggle_connection(self, show=None):
+        # The Agent API address and the keys, each with Copy: one click away, out of the logs' way.
+        show = not self._conn_body.winfo_manager() if show is None else show
+        if show:
+            self._conn_body.pack(fill="x", pady=(2, 0))
+        else:
+            self._conn_body.pack_forget()
+        self._conn_btn.config(text="Connection  ▾" if show else "Connection  ▸")
 
     def _show_log(self, widget):
         # Bring one log's tab to the front and clear its error dot.

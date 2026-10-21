@@ -3,7 +3,7 @@
     python dev/gui_shot.py <launcher.pyw> <out dir> [--theme light|dark]
 
 Builds the window from the given launcher.pyw (any version) and saves home.png,
-dropdown.png, settings.png, preset.png, folders.png, prompts.png (editable),
+dropdown.png, preset_menu.png, settings.png (and its agents, llama and advanced pages), preset.png, folders.png, prompts.png (editable),
 prompts_running.png (read-only), update.png and running.png. A view
 an older version can't build is skipped with a note. It never clicks Launch or starts a
 process: the running view is only the layout with a few sample log lines, and the update
@@ -79,6 +79,22 @@ def main():
         popup.destroy()
         app.model_menu._popup = None
 
+    def menu_shot(popup, name):
+        # A borderless popup sits outside the window's frame: grab the window plus whatever hangs below it.
+        popup.unbind("<FocusOut>")  # the grab below would otherwise close it
+        popup.update()
+        left, top, right, bottom = window_rect(root)
+        bottom = max(bottom, popup.winfo_rooty() + popup.winfo_height() + 8)
+        ImageGrab.grab((left, top, right, bottom)).save(os.path.join(args.out, name))
+        popup.destroy()
+
+    def preset_menu():
+        root.focus_force()
+        menu_shot(app._open_preset_menu(), "preset_menu.png")
+
+    def settings_page(name):
+        newest_dialog()._show(name)
+
     def preset():
         mod.PresetDialog(root, "Edit preset", name="Auto", command="llama-server -m {model} --fit on",
                          model_keywords=[], available_models=sorted(app._models)[:6])
@@ -103,7 +119,11 @@ def main():
     steps = [
         (lambda: None, lambda: shot(root, "home.png")),
         (dropdown, lambda: None),
-        (app._open_settings, lambda: shot_dialog("settings.png")),
+        (preset_menu, lambda: None),
+        (app._open_settings, lambda: shot(newest_dialog(), "settings.png")),
+        (lambda: settings_page("agents"), lambda: shot(newest_dialog(), "settings_agents.png")),
+        (lambda: settings_page("llama"), lambda: shot(newest_dialog(), "settings_llama.png")),
+        (lambda: settings_page("advanced"), lambda: shot_dialog("settings_advanced.png")),
         (preset, lambda: shot_dialog("preset.png")),
         (lambda: mod.FoldersDialog(root, app.agent_policy, None), lambda: shot_dialog("folders.png")),
         (lambda: prompts(True), lambda: shot_dialog("prompts.png")),

@@ -45,7 +45,7 @@ pythonw launcher.pyw
 
 On the first launch, a setup screen asks you to locate your **models folder** — the directory where your `.gguf` files live. This path is saved to `config.json`. Make sure `llama-server` is on your system `PATH` so the launcher can find it regardless of working directory.
 
-Click **Settings** in the top-right corner at any time to update the models folder path, toggle the Web UI option, or edit the UVX proxy command.
+Click **Settings** in the top-right corner at any time to change the models folder, the theme and the other options below. Presets are managed from the **⋯** button next to the Preset dropdown (+ Add preset, Edit, Delete).
 
 ---
 
@@ -110,18 +110,25 @@ The launcher has its own llama icon on the taskbar, in the window corner and in 
 
 ## Settings
 
-Click **Settings** to open the settings dialog, which has two sections:
+Click **Settings** (or press Ctrl+,). It opens on **General**, which links to three more pages: **Agents ›**, **llama.cpp ›** and **Advanced ›**; each has **‹ General** to go back. Changes on every page wait for **Save**; **Cancel**, the window's X or Esc drops them all. Agent folders and Prompts are separate editors with their own Save.
 
-### Llama.cpp folder
-The directory scanned for `.gguf` model files and used as the working directory when launching `llama-server`. Use **Browse** to pick a folder.
+### General
 
-### Launch options
+- **llama.cpp folder** — the directory scanned for `.gguf` model files and used as the working directory when launching `llama-server`. Use **Browse** to pick a folder.
+- **Open the Web UI on launch** — **Yes** opens `http://127.0.0.1:8080/` in the browser once the server comes online; **No** skips this.
+- **Theme** — **System** (the default) follows Windows' light or dark setting and switches when Windows does; **Light** and **Dark** stay put. Picking one previews it at once; Save keeps it and Cancel goes back. The Jobs panel follows the Web UI's own theme setting instead.
 
-- **Web UI** — set to **Yes** to automatically open `http://127.0.0.1:8080/` in the browser once the server comes online. Set to **No** to skip this. The choice is saved between launches and has no other effect.
-- **Theme** — **System** (the default) follows Windows' light or dark setting and switches when Windows does; **Light** and **Dark** stay put. It applies at once to the launcher and its dialogs. The Jobs panel follows the Web UI's own theme setting instead.
+### Agents
+
+- **Agent folders** — **Manage…** lists the folders agents may read and organise.
 - **Prompts** — **Edit…** opens every prompt the models get: Chat (the system prompt below) and the Research, Plan, Organize and Review prompts of [agent jobs](#agent-jobs-research-planning-organising). Each tab says what the prompt feeds, whether it differs from the default, and its length (a long agent prompt leaves a job less room on small models). **Reset to default** brings back the shipped text. Save refuses an Organize or Review prompt the jobs couldn't fill in (a missing `{folder}`, `{batch}` or `{goal}`, or a single brace) and copies `config.json` to `config.json.bak` first. While the servers run the button says **View…** and the prompts are read-only: the proxy and agents server read them once at launch, so what you see is what they use.
-- **UVX Settings** — click **▶ Show command** to expand and edit the command that starts mcp-proxy. Changes are saved when you click **Save**.
-- **llama.cpp** — **Roll back to bNNNN** shows after an update, while the servers are stopped. See [Updating llama.cpp](#updating-llamacpp).
+### llama.cpp
+
+- **Roll back to bNNNN** — after an update, while the servers are stopped. See [Updating llama.cpp](#updating-llamacpp).
+
+### Advanced
+
+- **UVX command** — the command that starts mcp-proxy.
 
 ---
 
@@ -145,7 +152,7 @@ This needs llama.cpp installed through WinGet (package `ggml.llamacpp`). The Web
 - **15 to 60 minutes of GPU,** depending on the model (gpt-oss-20b took 16). Web UI chat is paused while it runs: chat requests get a "model test is running" error until the test finishes or you stop it. The test's jobs never show in the Jobs panel.
 - **The dialog** streams the test's log. When the test finishes, the report opens in the browser.
 - **The report** is `eval/results/report.html`: one row per complete test, sorted by agent score, each expanding to per-area results and the model's wrong answers. It and the result files stay on this PC.
-- **Prompts:** a test measures the model with your prompts (Settings → Prompts), and each result records them with a short prompt version. The top rows rank only runs with the same prompts as the newest run; runs with other prompts are listed below, saying which prompts differed. After you change a prompt, rerun the models you want to compare. Results from before prompts were recorded aren't shown.
+- **Prompts:** a test measures the model with your prompts (Settings → Agents → Prompts), and each result records them with a short prompt version. The top rows rank only runs with the same prompts as the newest run; runs with other prompts are listed below, saying which prompts differed. After you change a prompt, rerun the models you want to compare. Results from before prompts were recorded aren't shown.
 - **Stop** (or closing the dialog) asks first, then ends the test, cancels its jobs and deletes its temporary folders. Nothing is added to the report. **Exit Processes** during a test stops it the same way, without asking.
 
 ---
@@ -184,7 +191,7 @@ The system prompt is stored in `config.json` under the `"system_prompt"` key. Th
 
 If a chat answer cites a page that no tool opened in that chat (for example one it only saw in search results), the proxy adds a line at the end: **Warning: cites pages that were never opened**, followed by the links. A link you pasted yourself doesn't count. Agent reports get the same check.
 
-The proxy replaces any system message sent by the Web UI with this prompt, so edit it in **Settings → Prompts** (or `config.json`) rather than in the Web UI's settings. Edits apply at the next launch.
+The proxy replaces any system message sent by the Web UI with this prompt, so edit it in **Settings → Agents → Prompts** (or `config.json`) rather than in the Web UI's settings. Edits apply at the next launch.
 
 ---
 
@@ -214,7 +221,7 @@ The chat model in the Web UI can start background jobs that run on your local mo
 
 1. Launch the server. The launcher starts the agents server itself on port `8002`. The first launch takes a little longer while `uv` installs the `mcp` package; the UVX tab shows its progress on lines marked `[agents]`.
 2. In the Web UI's **MCP Servers** page, add `http://127.0.0.1:8002/mcp` and switch on **Use llama-server proxy**, as for the other servers (see [MCP web UI setup](#mcp-web-ui-setup)). If you added the old `http://127.0.0.1:8001/servers/agents/mcp` before, delete it.
-3. In the launcher, open **Settings → Agent folders → Manage…** and add the local folders agents may read and organise. The chat model can also ask for a folder with `request_folder_access`; approving that tool call adds it.
+3. In the launcher, open **Settings → Agents → Agent folders → Manage…** and add the local folders agents may read and organise. The chat model can also ask for a folder with `request_folder_access`; approving that tool call adds it.
 4. Paste your [API key](#api-key) into the Web UI under **Settings → General** if you haven't, and the [approval key](#approval-key) into the Jobs panel the first time it asks.
 
 Leave the Web UI's per-tool confirmation on for `organize`, `restore`, `queue_steps` and `request_folder_access`, and check that it really asks before each of them (no "always allow"). That confirmation is your approval for those calls: `organize` reads your listed folders into its report, `restore` moves files, `queue_steps` starts the jobs a plan proposed, and `request_folder_access` widens what agents can read.
@@ -282,9 +289,9 @@ All settings live in a single `config.json` next to the launcher:
 | `llama_dir` | Path to the folder containing your `.gguf` model files |
 | `presets` | Saved launch presets |
 | `system_prompt` | System prompt injected into every Web UI chat request |
-| `agent_prompts` | Your edits to the agent job prompts (`research`, `plan`, `organize`, `review`); a missing one means the default. Edit them in Settings → Prompts |
+| `agent_prompts` | Your edits to the agent job prompts (`research`, `plan`, `organize`, `review`); a missing one means the default. Edit them in Settings → Agents → Prompts |
 | `mcpServers` | MCP tool definitions used by the UVX proxy |
-| `uvx_command` | The command that starts mcp-proxy at launch (editable in Settings). `{config}` stands for the path to `config.json`, `{guard}` for `mcp_guard.py`, which adds the Host check |
+| `uvx_command` | The command that starts mcp-proxy at launch (editable in Settings → Advanced). `{config}` stands for the path to `config.json`, `{guard}` for `mcp_guard.py`, which adds the Host check |
 | `open_browser` | Whether to open the Web UI when the server comes online |
 | `last_model` | Remembered model selection between sessions |
 | `previous_build` | The llama.cpp build before the last update (e.g. `b9776`), for roll back. Cleared after a roll back |
@@ -320,7 +327,7 @@ The card then shows the server name, **Connected**, and the number of tools avai
 Neither MCP server sends CORS headers, so with **Use llama-server proxy** off the browser blocks the connection; with it on, the Web UI reaches them through llama-server's `/cors-proxy`, which needs the API key. Missing CORS headers don't stop DNS rebinding, where a web page points its own host name at `127.0.0.1`:
 
 - The agents server checks every request's `Host` (and `Origin`, when sent) and answers only `127.0.0.1` and `localhost`, so a rebound page is refused. Its approval routes, used by the Jobs panel, also require the approval key. The panel's routes on the proxy (`/agent-jobs`) do the same Host check themselves, since the proxy rewrites Host before the agents server sees it.
-- The UVX proxy on `8001` is started through `mcp_guard.py`, which answers only `Host: 127.0.0.1:8001` and `localhost:8001`, so a rebound page can't reach fetch, ddg-search or time either. If you edit the UVX command in Settings, keep `python "{guard}"` in it.
+- The UVX proxy on `8001` is started through `mcp_guard.py`, which answers only `Host: 127.0.0.1:8001` and `localhost:8001`, so a rebound page can't reach fetch, ddg-search or time either. If you edit the UVX command in Settings → Advanced, keep `python "{guard}"` in it.
 
 ---
 
