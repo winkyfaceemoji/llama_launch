@@ -88,6 +88,7 @@ import pathlib
 import threading
 import urllib.request
 import time
+import collections
 import ctypes
 from ctypes import wintypes
 import winreg
@@ -914,6 +915,9 @@ def log_line_is_error(text):
     return bool(_LOG_ERROR.search(text))
 
 
+LogTab = collections.namedtuple("LogTab", "frame button dot label_var")  # one log tab's widgets
+
+
 def trim_log(widget, max_lines):
     # Drop a Text widget's oldest lines beyond max_lines (the text ends with a newline).
     lines = int(widget.index("end-1c").split(".")[0]) - 1
@@ -930,7 +934,7 @@ def apply_ttk_style():
         ("Vertical.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})]})])
     style.configure("Vertical.TScrollbar",
         background=BORDER, troughcolor=BG_INPUT, bordercolor=BG_INPUT,
-        darkcolor=BORDER, lightcolor=BORDER, gripcount=0, width=10, arrowsize=10,
+        darkcolor=BORDER, lightcolor=BORDER, gripcount=0, width=10,
     )
     style.map("Vertical.TScrollbar", background=[("active", TEXT_MUT)],
               darkcolor=[("active", TEXT_MUT)], lightcolor=[("active", TEXT_MUT)])
@@ -1878,7 +1882,8 @@ class CommandLauncherGUI:
         )
         self.run_button.grid(row=4, column=0,
                              sticky="ew", padx=24, pady=(8, 24))
-        # Enter launches from the home view; Ctrl+, opens Settings (dialogs hold the grab, so neither fires there).
+        # Enter launches from the home view; Ctrl+, opens Settings. Bound on the root's own tag, so they never
+        # fire from a dialog (each dialog is its own toplevel with its own tags).
         self.master.bind("<Return>", self._on_return)
         self.master.bind("<Control-comma>", lambda e: self._open_settings())
 
@@ -1944,7 +1949,7 @@ class CommandLauncherGUI:
         body.grid_rowconfigure(0, weight=1)
         body.grid_columnconfigure(0, weight=1)
 
-        self._log_tabs = {}   # Text widget -> (frame, tab button, error dot, label var)
+        self._log_tabs = {}   # Text widget -> LogTab
         for name, label_var in (("llama-server", self._llama_label_var), ("UVX Proxy", self._uvx_label_var),
                                 ("Prompt Proxy", self._proxy_label_var)):
             frame = tk.Frame(body, bg=BG_INPUT)
@@ -1962,8 +1967,8 @@ class CommandLauncherGUI:
                             cursor="hand2", command=lambda t=txt: self._show_log(t))
             btn.pack(side="left")
             dot = tk.Label(tab, text="●", font=FONT_SMALL, fg=DANGER, bg=BG)  # packed only after an error line
-            self._log_tabs[txt] = (frame, btn, dot, label_var)
-        self.llama_log, self.uvx_log, self.proxy_log = self._log_tabs
+            self._log_tabs[txt] = LogTab(frame, btn, dot, label_var)
+        self.llama_log, self.uvx_log, self.proxy_log = self._log_tabs  # in the order built above
         self._show_log(self.llama_log)
 
         # ── Test this model + Exit buttons. Test is enabled only while the health poll says online.
@@ -2094,8 +2099,8 @@ class CommandLauncherGUI:
         self.master.geometry(f"{W}x{H_CONFIG + extra}")
 
     def _on_escape(self, event):
-        win = event.widget.winfo_toplevel() if hasattr(event.widget, "winfo_toplevel") else None
-        if win is None or win is self.master:
+        win = event.widget.winfo_toplevel()
+        if win is self.master:
             return
         close = win.protocol("WM_DELETE_WINDOW")
         if close:
@@ -2105,7 +2110,7 @@ class CommandLauncherGUI:
 
     def _on_return(self, event):
         # Enter launches from the home view (not while running, not from a dialog).
-        if self.run_button.winfo_manager() and str(self.run_button["state"]) == "normal":
+        if self.run_button.winfo_manager():
             self.run_commands()
 
     def _set_theme(self, theme):
@@ -2527,12 +2532,12 @@ class CommandLauncherGUI:
     def _show_log(self, widget):
         # Bring one log's tab to the front and clear its error dot.
         self._shown_log = widget
-        for txt, (frame, btn, dot, label_var) in self._log_tabs.items():
-            style_toggle(btn, txt is widget)
+        for txt, tab in self._log_tabs.items():
+            style_toggle(tab.button, txt is widget)
             if txt is widget:
-                frame.tkraise()
-                dot.pack_forget()
-                self._log_header.config(textvariable=label_var)
+                tab.frame.tkraise()
+                tab.dot.pack_forget()
+                self._log_header.config(textvariable=tab.label_var)
 
     def _append_log(self, widget, text):
         # Append one line to a log pane. Safe to call from any thread via .after().
@@ -2540,7 +2545,7 @@ class CommandLauncherGUI:
         widget.insert("end", text + "\n")
         trim_log(widget, LOG_MAX_LINES)
         if widget is not self._shown_log and log_line_is_error(text):
-            self._log_tabs[widget][2].pack(side="left", padx=(0, 4))
+            self._log_tabs[widget].dot.pack(side="left", padx=(0, 4))
         if self._autoscroll_var.get():
             widget.see("end")
         widget.config(state=tk.DISABLED)
@@ -2609,7 +2614,7 @@ class CommandLauncherGUI:
             w.config(state=tk.NORMAL)
             w.delete("1.0", "end")
             w.config(state=tk.DISABLED)
-            self._log_tabs[w][2].pack_forget()
+            self._log_tabs[w].dot.pack_forget()
         self._show_log(self.llama_log)
         self._enter_running_state()
 
