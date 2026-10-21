@@ -70,13 +70,7 @@ def main():
     def dropdown():
         root.focus_force()
         app.model_menu._show_popup()
-        popup = app.model_menu._popup
-        popup.unbind("<FocusOut>")  # the grab below would otherwise close it
-        popup.update()
-        left, top, right, bottom = window_rect(root)
-        bottom = max(bottom, popup.winfo_rooty() + popup.winfo_height() + 8)
-        ImageGrab.grab((left, top, right, bottom)).save(os.path.join(args.out, "dropdown.png"))
-        popup.destroy()
+        menu_shot(app.model_menu._popup, "dropdown.png")
         app.model_menu._popup = None
 
     def menu_shot(popup, name):

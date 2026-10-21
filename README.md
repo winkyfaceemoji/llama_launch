@@ -92,11 +92,12 @@ The **PRESET** dropdown is set to **Auto** whenever you pick a model. Auto lets 
 Click **Launch Server**. The window switches to the running view, which shows:
 
 - **Status bar** — server health (`● online`, `● loading model`, `● offline`, or `● <process> exited (code N)` if one of the four crashed, for example `● agents server exited (code 1)`), uptime counter, and an **Auto-scroll** toggle.
-- **Agent API** — the direct llama-server address for agents (`http://127.0.0.1:8081/v1`). **Copy** puts it on the clipboard.
-- **API key** — **Copy** puts the key on the clipboard. The key itself is never shown.
-- **Approval key (Jobs panel)** — the same, for the key the Jobs panel needs (see [Approval key](#approval-key)).
+- **Connection ▸** — click to show the connection details (closed again at every launch), each with a **Copy** button:
+  - **Agent API** — the direct llama-server address for agents (`http://127.0.0.1:8081/v1`).
+  - **API key** — the key itself is never shown.
+  - **Approval key (Jobs panel)** — the key the Jobs panel needs (see [Approval key](#approval-key)).
 - **Log tabs** — live output from `llama-server`, the UVX proxy (with the agents server's lines, marked `[agents]`), and the system prompt proxy, one tab each. A red dot on a tab means it logged an error line while you were looking at another; opening the tab clears it. The line under the tabs shows the process's name and PID (and the model, for llama-server).
-- **Keyboard:** Enter launches from the home view, Esc closes a dialog (as its X would), Ctrl+, opens Settings.
+- **Keyboard:** Enter launches from the home view, Esc closes a dialog or menu (as its X would; in Settings that drops unsaved changes), Ctrl+, opens Settings.
 
 If a port the launcher needs (8080, 8081, 8001 or 8002) is still held by a leftover llama-server, proxy or agents server from an earlier run, the launcher stops it first. If any other program holds 8080, 8081 or 8001, the launch is cancelled and a dialog names that program and its PID. If another program holds 8002, only the agents server is skipped, and the UVX tab says why.
 
@@ -181,7 +182,7 @@ Never add `--tools` (any of them) or `--agent` to a preset: they include `exec_s
 
 The launcher adds `--api-key-file` to every preset's command, so you don't need to put it in your own presets.
 
-Use the **+ Add**, **Edit**, and **Delete** buttons next to the preset dropdown to manage your own presets.
+Use the **⋯** button next to the preset dropdown (**+ Add preset**, **Edit**, **Delete**) to manage your own presets.
 
 ---
 

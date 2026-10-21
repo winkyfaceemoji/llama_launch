@@ -178,7 +178,7 @@ FONT_TITLE  = ("Segoe UI", 13, "bold")
 FONT_SMALL  = ("Segoe UI", 10)
 FONT_BTN    = ("Segoe UI", 10, "bold")
 FONT_BTN_SM = ("Segoe UI", 10)
-FONT_ICON   = ("Segoe UI Symbol", 13)   # one-glyph buttons such as the preset "⋯"
+FONT_ICON   = ("Segoe UI Symbol", 13)   # the preset "⋯" button
 FONT_MONO   = ("Cascadia Code", 10)
 FONT_LOG    = ("Cascadia Code", 10)
 
@@ -1113,6 +1113,7 @@ def popup_menu(anchor, items, width=None, right=False, on_close=None):
         popup.after(50, check)
 
     popup.bind("<FocusOut>", on_focus_out)
+    popup.bind("<Escape>", lambda e: (close(), "break")[1])
     popup.focus_set()
     return popup
 
@@ -1347,7 +1348,7 @@ class SettingsDialog(tk.Toplevel):
             for w in parts:
                 w.config(bg=HOVER if on else BG)
         for w in parts:
-            w.bind("<Button-1>", lambda e: self._show(target))
+            w.bind("<Button-1>", lambda e: (hover(False), self._show(target)))
             w.bind("<Enter>", lambda e: hover(True))
             w.bind("<Leave>", lambda e: hover(False))
 
@@ -1466,7 +1467,8 @@ class SettingsDialog(tk.Toplevel):
         if messagebox.askyesno(
                 "Roll back llama.cpp",
                 f"Reinstall llama.cpp b{build} through WinGet, then run the build check? "
-                "This accepts the package's terms and uses the GPU for about 30 seconds.",
+                "This accepts the package's terms and uses the GPU for about 30 seconds. "
+                "Unsaved changes in Settings are discarded.",
                 parent=self):
             # Settings closes first (unsaved changes dropped), so the progress dialog takes the grab.
             self._cancel()
@@ -1479,17 +1481,20 @@ class SettingsDialog(tk.Toplevel):
 
     def _cancel(self):
         # Drop every unsaved change; a previewed theme goes back to the saved one.
-        if self._theme_dlg != self._theme_saved and self._on_preview_theme:
+        if self._on_preview_theme:
             self._on_preview_theme(None)
         self.destroy()
 
     def _save(self):
         path = self._path_var.get().strip()
-        if not path or not os.path.isdir(path):
+        if not path:
             self._show("general")
-            messagebox.showerror("Invalid Path" if path else "Required",
-                "That folder doesn't exist. Please choose a valid directory." if path
-                else "Please enter a path.", parent=self)
+            messagebox.showerror("Required", "Please enter a path.", parent=self)
+            return
+        if not os.path.isdir(path):
+            self._show("general")
+            messagebox.showerror("Invalid Path",
+                "That folder doesn't exist. Please choose a valid directory.", parent=self)
             return
         self._on_save(path)
         if self._on_save_uvx:
@@ -1497,7 +1502,9 @@ class SettingsDialog(tk.Toplevel):
         if self._on_set_open_browser:
             self._on_set_open_browser(self._open_browser_dlg)
         if self._on_set_theme and self._theme_dlg != self._theme_saved:
-            self._on_set_theme(self._theme_dlg)
+            self._on_set_theme(self._theme_dlg)  # also ends the preview
+        elif self._on_preview_theme:
+            self._on_preview_theme(None)
         self.destroy()
 
 
@@ -2092,6 +2099,7 @@ class CommandLauncherGUI:
         self.preset_menu.grid(row=0, column=1, sticky="ew", pady=10)
 
         # + Add, Edit and Delete live behind one "⋯" button, so the row holds just the choice.
+        self._preset_popup = None
         self._preset_more = small_btn(preset_card, "⋯", self._open_preset_menu, width=3)
         self._preset_more.config(font=FONT_ICON, pady=0)
         self._preset_more.grid(row=0, column=2, padx=(6, 12), pady=10)
@@ -2513,9 +2521,15 @@ class CommandLauncherGUI:
     # ── Preset CRUD ───────────────────────────────────────────
 
     def _open_preset_menu(self):
-        return popup_menu(self._preset_more, [("+ Add preset", self._add_preset),
-                                              ("Edit", self._edit_preset),
-                                              ("Delete", self._delete_preset, DANGER)], right=True)
+        # A second click on "⋯" closes the open menu, as the dropdowns do.
+        if self._preset_popup and self._preset_popup.winfo_exists():
+            self._preset_popup.destroy()
+            self._preset_popup = None
+            return None
+        self._preset_popup = popup_menu(self._preset_more, [("+ Add preset", self._add_preset),
+                                                            ("Edit", self._edit_preset),
+                                                            ("Delete", self._delete_preset, DANGER)], right=True)
+        return self._preset_popup
 
     def _add_preset(self):
         models = sorted(detect_models(self.llama_dir), key=str.lower)
