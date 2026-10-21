@@ -13,7 +13,7 @@ The launcher starts and manages four processes:
 3. **UVX MCP Proxy** — a middleware server on port `8001` that bridges MCP tools (web search, fetch) to the llama-server Web UI.
 4. **Agents server** (`agents/server.py`) — an MCP server on port `8002` that runs background [agent jobs](#agent-jobs-research-planning-organising). It's optional: if it can't start, everything else still runs.
 
-Once launched, the app shows live output from all four processes in log panes (the agents server shares the UVX pane), monitors server health, and tracks uptime. Closing the window stops all four servers and exits; minimize it to keep them running. Starting the launcher again while it runs brings up the open window instead of a second launcher.
+Once launched, the app shows live output from all four processes in log tabs (the agents server shares the UVX tab), monitors server health, and tracks uptime. Closing the window stops all four servers and exits; minimize it to keep them running. Starting the launcher again while it runs brings up the open window instead of a second launcher.
 
 All four servers listen on `127.0.0.1` only, so other devices on your network can't reach them. Web pages open in your browser still can, so llama-server also requires an API key (see [API key](#api-key)).
 
@@ -92,12 +92,13 @@ The **PRESET** dropdown is set to **Auto** whenever you pick a model. Auto lets 
 Click **Launch Server**. The window switches to the running view, which shows:
 
 - **Status bar** — server health (`● online`, `● loading model`, `● offline`, or `● <process> exited (code N)` if one of the four crashed, for example `● agents server exited (code 1)`), uptime counter, and an **Auto-scroll** toggle.
-- **Agent API** — the direct llama-server address for agents (`http://127.0.0.1:8081/v1`). Click it to copy.
-- **API key** — click **click to copy** to put the key on the clipboard. The key itself is never shown.
+- **Agent API** — the direct llama-server address for agents (`http://127.0.0.1:8081/v1`). **Copy** puts it on the clipboard.
+- **API key** — **Copy** puts the key on the clipboard. The key itself is never shown.
 - **Approval key (Jobs panel)** — the same, for the key the Jobs panel needs (see [Approval key](#approval-key)).
-- **Three log panes** — live output from `llama-server`, the UVX proxy (with the agents server's lines, marked `[agents]`), and the system prompt proxy. Drag the dividers to resize. The llama-server pane header shows the active model name and PID.
+- **Log tabs** — live output from `llama-server`, the UVX proxy (with the agents server's lines, marked `[agents]`), and the system prompt proxy, one tab each. A red dot on a tab means it logged an error line while you were looking at another; opening the tab clears it. The line under the tabs shows the process's name and PID (and the model, for llama-server).
+- **Keyboard:** Enter launches from the home view, Esc closes a dialog (as its X would), Ctrl+, opens Settings.
 
-If a port the launcher needs (8080, 8081, 8001 or 8002) is still held by a leftover llama-server, proxy or agents server from an earlier run, the launcher stops it first. If any other program holds 8080, 8081 or 8001, the launch is cancelled and the llama-server log pane names that program and its PID. If another program holds 8002, only the agents server is skipped, and the UVX pane says why.
+If a port the launcher needs (8080, 8081, 8001 or 8002) is still held by a leftover llama-server, proxy or agents server from an earlier run, the launcher stops it first. If any other program holds 8080, 8081 or 8001, the launch is cancelled and a dialog names that program and its PID. If another program holds 8002, only the agents server is skipped, and the UVX pane says why.
 
 ### Stopping
 Click **Exit Processes** to kill all four servers and return to the launcher screen.

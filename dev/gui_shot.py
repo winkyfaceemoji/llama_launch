@@ -92,6 +92,7 @@ def main():
                      "srv  update_slots: all slots are idle"):
             app._append_log(app.llama_log, line)
         app._append_log(app.proxy_log, "Proxy listening on 127.0.0.1:8080 -> 127.0.0.1:8081")
+        app._append_log(app.uvx_log, "[agents] exited (code 1)")  # a background tab's error shows its dot
 
     # (open the view, its screenshot) in order; the running view changes the layout, so it goes last.
     steps = [

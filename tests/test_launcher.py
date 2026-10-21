@@ -659,6 +659,19 @@ class RemapColorsTests(unittest.TestCase):
         self.assertEqual(launcher.remap_colors(options, self.OLD, self.NEW), {})
 
 
+class LogLineIsErrorTests(unittest.TestCase):
+    def test_error_lines(self):
+        for line in ("LAUNCH FAILED: port 8080 is in use", "srv  operator(): http client error",
+                     "Traceback (most recent call last):", "[agents] exited (code 1); agent jobs are off",
+                     "ValueError exception in handler", "fatal: model file not found"):
+            self.assertTrue(launcher.log_line_is_error(line), line)
+
+    def test_ordinary_lines(self):
+        for line in ("main: server is listening on http://127.0.0.1:8081", "srv  update_slots: all slots are idle",
+                     "Launched (PID 1234)", "terrors of the deep", "no errors"):
+            self.assertFalse(launcher.log_line_is_error(line), line)
+
+
 class TrimLogTests(unittest.TestCase):
     def setUp(self):
         import tkinter as tk

@@ -906,6 +906,14 @@ def apply_theme(root, name):
             set_dark_title_bar(widget, name == "dark")
 
 
+_LOG_ERROR = re.compile(r"\b(error|failed|fatal|exception|traceback)\b|exited \(code", re.IGNORECASE)
+
+
+def log_line_is_error(text):
+    # Marks a log tab with a red dot when a line like this arrives while another tab is shown.
+    return bool(_LOG_ERROR.search(text))
+
+
 def trim_log(widget, max_lines):
     # Drop a Text widget's oldest lines beyond max_lines (the text ends with a newline).
     lines = int(widget.index("end-1c").split(".")[0]) - 1
@@ -914,15 +922,26 @@ def trim_log(widget, max_lines):
 
 
 def apply_ttk_style():
-    # Style the ttk scrollbar from the current palette (apply_theme calls this again on a switch).
+    # Style the ttk scrollbar from the current palette (apply_theme calls this again on a switch):
+    # a thin flat thumb in a flat trough, no arrow buttons.
     style = ttk.Style()
     style.theme_use("clam")
+    style.layout("Vertical.TScrollbar", [("Vertical.Scrollbar.trough", {"sticky": "ns", "children": [
+        ("Vertical.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})]})])
     style.configure("Vertical.TScrollbar",
-        background=BG_PANEL, troughcolor=BG_INPUT,
-        arrowcolor=TEXT_MUT, bordercolor=BORDER,
-        darkcolor=BG_PANEL, lightcolor=BG_PANEL,
+        background=BORDER, troughcolor=BG_INPUT, bordercolor=BG_INPUT,
+        darkcolor=BORDER, lightcolor=BORDER, gripcount=0, width=10, arrowsize=10,
     )
-    style.map("Vertical.TScrollbar", background=[("active", BORDER)])
+    style.map("Vertical.TScrollbar", background=[("active", TEXT_MUT)],
+              darkcolor=[("active", TEXT_MUT)], lightcolor=[("active", TEXT_MUT)])
+
+
+def style_toggle(button, on):
+    # One button of a segmented choice (Settings' Yes/No and Theme, the log tabs).
+    if on:
+        button.config(bg=ACCENT, fg=BG, activebackground=ACCENT, activeforeground=BG)
+    else:
+        button.config(bg=BG_INPUT, fg=TEXT_SEC, activebackground=BORDER, activeforeground=TEXT_PRI)
 
 
 def flat_btn(parent, text, command, color=None, fg=None, **kw):
@@ -945,6 +964,18 @@ def small_btn(parent, text, command, color=None, fg=None, **kw):
         disabledforeground=TEXT_MUT, font=FONT_BTN_SM, relief="flat", bd=0,
         padx=10, pady=5, cursor="hand2", **kw
     )
+
+
+def copy_btn(parent, value):
+    # A ghost "Copy" button that puts value() on the clipboard and says "Copied" for a moment.
+    def copy():
+        parent.clipboard_clear()
+        parent.clipboard_append(value())
+        b.config(text="Copied")
+        b.after(1200, lambda: b.winfo_exists() and b.config(text="Copy"))
+    b = small_btn(parent, "Copy", copy, width=6)
+    b.config(padx=8, pady=2)
+    return b
 
 
 def section_label(parent, text):
@@ -1306,16 +1337,9 @@ class SettingsDialog(tk.Toplevel):
         if self._on_set_open_browser:
             self._on_set_open_browser(open_browser)
 
-    @staticmethod
-    def _style_toggle(button, on):
-        if on:
-            button.config(bg=ACCENT, fg=BG, activebackground=ACCENT, activeforeground=BG)
-        else:
-            button.config(bg=BG_INPUT, fg=TEXT_SEC, activebackground=BORDER, activeforeground=TEXT_PRI)
-
     def _apply_open_browser_style(self):
-        self._style_toggle(self._yes_btn_dlg, self._open_browser_dlg)
-        self._style_toggle(self._no_btn_dlg, not self._open_browser_dlg)
+        style_toggle(self._yes_btn_dlg, self._open_browser_dlg)
+        style_toggle(self._no_btn_dlg, not self._open_browser_dlg)
 
     def _set_theme_dlg(self, theme):
         self._theme_dlg = theme
@@ -1325,7 +1349,7 @@ class SettingsDialog(tk.Toplevel):
 
     def _apply_theme_style(self):
         for t, b in self._theme_btns.items():
-            self._style_toggle(b, t == self._theme_dlg)
+            style_toggle(b, t == self._theme_dlg)
 
     def _toggle_uvx_dlg(self):
         self._uvx_expanded = not self._uvx_expanded
@@ -1665,6 +1689,9 @@ class CommandLauncherGUI:
                               lambda e: set_dark_title_bar(e.widget, CURRENT_THEME == "dark"), add="+")
         self._watch_windows_theme()
 
+        # Esc closes the dialog it's pressed in the way its X would (dialogs with their own close logic keep it).
+        master.bind_all("<Escape>", self._on_escape, add="+")
+
         # Kill all child processes when the window is closed
         master.protocol("WM_DELETE_WINDOW", self._force_exit)
 
@@ -1851,94 +1878,93 @@ class CommandLauncherGUI:
         )
         self.run_button.grid(row=4, column=0,
                              sticky="ew", padx=24, pady=(8, 24))
+        # Enter launches from the home view; Ctrl+, opens Settings (dialogs hold the grab, so neither fires there).
+        self.master.bind("<Return>", self._on_return)
+        self.master.bind("<Control-comma>", lambda e: self._open_settings())
 
-        # ── Row 5: Status bar (hidden until running state)
-        self.status_bar = tk.Frame(self.master, bg=BG_PANEL)
+        # ── Row 5: Status row in a hairline box (hidden until running state)
+        self.status_bar, status = card(self.master)
 
-        # Left: health dot
-        self._health_label = tk.Label(self.status_bar, text="● waiting",
-            font=FONT_SMALL, fg=TEXT_MUT, bg=BG_PANEL)
-        self._health_label.pack(side="left", padx=(16, 0), pady=8)
+        # Left: health, a coloured dot and its text
+        self._health_dot = tk.Label(status, text="●", font=FONT_SMALL, fg=TEXT_MUT, bg=BG_PANEL)
+        self._health_dot.pack(side="left", padx=(12, 4), pady=8)
+        self._health_label = tk.Label(status, text="waiting", font=FONT_SMALL, fg=TEXT_SEC, bg=BG_PANEL)
+        self._health_label.pack(side="left", pady=8)
 
         # Middle: uptime label + elapsed counter
-        tk.Label(self.status_bar, text="uptime",
+        tk.Label(status, text="uptime",
             font=FONT_SMALL, fg=TEXT_MUT, bg=BG_PANEL).pack(side="left", padx=(20, 6), pady=8)
         self._elapsed_var = tk.StringVar(value="00:00:00")
-        tk.Label(self.status_bar, textvariable=self._elapsed_var,
+        tk.Label(status, textvariable=self._elapsed_var,
             font=FONT_MONO, fg=TEXT_SEC, bg=BG_PANEL).pack(side="left", pady=8)
 
         # Right: auto-scroll checkbox
         self._autoscroll_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(self.status_bar, text="Auto-scroll",
+        tk.Checkbutton(status, text="Auto-scroll",
             variable=self._autoscroll_var,
             font=FONT_SMALL, fg=TEXT_MUT, bg=BG_PANEL,
             activebackground=BG_PANEL, activeforeground=TEXT_SEC,
-            selectcolor=BG_INPUT, cursor="hand2").pack(side="right", padx=16, pady=8)
+            selectcolor=BG_INPUT, cursor="hand2").pack(side="right", padx=12, pady=8)
 
-        # Below the status bar: the direct API address for agents (bypasses the
-        # proxy, so no system prompt or date injection). Click to copy.
+        # Below the status row: the direct API address for agents (bypasses the
+        # proxy, so no system prompt or date injection), and the two keys, each with a Copy button.
         self.api_bar = tk.Frame(self.master, bg=BG)
         api_row = tk.Frame(self.api_bar, bg=BG)
         api_row.pack(fill="x")
         tk.Label(api_row, text="Agent API", font=FONT_SMALL,
                  fg=TEXT_MUT, bg=BG).pack(side="left")
-        self._api_label = tk.Label(api_row, text=AGENT_API_URL, font=FONT_MONO,
-                                   fg=ACCENT, bg=BG, cursor="hand2")
-        self._api_label.pack(side="left", padx=(8, 0))
-        self._api_label.bind("<Button-1>", lambda e: self._copy_api_url())
+        tk.Label(api_row, text=AGENT_API_URL, font=FONT_MONO,
+                 fg=TEXT_SEC, bg=BG).pack(side="left", padx=(8, 0))
+        copy_btn(api_row, lambda: AGENT_API_URL).pack(side="left", padx=(4, 0))
         # The keys themselves are never shown, only copied. A second row: three pairs don't fit 480 px.
         key_row = tk.Frame(self.api_bar, bg=BG)
         key_row.pack(fill="x", pady=(2, 0))
         tk.Label(key_row, text="API key", font=FONT_SMALL,
                  fg=TEXT_MUT, bg=BG).pack(side="left")
-        self._key_label = tk.Label(key_row, text="click to copy", font=FONT_MONO,
-                                   fg=ACCENT, bg=BG, cursor="hand2")
-        self._key_label.pack(side="left", padx=(8, 0))
-        self._key_label.bind("<Button-1>", lambda e: self._copy_key(self.api_key, self._key_label))
+        copy_btn(key_row, lambda: self.api_key).pack(side="left", padx=(4, 0))
         tk.Label(key_row, text="Approval key (Jobs panel)", font=FONT_SMALL,
                  fg=TEXT_MUT, bg=BG).pack(side="left", padx=(16, 0))
-        self._approval_label = tk.Label(key_row, text="click to copy", font=FONT_MONO,
-                                        fg=ACCENT, bg=BG, cursor="hand2")
-        self._approval_label.pack(side="left", padx=(8, 0))
-        self._approval_label.bind("<Button-1>", lambda e: self._copy_key(self.approval_key, self._approval_label))
+        copy_btn(key_row, lambda: self.approval_key).pack(side="left", padx=(4, 0))
 
         # ── Rows 7–8: Running state (hidden until Launch is pressed)
-        # Two stacked log panes separated by a draggable sash.
+        # One log area with a tab per process, so each log gets the full height.
 
         self._llama_label_var  = tk.StringVar(value="llama-server")
         self._uvx_label_var    = tk.StringVar(value="UVX Proxy")
         self._proxy_label_var  = tk.StringVar(value="System Prompt Proxy")
 
-        # PanedWindow lets the user drag the divider to resize each log pane.
-        self.log_pane = tk.PanedWindow(
-            self.master, orient="vertical",
-            bg=BORDER, sashwidth=5, sashpad=0,
-            sashrelief="flat", bd=0, relief="flat",
-        )
+        self.log_pane = tk.Frame(self.master, bg=BG)
+        tab_row = tk.Frame(self.log_pane, bg=BG)
+        tab_row.pack(fill="x")
+        # The shown log's full label (name, model, PID) under the tabs.
+        self._log_header = tk.Label(self.log_pane, font=FONT_SMALL, fg=TEXT_MUT, bg=BG, anchor="w")
+        self._log_header.pack(fill="x", pady=(6, 2))
+        body = tk.Frame(self.log_pane, bg=BORDER, padx=1, pady=1)
+        body.pack(fill="both", expand=True)
+        body.grid_rowconfigure(0, weight=1)
+        body.grid_columnconfigure(0, weight=1)
 
-        def _make_log_pane(label_var):
-            frame = tk.Frame(self.log_pane, bg=BG)
-            hdr = tk.Frame(frame, bg=BG)
-            hdr.pack(fill="x", pady=(4, 2))
-            tk.Label(hdr, textvariable=label_var,
-                     font=FONT_SMALL, fg=TEXT_MUT, bg=BG).pack(side="left", pady=2)
-            border = tk.Frame(frame, bg=BORDER, padx=1, pady=1)
-            border.pack(fill="both", expand=True)
-            txt = tk.Text(border, font=FONT_LOG,
+        self._log_tabs = {}   # Text widget -> (frame, tab button, error dot, label var)
+        for name, label_var in (("llama-server", self._llama_label_var), ("UVX Proxy", self._uvx_label_var),
+                                ("Prompt Proxy", self._proxy_label_var)):
+            frame = tk.Frame(body, bg=BG_INPUT)
+            frame.grid(row=0, column=0, sticky="nsew")
+            txt = tk.Text(frame, font=FONT_LOG,
                           bg=BG_INPUT, fg=TEXT_PRI, insertbackground=TEXT_PRI,
                           relief="flat", state=tk.DISABLED, wrap="none")
-            sb = ttk.Scrollbar(border, orient="vertical", command=txt.yview)
+            sb = ttk.Scrollbar(frame, orient="vertical", command=txt.yview)
             txt.configure(yscrollcommand=sb.set)
             sb.pack(side="right", fill="y")
             txt.pack(side="left", fill="both", expand=True)
-            return frame, txt
-
-        llama_frame,  self.llama_log  = _make_log_pane(self._llama_label_var)
-        uvx_frame,    self.uvx_log    = _make_log_pane(self._uvx_label_var)
-        proxy_frame,  self.proxy_log  = _make_log_pane(self._proxy_label_var)
-        self.log_pane.add(llama_frame,  stretch="always", minsize=80)
-        self.log_pane.add(uvx_frame,    stretch="always", minsize=80)
-        self.log_pane.add(proxy_frame,  stretch="always", minsize=80)
+            tab = tk.Frame(tab_row, bg=BG)
+            tab.pack(side="left", padx=(0, 3))
+            btn = tk.Button(tab, text=name, font=FONT_BTN_SM, relief="flat", bd=0, padx=10, pady=4,
+                            cursor="hand2", command=lambda t=txt: self._show_log(t))
+            btn.pack(side="left")
+            dot = tk.Label(tab, text="●", font=FONT_SMALL, fg=DANGER, bg=BG)  # packed only after an error line
+            self._log_tabs[txt] = (frame, btn, dot, label_var)
+        self.llama_log, self.uvx_log, self.proxy_log = self._log_tabs
+        self._show_log(self.llama_log)
 
         # ── Test this model + Exit buttons. Test is enabled only while the health poll says online.
         self.exit_row = tk.Frame(self.master, bg=BG)
@@ -2067,6 +2093,21 @@ class CommandLauncherGUI:
         extra = H_NOTICE if self._notice.winfo_manager() else 0
         self.master.geometry(f"{W}x{H_CONFIG + extra}")
 
+    def _on_escape(self, event):
+        win = event.widget.winfo_toplevel() if hasattr(event.widget, "winfo_toplevel") else None
+        if win is None or win is self.master:
+            return
+        close = win.protocol("WM_DELETE_WINDOW")
+        if close:
+            win.tk.call(close)
+        else:
+            win.destroy()
+
+    def _on_return(self, event):
+        # Enter launches from the home view (not while running, not from a dialog).
+        if self.run_button.winfo_manager() and str(self.run_button["state"]) == "normal":
+            self.run_commands()
+
     def _set_theme(self, theme):
         # From Settings: applies at once, like the Web UI's own theme choice.
         self._theme = theme
@@ -2088,18 +2129,6 @@ class CommandLauncherGUI:
         self._open_browser = open_browser
         self.config["open_browser"] = open_browser
         save_config(self.config)
-
-    def _copy_api_url(self):
-        self.master.clipboard_clear()
-        self.master.clipboard_append(AGENT_API_URL)
-        self._api_label.config(text="copied")
-        self.master.after(1200, lambda: self._api_label.config(text=AGENT_API_URL))
-
-    def _copy_key(self, key, label):
-        self.master.clipboard_clear()
-        self.master.clipboard_append(key)
-        label.config(text="copied")
-        self.master.after(1200, lambda: label.config(text="click to copy"))
 
 
     # ── Two-state view switching ──────────────────────────────
@@ -2329,14 +2358,19 @@ class CommandLauncherGUI:
                 if level == "ok" and not browser_opened and self._open_browser:
                     browser_opened = True
                     on_ui(lambda: webbrowser.open("http://127.0.0.1:8080/"))
-                on_ui(lambda c=colors[level], t=text: self._health_label.config(fg=_palette[c], text=t))
+                on_ui(lambda c=colors[level], t=text: self._set_health(t, c))
                 on_ui(lambda ok=level == "ok": self._set_test_btn(ok))
                 time.sleep(3)
         threading.Thread(target=poll_loop, daemon=True).start()
 
     def _stop_health_poll(self):
         self._polling = False
-        self._health_label.config(text="● waiting", fg=TEXT_MUT)
+        self._set_health("waiting", "TEXT_MUT")
+
+    def _set_health(self, text, role):
+        # health_status's text starts with its own dot; the dot here is a separate label in the level's colour.
+        self._health_dot.config(fg=_palette[role])
+        self._health_label.config(text=text.removeprefix("● "))
 
 
     # ── Model test ────────────────────────────────────────────
@@ -2490,11 +2524,23 @@ class CommandLauncherGUI:
 
     # ── Log helpers ───────────────────────────────────────────
 
+    def _show_log(self, widget):
+        # Bring one log's tab to the front and clear its error dot.
+        self._shown_log = widget
+        for txt, (frame, btn, dot, label_var) in self._log_tabs.items():
+            style_toggle(btn, txt is widget)
+            if txt is widget:
+                frame.tkraise()
+                dot.pack_forget()
+                self._log_header.config(textvariable=label_var)
+
     def _append_log(self, widget, text):
         # Append one line to a log pane. Safe to call from any thread via .after().
         widget.config(state=tk.NORMAL)
         widget.insert("end", text + "\n")
         trim_log(widget, LOG_MAX_LINES)
+        if widget is not self._shown_log and log_line_is_error(text):
+            self._log_tabs[widget][2].pack(side="left", padx=(0, 4))
         if self._autoscroll_var.get():
             widget.see("end")
         widget.config(state=tk.DISABLED)
@@ -2558,11 +2604,13 @@ class CommandLauncherGUI:
                 "UVX command is empty. Open Settings to fill it in.")
             return
 
-        # Clear all log panes before entering the running state
+        # Clear all logs before entering the running state, and start on llama-server's
         for w in (self.llama_log, self.uvx_log, self.proxy_log):
             w.config(state=tk.NORMAL)
             w.delete("1.0", "end")
             w.config(state=tk.DISABLED)
+            self._log_tabs[w][2].pack_forget()
+        self._show_log(self.llama_log)
         self._enter_running_state()
 
         model_name = self.model_var.get()
