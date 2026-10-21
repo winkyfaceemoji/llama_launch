@@ -8,6 +8,7 @@ Reasoning questions go straight to llama-server (8081): the user's system prompt
 with no tools offered a model then ends with an empty answer.
 No sampling settings are sent (the model's defaults); answers are capped at MAX_TOKENS.
 """
+import hashlib
 import json
 import os
 import re
@@ -18,14 +19,16 @@ import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-from agents import jobs as agent_jobs, paths as agent_paths, runner  # noqa: E402
+from agents import jobs as agent_jobs, paths as agent_paths, prompts as agent_prompts, runner  # noqa: E402
 import report  # noqa: E402  (eval/ is on the path: the script's own folder, or the tests')
 
 LLAMA = "http://127.0.0.1:8081"
 PROXY = "http://127.0.0.1:8080"
 LOCK = os.path.join(ROOT, "model_test.lock")
+CONFIG = os.path.join(ROOT, "config.json")
 MAX_TOKENS = 8192  # a runaway answer costs a few minutes, not the 15-minute timeout
-# Bump whenever cases, prompts, questions or scoring change: the report only averages and compares runs of the
+# Bump whenever cases, the test's prompts, questions or scoring change (not the user's chat or job prompts: each
+# result records those as prompt_version): the report only averages and compares runs of the
 # same version. 2 (2026-10-17): links in backticks cite, LaTeX and one-answer sentences, job look-ups count.
 TEST_VERSION = 2
 QUESTIONS = os.path.join(ROOT, "eval", "questions.json")
@@ -241,6 +244,21 @@ def context():
         return n_ctx(json.loads(r.read().decode("utf-8")))
 
 
+# ── Prompts: what the run measured ──────────────────────────────────────────
+
+def prompts_used(config_path=CONFIG):
+    """The five prompts the running servers use, read the way they read them at launch (the launcher only lets
+    them change while the servers are stopped), and a short version the report groups runs by."""
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            chat = json.load(f).get("system_prompt", "")
+    except (OSError, ValueError, AttributeError):
+        chat = ""  # the proxy sends no system prompt then
+    prompts = dict(agent_prompts.load(config_path)[0], chat=chat)
+    digest = hashlib.sha256(json.dumps(prompts, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+    return prompts, digest[:8]
+
+
 # ── Main ────────────────────────────────────────────────────────────────────
 
 def _read_ids():
@@ -274,6 +292,7 @@ def main():
         ids.append(jid)
         _write_ids(ids)
 
+    prompts, prompt_version = prompts_used()  # before the run: the servers read them at launch
     results = stress.run(on_job=on_job, chat_headers=test_headers())
     areas = score_cases(results)
     unsafe, reasons = safety(results)
@@ -295,7 +314,7 @@ def main():
         print(f"[question] Q{i} {item['kind']} ok={ok}", flush=True)
 
     out = {"kind": "model_test", "test_version": TEST_VERSION, "started": results["started"], "finished": time.strftime("%Y-%m-%d %H:%M:%S"),
-           "model": results["model"], "build": results["build"],
+           "model": results["model"], "build": results["build"], "prompt_version": prompt_version, "prompts": prompts,
            "areas": {a: {"percent": percent(items), "cases": items} for a, items in areas.items()},
            "agents_score": area_score(areas),
            "kinds": {k: {"percent": percent(items), "questions": items} for k, items in kinds.items()},

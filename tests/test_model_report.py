@@ -9,10 +9,13 @@ sys.path.insert(0, os.path.join(ROOT, "eval"))
 import report  # noqa: E402
 
 
+PROMPTS = {"chat": "c", "research": "r", "plan": "p", "organize": "o", "review": "v"}
+
+
 def run(model, agents, unsafe=False, wrong=None, reasons=None):
     # Shaped like what model_test.main() writes.
     return {"kind": "model_test", "started": "2026-10-15 20:00:00", "finished": "2026-10-15 21:00:00",
-            "model": model, "build": "b9776",
+            "model": model, "build": "b9776", "prompt_version": "aaaa1111", "prompts": dict(PROMPTS),
             "areas": {"organise": {"percent": agents, "cases": [["O1", True, "score 1.0"], ["O2", False, "score 0.5"]]}},
             "agents_score": agents,
             "kinds": {"maths": {"percent": 50.0, "questions": [["Q1", True, "29"], ["Q2", False, "30"]]}},
@@ -73,6 +76,27 @@ class RenderTests(unittest.TestCase):
                  {"kind": "dates", "q": "Which date?", "expected": {"exact": "x"}, "given": "y", "cut_off": False}]
         page = report.render([run("m.gguf", 50.0, wrong=wrong)])
         self.assertEqual(page.count("no answer"), 1)
+
+
+class PromptVersionTests(unittest.TestCase):
+    def test_only_runs_of_the_newest_prompt_version_are_ranked(self):
+        old = dict(run("q.gguf", 40.0), test_version=2, prompt_version="aaaa1111", started="2026-10-20 10:00:00")
+        new = dict(run("q.gguf", 90.0), test_version=2, prompt_version="bbbb2222", started="2026-10-21 10:00:00",
+                   prompts=dict(PROMPTS, chat="edited", research="edited"))
+        page = report.render([old, new])
+        self.assertNotIn("65.0", page)  # never averaged across prompt versions
+        self.assertIn("Other prompt versions", page)
+        self.assertLess(page.index("90.0"), page.index("Other prompt versions"))
+        self.assertGreater(page.index("40.0"), page.index("Other prompt versions"))
+        self.assertIn("aaaa1111", page)
+        self.assertIn("Chat, Research", page[page.index("Other prompt versions"):])  # what differs from now
+
+    def test_runs_without_a_prompt_version_are_left_out(self):
+        unrecorded = dict(run("old.gguf", 77.0), test_version=2)
+        del unrecorded["prompt_version"], unrecorded["prompts"]
+        page = report.render([dict(run("q.gguf", 90.0), test_version=2), unrecorded])
+        self.assertNotIn("old.gguf", page)
+        self.assertNotIn("77.0", page)
 
 
 class BuildTests(unittest.TestCase):

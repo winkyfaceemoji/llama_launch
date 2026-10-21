@@ -145,6 +145,7 @@ This needs llama.cpp installed through WinGet (package `ggml.llamacpp`). The Web
 - **15 to 60 minutes of GPU,** depending on the model (gpt-oss-20b took 16). Web UI chat is paused while it runs: chat requests get a "model test is running" error until the test finishes or you stop it. The test's jobs never show in the Jobs panel.
 - **The dialog** streams the test's log. When the test finishes, the report opens in the browser.
 - **The report** is `eval/results/report.html`: one row per complete test, sorted by agent score, each expanding to per-area results and the model's wrong answers. It and the result files stay on this PC.
+- **Prompts:** a test measures the model with your prompts (Settings → Prompts), and each result records them with a short prompt version. The top rows rank only runs with the same prompts as the newest run; runs with other prompts are listed below, saying which prompts differed. After you change a prompt, rerun the models you want to compare. Results from before prompts were recorded aren't shown.
 - **Stop** (or closing the dialog) asks first, then ends the test, cancels its jobs and deletes its temporary folders. Nothing is added to the report. **Exit Processes** during a test stops it the same way, without asking.
 
 ---

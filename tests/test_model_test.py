@@ -416,3 +416,28 @@ class QuestionsFileTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PromptsUsedTests(unittest.TestCase):
+    def config(self, d, data):
+        path = os.path.join(d, "config.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        return path
+
+    def test_records_all_five_prompts_the_servers_use(self):
+        with tempfile.TemporaryDirectory() as d:
+            prompts, version = model_test.prompts_used(self.config(d, {
+                "system_prompt": "Cite fetched pages.", "agent_prompts": {"plan": "Plan briefly."}}))
+        self.assertEqual(set(prompts), {"chat", "research", "plan", "organize", "review"})
+        self.assertEqual(prompts["chat"], "Cite fetched pages.")
+        self.assertEqual(prompts["plan"], "Plan briefly.")
+        self.assertRegex(version, r"^[0-9a-f]{8}$")
+
+    def test_the_version_changes_only_when_a_prompt_does(self):
+        with tempfile.TemporaryDirectory() as d:
+            _, a = model_test.prompts_used(self.config(d, {"system_prompt": "One.", "llama_dir": "C:\a"}))
+            _, b = model_test.prompts_used(self.config(d, {"system_prompt": "One.", "llama_dir": "C:\b"}))
+            _, c = model_test.prompts_used(self.config(d, {"system_prompt": "Two.", "llama_dir": "C:\b"}))
+        self.assertEqual(a, b)
+        self.assertNotEqual(b, c)
