@@ -119,18 +119,47 @@ def _by_agents(rows):
     return sorted(rows, key=lambda kv: _mean([r.get("agents_score") for r in kv[1]]) or 0, reverse=True)
 
 
-def render(runs):
-    """The report page for these result dicts: one row per model for the current test version (repeat runs
-    averaged, best agents score first), then runs from older test versions, which aren't comparable."""
-    current = max((r.get("test_version", 1) for r in runs), default=1)
+PROMPT_NAMES = (("chat", "Chat"), ("research", "Research"), ("plan", "Plan"), ("organize", "Organize"),
+                ("review", "Review"))
+
+
+def _by_model(runs):
     models = {}
     for r in runs:
-        if r.get("test_version", 1) == current:
-            models.setdefault(r.get("model"), []).append(r)
+        models.setdefault(r.get("model"), []).append(r)
+    return "".join(_model_row(m, rs) for m, rs in _by_agents(models.items()))
+
+
+def _differs(prompts, now):
+    names = [name for key, name in PROMPT_NAMES if (prompts or {}).get(key) != (now or {}).get(key)]
+    return ", ".join(names) or "nothing"
+
+
+def render(runs):
+    """The report page for these result dicts: one row per model for the current test version and the newest
+    run's prompt version (repeat runs averaged, best agents score first), then the same test version with other
+    prompts, then older test versions. Neither of those is comparable with the top rows. Runs that didn't record
+    their prompts (before 2026-10-21) are left out."""
+    runs = [r for r in runs if r.get("prompt_version")]
+    current = max((r.get("test_version", 1) for r in runs), default=1)
+    now = [r for r in runs if r.get("test_version", 1) == current]
+    latest = max(now, key=lambda r: r.get("started") or "", default={})
+    ranked = [r for r in now if r.get("prompt_version") == latest.get("prompt_version")]
+    others = {}
+    for r in now:
+        if r.get("prompt_version") != latest.get("prompt_version"):
+            others.setdefault(r["prompt_version"], []).append(r)
     older = sorted((r for r in runs if r.get("test_version", 1) != current),
                    key=lambda r: r.get("agents_score") or 0, reverse=True)
     head = "".join(f"<span>{c}</span>" for c in COLUMNS)
-    rows = "".join(_model_row(m, rs) for m, rs in _by_agents(models.items())) or "<p>No complete model tests yet.</p>"
+    rows = _by_model(ranked) or "<p>No complete model tests yet.</p>"
+    if others:
+        rows += ("<h3>Other prompt versions</h3><p class=\"note\">Run with different prompts, so not comparable "
+                 "with the rows above. Rerun a model to compare it with the current prompts.</p>")
+        for version, rs in sorted(others.items(), key=lambda kv: max(r.get("started") or "" for r in kv[1]),
+                                  reverse=True):
+            rows += (f"<p class=\"note\">Prompts {_text(version)}, differing from the current ones in: "
+                     f"{_text(_differs(rs[0].get('prompts'), latest.get('prompts')))}</p>" + _by_model(rs))
     if older:
         rows += ("<h3>Older test versions</h3><p class=\"note\">Scored by an earlier version of the test, so not "
                  "comparable with the rows above. Rerun a model to compare it.</p>" + "".join(_row(r) for r in older))

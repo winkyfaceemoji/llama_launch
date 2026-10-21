@@ -45,3 +45,4 @@ Tkinter launcher (`launcher.pyw`) that starts llama-server, the system prompt pr
 - [0016](docs/adr/0016-close-stops-servers.md) Closing the window stops the servers and exits; no hide-to-tray
 - [0017](docs/adr/0017-single-launcher-instance.md) One launcher per Windows session (named mutex); a second start shows the first's window
 - [0018](docs/adr/0018-no-plan-waiting-toast.md) No plan toast (supersedes 0015): pystray balloons showed unreliably and ADR 0016 removed the tray case; the Jobs button count is the only cue
+- [0019](docs/adr/0019-model-test-uses-your-prompts.md) Model tests measure the user's own prompts; results record a prompt version and the report ranks only the newest one
