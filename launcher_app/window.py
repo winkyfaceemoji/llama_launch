@@ -16,7 +16,7 @@ import urllib.error
 import urllib.request
 import webbrowser
 from .paths import AGENTS_SERVER, API_KEY_FILE, CONFIG_FILE, ICON_FILE, MODEL_TEST_LOCK, ROOT
-from .theme import BG, CURRENT_THEME, DANGER, H_RUNNING, H_SETUP, SUCCESS, TEXT_MUT, W, apply_theme, apply_ttk_style, resolve_theme, set_dark_title_bar, set_palette, theme_setting, windows_light
+from .theme import BG, CURRENT_THEME, DANGER, H_RUNNING, H_SETUP, W, apply_theme, apply_ttk_style, resolve_theme, set_dark_title_bar, set_palette, theme_setting, windows_light
 from .selection import PresetError, Selection
 from .config import ConfigStore, UVX_COMMAND, backup_config, load_api_key, migrate_uvx_command, remove_stale_agents_entry, resolve_uvx_command, set_prompts, shipped_prompts
 from .processes import clear_test_lock, health_status, is_own_process, listening_pids, model_test_command, write_test_lock
@@ -34,7 +34,7 @@ class CommandLauncherGUI:
 
         # config.json, through the store: it checks every value and is the only writer (ConfigError if bad).
         self.store     = store or ConfigStore.load()
-        self.config    = self.store.data  # read-only here: every change goes through _save
+        self.config    = self.store.data  # the store's dict: helpers edit it in place, then _save() writes
         self.llama_dir = self.config.get("llama_dir", "")
 
         # The palette must be set before any widget is built; widgets read it when created.
@@ -121,6 +121,7 @@ class CommandLauncherGUI:
         self._launch_time  = None
         self._test_dialog  = None
         self._preset_popup = None   # the open "⋯" menu, if any
+        self.autoscroll_var = tk.BooleanVar(value=True)  # kept here, so it lasts across launches
 
         # Enter launches from the home view; Ctrl+, opens Settings. Bound on the root's own tag, so they never
         # fire from a dialog (each dialog is its own toplevel with its own tags).
@@ -193,10 +194,9 @@ class CommandLauncherGUI:
             self.master.after(0, self._show_update_notice, *found)
 
     def _show_update_notice(self, installed, newest):
-        # The notice lives on the home view. Windows locks a running llama-server.exe, so while the servers
-        # run it waits for the home view that Exit Processes builds.
+        # Shown on home and running (with Update disabled there: Windows locks a running llama-server.exe).
         self._update_builds = (installed, newest)
-        if isinstance(self.view, HomeView):
+        if isinstance(self.view, (HomeView, RunningView)):
             self.view.show_update(self._update_builds)
             self._resize_config()
 
@@ -301,6 +301,7 @@ class CommandLauncherGUI:
         # A fresh running view. The process code writes to its logs and labels by these names (ADR 0021).
         self.running = True
         rv = self._switch(RunningView)
+        rv.show_update(self._update_builds)
         self.llama_log, self.uvx_log, self.proxy_log = rv.llama_log, rv.uvx_log, rv.proxy_log
         self._llama_label_var, self._uvx_label_var = rv.llama_label_var, rv.uvx_label_var
         self._proxy_label_var, self._elapsed_var, self.test_btn = rv.proxy_label_var, rv.elapsed_var, rv.test_btn

@@ -299,7 +299,7 @@ All settings live in a single `config.json` next to the launcher:
 | `previous_build` | The llama.cpp build before the last update (e.g. `b9776`), for roll back. Cleared after a roll back |
 | `theme` | `system`, `light` or `dark` (Settings → General) |
 
-If you edit `config.json` by hand and a value is wrong (say `open_browser` is `"yes"` instead of `true`, or the file isn't valid JSON), the launcher won't start: it names the key and leaves the file as it is, so nothing is overwritten. Fix the value, or delete the key to get the default.
+If you edit `config.json` by hand and a value is wrong (say `open_browser` is `"yes"` instead of `true`, or the file isn't valid JSON or can't be read), the launcher won't start: it names the key and leaves the file as it is, so nothing is overwritten. Fix the value, or delete the key to get the default.
 
 The API key lives in its own file, `api_key.txt`, not in `config.json`.
 

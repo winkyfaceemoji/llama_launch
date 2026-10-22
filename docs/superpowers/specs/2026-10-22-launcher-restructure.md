@@ -25,7 +25,7 @@ The same launcher, **with no visible change**, but with its code in modules that
   - `window`: the app.
 - **The config store checks values and refuses to start on a bad one.**
   - `ConfigStore.load()` checks every key it knows: `llama_dir`, `presets` (through `load_presets`), `open_browser`, `theme`, `uvx_command`, `last_model`, `previous_build`, `system_prompt`, `agent_prompts`. A bad value raises `ConfigError`, naming the key and the problem. The entry point shows it and exits, and nothing is rewritten.
-  - Keys it doesn't own (`mcpServers` and any others) pass through every save untouched.
+  - Keys it doesn't own (`mcpServers` and any others) pass through every save untouched by the store. `remove_stale_agents_entry` still drops the old `agents` entry from `mcpServers` at startup, as before.
   - Changes go through `update(**changes)`, which checks each value before writing.
   - A fallback with a warning was rejected: the next save of anything would have written over the real value, losing it.
 - **Selection is a stateful module that saves through callbacks** (design "B3").

@@ -46,32 +46,14 @@ def is_own_process(image_name, command_line, app_dir):
 # named event lets a second one ask it to show its window. A private kernel32 so these
 # argtypes don't touch ctypes.windll.
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-
-
 _kernel32.CreateMutexW.restype = wintypes.HANDLE
-
-
 _kernel32.CreateMutexW.argtypes = (ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR)
-
-
 _kernel32.CreateEventW.restype = wintypes.HANDLE
-
-
 _kernel32.CreateEventW.argtypes = (ctypes.c_void_p, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR)
-
-
 _kernel32.SetEvent.argtypes = (wintypes.HANDLE,)
-
-
 _kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
-
-
 _kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
-
-
 _kernel32.WaitForSingleObject.restype = wintypes.DWORD
-
-
 INSTANCE_NAME = "LlamaLauncher"
 
 

@@ -8,7 +8,7 @@ Status: Accepted
 
 ## Decision
 
-The code lives in a package, `launcher_app/`, and `launcher.pyw` keeps only the entry point: bootstrap, single instance, AppUserModelID, the window. The modules are `paths`, `theme`, `config`, `selection`, `processes`, `updates`, `widgets`, `dialogs`, `views` and `window`.
+The code lives in a package, `launcher_app/`, and `launcher.pyw` keeps only the entry point: single instance, AppUserModelID, loading the config (a bad value refuses to start), the window. Installing pystray and Pillow (`_bootstrap`) runs when `widgets` is imported. The modules are `paths`, `theme`, `config`, `selection`, `processes`, `updates`, `widgets`, `dialogs`, `views` and `window`.
 
 Two invariants keep this working:
 - **Paths come from the repo root** (`paths.ROOT`), never from a module's own folder. `config.json`, the keys, `agents/` and `proxy.py` stay where they were, and `is_own_process` still recognises our processes by that folder.

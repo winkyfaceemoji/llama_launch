@@ -72,19 +72,38 @@ class SetupView(tk.Frame):
         self._app.finish_setup(path)
 
 
-class HomeView(tk.Frame):
+class _NoticeView(tk.Frame):
+    # The llama.cpp update notice under the title, shown on home and running. Windows locks a running
+    # llama-server.exe, so the running view shows it with Update disabled.
+    def _build_notice(self, app, can_update):
+        self._notice, notice_card = card(self)
+        self._notice_label = tk.Label(notice_card, font=FONT_SMALL, fg=TEXT_PRI, bg=BG_PANEL,
+                                      wraplength=320, justify="left")
+        self._notice_label.pack(side="left", padx=12, pady=8)
+        update_btn = small_btn(notice_card, "Update", app.start_update, color=ACCENT, fg=BG)
+        update_btn.pack(side="right", padx=12, pady=8)
+        if not can_update:
+            update_btn.config(state=tk.DISABLED)
+
+    def show_update(self, builds):
+        # builds: (installed, newest), or None to hide the notice.
+        if builds:
+            installed, newest = builds
+            self._notice_label.config(text=f"llama.cpp b{newest} is out (you have b{installed}). "
+                                           "Updating accepts the package's terms.")
+            self._notice.grid(row=1, column=0, padx=24, pady=(16, 0), sticky="ew")
+        else:
+            self._notice.grid_remove()
+
+
+class HomeView(_NoticeView):
     # Title, the llama.cpp update notice (when a newer build exists), Model and Preset, Launch.
     def __init__(self, master, app):
         super().__init__(master, bg=BG)
         self._app = app
         self.grid_columnconfigure(0, weight=1)
         _title_row(self, app)
-
-        self._notice, notice_card = card(self)
-        self._notice_label = tk.Label(notice_card, font=FONT_SMALL, fg=TEXT_PRI, bg=BG_PANEL,
-                                      wraplength=320, justify="left")
-        self._notice_label.pack(side="left", padx=12, pady=8)
-        small_btn(notice_card, "Update", app.start_update, color=ACCENT, fg=BG).pack(side="right", padx=12, pady=8)
+        self._build_notice(app, can_update=True)
 
         model_outer, model_card = card(self)
         model_outer.grid(row=2, column=0, padx=24, pady=(16, 8), sticky="ew")
@@ -125,25 +144,17 @@ class HomeView(tk.Frame):
                 dropdown.menu.add_command(label=item, command=lambda i=item, pick=pick: pick(i))
             var.set(shown)
 
-    def show_update(self, builds):
-        # builds: (installed, newest), or None to hide the notice.
-        if builds:
-            installed, newest = builds
-            self._notice_label.config(text=f"llama.cpp b{newest} is out (you have b{installed}). "
-                                           "Updating accepts the package's terms.")
-            self._notice.grid(row=1, column=0, padx=24, pady=(16, 0), sticky="ew")
-        else:
-            self._notice.grid_remove()
 
-
-class RunningView(tk.Frame):
+class RunningView(_NoticeView):
     # Built fresh at every launch, so nothing from the last run carries over: the status row, the closed
     # Connection row, empty log tabs without dots, Test disabled until the health poll says online.
+    # Auto-scroll is the window's, so unticking it lasts across launches.
     def __init__(self, master, app):
         super().__init__(master, bg=BG)
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(7, weight=1)
         _title_row(self, app)
+        self._build_notice(app, can_update=False)
 
         status_outer, status = card(self)
         status_outer.grid(row=5, column=0, sticky="ew", padx=24, pady=(16, 0))
@@ -154,7 +165,7 @@ class RunningView(tk.Frame):
         tk.Label(status, text="uptime", font=FONT_SMALL, fg=TEXT_MUT, bg=BG_PANEL).pack(side="left", padx=(20, 6), pady=8)
         self.elapsed_var = tk.StringVar(value="00:00:00")
         tk.Label(status, textvariable=self.elapsed_var, font=FONT_MONO, fg=TEXT_SEC, bg=BG_PANEL).pack(side="left", pady=8)
-        self.autoscroll_var = tk.BooleanVar(value=True)
+        self.autoscroll_var = app.autoscroll_var
         tk.Checkbutton(status, text="Auto-scroll", variable=self.autoscroll_var,
                        font=FONT_SMALL, fg=TEXT_MUT, bg=BG_PANEL,
                        activebackground=BG_PANEL, activeforeground=TEXT_SEC,

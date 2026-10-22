@@ -30,15 +30,14 @@ class ConfigStoreTests(unittest.TestCase):
     def test_first_run_writes_the_defaults(self):
         store = ConfigStore.load(self.path)
         self.assertEqual(self.read(), _DEFAULT_CONFIG)
-        self.assertEqual(store.get("llama_dir"), "")
+        self.assertEqual(store.data["llama_dir"], "")
 
     def test_a_typical_config_loads(self):
         self.write({"mcpServers": {"fetch": {}}, "system_prompt": "x", "llama_dir": "C:/m", "last_model": "m",
                     "presets": {}, "uvx_command": "uv run", "previous_build": "b11706", "theme": "dark",
                     "open_browser": False, "agent_prompts": {"plan": "p"}})
         store = ConfigStore.load(self.path)
-        self.assertEqual(store.get("previous_build"), "b11706")
-        self.assertEqual(store.get("missing", "fallback"), "fallback")
+        self.assertEqual(store.data["previous_build"], "b11706")
 
     def test_invalid_json_refuses_and_keeps_the_file(self):
         with open(self.path, "w", encoding="utf-8") as f:
@@ -61,6 +60,26 @@ class ConfigStoreTests(unittest.TestCase):
                 self.assertIn(key, str(e.exception))
                 self.assertEqual(self.read(), {key: value})  # nothing rewritten
 
+    def test_a_legacy_preset_must_be_a_command(self):
+        # A preset that isn't an object is an old-style command string; anything else would crash at launch.
+        self.write({"presets": {"Old": 5}})
+        with self.assertRaises(ConfigError) as e:
+            ConfigStore.load(self.path)
+        self.assertIn("Old", str(e.exception))
+
+    def test_an_unreadable_file_refuses(self):
+        with open(self.path, "wb") as f:
+            f.write(b'{"llama_dir": "C:/\xff"}')
+        with self.assertRaises(ConfigError) as e:
+            ConfigStore.load(self.path)
+        self.assertIn("UTF-8", str(e.exception))
+        os.remove(self.path)
+        os.mkdir(self.path)  # opening a folder raises an OSError, like a locked file
+        with self.assertRaises(ConfigError) as e:
+            ConfigStore.load(self.path)
+        self.assertIn("can't be read", str(e.exception))
+        os.rmdir(self.path)
+
     def test_presets_must_be_an_object(self):
         self.write({"presets": ["Auto"]})
         with self.assertRaises(ConfigError):
@@ -80,7 +99,7 @@ class ConfigStoreTests(unittest.TestCase):
         store = ConfigStore.load(self.path)
         store.update(previous_build=None)
         self.assertNotIn("previous_build", self.read())
-        self.assertIsNone(store.get("previous_build"))
+        self.assertNotIn("previous_build", store.data)
 
     def test_a_bad_update_is_refused_before_anything_is_written(self):
         self.write({"llama_dir": "C:/m"})
@@ -88,7 +107,7 @@ class ConfigStoreTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             store.update(last_model="m", theme="purple")
         self.assertEqual(self.read(), {"llama_dir": "C:/m"})
-        self.assertIsNone(store.get("last_model"))
+        self.assertNotIn("last_model", store.data)
 
     def test_presets_keep_their_saved_shape(self):
         store = ConfigStore.load(self.path)

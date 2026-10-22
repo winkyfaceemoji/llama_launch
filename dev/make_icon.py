@@ -3,7 +3,7 @@
     python dev/make_icon.py
 
 The window, the taskbar and the tray all load icon.ico. Colours come from the dark
-palette in launcher.pyw, whatever the theme: a dark square reads on a light and a dark
+palette in launcher_app/theme.py, whatever the theme: a dark square reads on a light and a dark
 taskbar. Each size is drawn large and scaled down, so it can be regenerated at will.
 """
 import os

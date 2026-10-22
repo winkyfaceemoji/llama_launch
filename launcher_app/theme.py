@@ -4,7 +4,6 @@ import ctypes
 import tkinter as tk
 import winreg
 
-
 # Neutral greys from the llama Web UI, light and dark. set_palette() rebinds the
 # module constants (BG, TEXT_PRI, ...) to one of them. Every colour must be unique
 # within its palette: apply_theme() finds a widget's role by its colour, which is why
@@ -44,11 +43,8 @@ PALETTES = {
     },
 }
 
-
 THEMES = ("system", "light", "dark")   # the Settings choice; resolve_theme() turns it into a palette name
-
-
-_palette = {}
+_palette = {}                          # the current palette's colours, by role
 _followers = []                        # module namespaces whose colour names set_palette rebinds too
 
 
@@ -57,7 +53,7 @@ def follow(namespace):
     # widgets built later read the current palette (ADR 0020). Call as theme.follow(globals()).
     _followers.append(namespace)
     namespace.update(_palette)
-    namespace["CURRENT_THEME"] = CURRENT_THEME                          # the current palette's colours, by role
+    namespace["CURRENT_THEME"] = CURRENT_THEME
 
 
 CURRENT_THEME = None                   # "light" or "dark"
@@ -77,48 +73,22 @@ def set_palette(name):
 
 set_palette("dark")
 
-
 # Fonts
 FONT_TITLE  = ("Segoe UI", 13, "bold")
-
-
 FONT_SMALL  = ("Segoe UI", 10)
-
-
 FONT_BTN    = ("Segoe UI", 10, "bold")
-
-
 FONT_BTN_SM = ("Segoe UI", 10)
-
-
 FONT_ICON   = ("Segoe UI Symbol", 13)   # the preset "⋯" button
-
-
 FONT_MONO   = ("Cascadia Code", 10)
-
-
 FONT_LOG    = ("Cascadia Code", 10)
-
 
 # Window dimensions — fixed size, no manual resizing
 W           = 480
-
-
 H_SETUP     = 280    # height of the first-run setup screen
-
-
 H_CONFIG    = 280    # height of the main config view
-
-
 H_NOTICE    = 76     # added while the llama.cpp update notice shows
-
-
 W_SETTINGS      = 460   # settings dialog width (its height follows the page shown)
-
-
 H_RUNNING   = 750   # height of the running/log view
-
-
 LOG_MAX_LINES = 5000  # lines each log pane keeps; older ones are dropped so a long session stays responsive
 
 

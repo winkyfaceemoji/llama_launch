@@ -59,6 +59,10 @@ def _problem(key, value):
     if key == "presets":
         if not isinstance(value, dict):
             return "must be an object of presets"
+        # load_presets takes any non-object as an old-style command string; only a string is one.
+        for name, preset in value.items():
+            if not isinstance(preset, (str, dict)):
+                return f"has preset '{name}', which must be a command or an object"
         try:
             load_presets({"presets": value})
         except ValueError as e:
@@ -90,6 +94,10 @@ class ConfigStore:
                 data = json.load(f)
         except json.JSONDecodeError as e:
             raise ConfigError(f"config.json isn't valid JSON: {e}") from None
+        except UnicodeDecodeError:
+            raise ConfigError("config.json isn't UTF-8 text") from None
+        except OSError as e:
+            raise ConfigError(f"config.json can't be read: {e.strerror or e}") from None
         if not isinstance(data, dict):
             raise ConfigError("config.json must hold an object")
         cls._check(data)
@@ -101,9 +109,6 @@ class ConfigStore:
             problem = _problem(key, value)
             if problem:
                 raise ConfigError(f'config.json: "{key}" {problem}.')
-
-    def get(self, key, default=None):
-        return self.data.get(key, default)
 
     def update(self, **changes):
         # Set keys (None removes one) and write. A bad value raises ConfigError before anything changes.
