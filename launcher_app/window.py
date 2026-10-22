@@ -19,7 +19,7 @@ import urllib.request
 import webbrowser
 from .paths import AGENTS_SERVER, AGENT_API_URL, API_KEY_FILE, CONFIG_FILE, ICON_FILE, MODEL_TEST_LOCK, ROOT
 from .theme import ACCENT, BG, BG_INPUT, BG_PANEL, BORDER, CURRENT_THEME, DANGER, DANGER_HOVER, FONT_BTN, FONT_BTN_SM, FONT_ICON, FONT_LOG, FONT_MONO, FONT_SMALL, FONT_TITLE, HOVER, H_CONFIG, H_NOTICE, H_RUNNING, H_SETUP, LOG_MAX_LINES, SUCCESS, SUCCESS_HOVER, TEXT_MUT, TEXT_PRI, TEXT_SEC, W, _palette, apply_theme, apply_ttk_style, resolve_theme, set_dark_title_bar, set_palette, theme_setting, windows_light
-from .selection import AUTO_PRESET, build_launch_command, detect_models, load_presets, preset_matches_model
+from .selection import PresetError, Selection
 from .config import ConfigStore, UVX_COMMAND, backup_config, load_api_key, migrate_uvx_command, remove_stale_agents_entry, resolve_uvx_command, set_prompts, shipped_prompts
 from .processes import clear_test_lock, health_status, is_own_process, listening_pids, model_test_command, write_test_lock
 from .updates import UpdateRunner
@@ -153,16 +153,12 @@ class CommandLauncherGUI:
         self.master.geometry(f"{W}x{H_CONFIG}")
         self.master.grid_columnconfigure(0, weight=1)
 
-        # Application state
-        try:
-            self.presets = load_presets(self.config)
-        except ValueError as e:
-            messagebox.showerror("Config Error",
-                f"One or more presets in config.json are invalid:\n{e}\n\n"
-                "Proceeding with an empty preset list.")
-            self.presets = {}
+        # Application state. The store already checked the presets.
+        self.selection = Selection(self.config.get("presets", {}), self.config.get("last_model", ""),
+                                   self.llama_dir, API_KEY_FILE,
+                                   remember_model=lambda name: self._save(last_model=name),
+                                   save_presets=lambda presets: self._save(presets=presets))
         self._open_browser = self.config.get("open_browser", True)
-        self._models       = {}
         if migrate_uvx_command(self.config):
             self._save()
         self.uvx_command   = self.config.get("uvx_command", UVX_COMMAND)
@@ -176,7 +172,6 @@ class CommandLauncherGUI:
         except OSError as e:
             # Agents are optional: an unusable sandbox must never stop the launcher.
             self._agents_error = str(e)
-        self.llama_cmd     = ""
         self._llama_proc   = None
         self._uvx_proc     = None
         self._proxy_proc   = None
@@ -214,7 +209,6 @@ class CommandLauncherGUI:
         self.model_menu.grid(row=0, column=1, sticky="ew", pady=10)
         small_btn(model_card, "Refresh", self._refresh_models).grid(row=0, column=2, padx=(6, 12), pady=10)
 
-        self._refresh_models(init=True)
 
         # ── Row 3: Preset selector
         self.preset_outer, preset_card = card(self.master)
@@ -361,10 +355,8 @@ class CommandLauncherGUI:
 
         # When the model changes, re-filter the preset list.
         # When the preset changes, rebuild the launch command.
-        self.model_var.trace_add("write",  lambda *_: self._on_model_changed())
-        self.preset_var.trace_add("write", lambda *_: self._load_preset())
 
-        self._refresh_preset_menu(reset=True)
+        self._show_selection(self.selection.view)
 
         # Set up system tray icon if available
         self._setup_tray()
@@ -379,8 +371,8 @@ class CommandLauncherGUI:
             changed = new_path != self.llama_dir
             self.llama_dir = new_path
             self._save(llama_dir=new_path)
-            if changed:
-                self._refresh_models()  # the model list and launch command must come from the new folder
+            if changed:  # the model list and launch command must come from the new folder
+                self._show_selection(self.selection.set_folder(new_path))
 
         def on_save_uvx(cmd):
             self.uvx_command = cmd
@@ -440,7 +432,7 @@ class CommandLauncherGUI:
     def _start_update(self):
         installed, newest = self._update_builds
         self._save(previous_build=f"b{installed}")
-        model_path, mmproj = self._models.get(self.model_var.get(), (None, None))
+        model_path, mmproj = self.selection.view.model_files
         runners = []
 
         def job(report):
@@ -459,7 +451,7 @@ class CommandLauncherGUI:
             self._save(previous_build=None)
 
     def _start_rollback(self, build):
-        model_path, mmproj = self._models.get(self.model_var.get(), (None, None))
+        model_path, mmproj = self.selection.view.model_files
         UpdateDialog(self.master, f"Roll back to b{build}",
                      lambda report: UpdateRunner(report).rollback_and_check(
                          build, model_path, mmproj, API_KEY_FILE),
@@ -577,73 +569,24 @@ class CommandLauncherGUI:
 
     # ── Model & preset list management ───────────────────────
 
-    def _refresh_models(self, init=False):
-        self._models = detect_models(self.llama_dir)
-        menu = self.model_menu.menu
-        menu.delete(0, "end")
-        if self._models:
-            display = sorted(self._models, key=str.lower)
-            for d in display:
-                menu.add_command(label=d, command=lambda v=d: self.model_var.set(v))
-            current = self.model_var.get()
-            if init or not current or current not in display:
-                last = self.config.get("last_model")
-                if init and last and last in display:
-                    self.model_var.set(last)
-                else:
-                    self.model_var.set(display[0])
-            else:
-                self._load_preset()  # same model, but its path or mmproj may have changed
-        else:
-            menu.add_command(label="(no .gguf models found)",
-                             command=lambda: self.model_var.set("(no .gguf models found)"))
-            self.model_var.set("(no .gguf models found)")
+    def _show_selection(self, view):
+        # Fill both dropdowns from the selection's view; picking an item goes back through the selection.
+        for dropdown, var, items, shown, pick in (
+                (self.model_menu, self.model_var, view.models, view.model, self._pick_model),
+                (self.preset_menu, self.preset_var, view.presets, view.preset, self._pick_preset)):
+            dropdown.menu.delete(0, "end")
+            for item in items:
+                dropdown.menu.add_command(label=item, command=lambda i=item, pick=pick: pick(i))
+            var.set(shown)
 
-    def _on_model_changed(self):
-        m = self.model_var.get()
-        if m and not m.startswith("("):
-            self._save(last_model=m)
-        self._refresh_preset_menu(reset=True)
+    def _pick_model(self, name):
+        self._show_selection(self.selection.pick_model(name))
 
-    def _filtered_presets(self):
-        model = self.model_var.get()
-        if not model or model.startswith("("):
-            return {}
-        return {n: d for n, d in self.presets.items() if preset_matches_model(d, model)}
+    def _pick_preset(self, name):
+        self._show_selection(self.selection.pick_preset(name))
 
-    def _refresh_preset_menu(self, reset=False):
-        # reset=True (startup, model change) always selects Auto; other presets
-        # are manual overrides and are not remembered between launches.
-        filtered = self._filtered_presets()
-        menu = self.preset_menu.menu
-        menu.delete(0, "end")
-        if filtered:
-            for name in filtered:
-                menu.add_command(label=name, command=lambda v=name: self.preset_var.set(v))
-            current = self.preset_var.get()
-            if reset or current not in filtered:
-                self.preset_var.set(AUTO_PRESET if AUTO_PRESET in filtered else next(iter(filtered)))
-            else:
-                self._load_preset()
-        else:
-            menu.add_command(label="(no matching presets)",
-                             command=lambda: self.preset_var.set("(no matching presets)"))
-            self.preset_var.set("(no matching presets)")
-            self.llama_cmd = ""
-
-    def _load_preset(self):
-        # Build the launch command by substituting {model} with the actual file
-        # path, and attach the model's mmproj projector when it has one.
-        name  = self.preset_var.get()
-        entry = self._models.get(self.model_var.get())
-        if not name or name not in self.presets:
-            return
-        if entry is None:
-            self.llama_cmd = ""
-            return
-        model_path, mmproj = entry
-        self.llama_cmd = build_launch_command(self.presets[name]["command"],
-                                              model_path, mmproj, API_KEY_FILE)
+    def _refresh_models(self):
+        self._show_selection(self.selection.refresh())
 
 
     # ── Preset CRUD ───────────────────────────────────────────
@@ -660,67 +603,40 @@ class CommandLauncherGUI:
         return self._preset_popup
 
     def _add_preset(self):
-        models = sorted(detect_models(self.llama_dir), key=str.lower)
-        dlg = PresetDialog(self.master, "Add Preset", available_models=models)
+        dlg = PresetDialog(self.master, "Add Preset", available_models=self.selection.model_names())
         self.master.wait_window(dlg)
         if dlg.result_name:
-            if dlg.result_name in self.presets:
-                messagebox.showerror("Duplicate",
-                    f'A preset named "{dlg.result_name}" already exists.')
-                return
-            self.presets[dlg.result_name] = {
-                "command": dlg.result_command, "models": dlg.result_models
-            }
-            self._save(presets=self.presets)
-            self._refresh_preset_menu()
-            if dlg.result_name in self._filtered_presets():
-                self.preset_var.set(dlg.result_name)
+            self._change_presets(lambda: self.selection.add_preset(
+                dlg.result_name, dlg.result_command, dlg.result_models))
 
     def _edit_preset(self):
-        name = self.preset_var.get()
-        if not name or name not in self.presets:
-            messagebox.showwarning("No Preset", "Please select a preset to edit.")
-            return
-        if name == AUTO_PRESET:
-            # load_presets restores Auto from the code at every start, so an edit would quietly vanish.
-            messagebox.showinfo("Auto Preset",
-                "The Auto preset is built in and can't be edited. Use + Add for a preset of your own.")
-            return
-        data   = self.presets[name]
-        models = sorted(detect_models(self.llama_dir), key=str.lower)
-        dlg    = PresetDialog(self.master, "Edit Preset", name=name,
-                              command=data["command"],
-                              model_keywords=data.get("models", []),
-                              available_models=models)
+        try:
+            name, command, keywords = self.selection.preset_for_edit()
+        except PresetError as e:
+            return self._refused(e)
+        dlg = PresetDialog(self.master, "Edit Preset", name=name, command=command,
+                           model_keywords=keywords, available_models=self.selection.model_names())
         self.master.wait_window(dlg)
         if dlg.result_name:
-            if dlg.result_name != name and dlg.result_name in self.presets:
-                messagebox.showerror("Duplicate",
-                    f'A preset named "{dlg.result_name}" already exists.')
-                return
-            del self.presets[name]
-            self.presets[dlg.result_name] = {
-                "command": dlg.result_command, "models": dlg.result_models
-            }
-            self._save(presets=self.presets)
-            self._refresh_preset_menu()
-            if dlg.result_name in self._filtered_presets():
-                self.preset_var.set(dlg.result_name)
+            self._change_presets(lambda: self.selection.edit_preset(
+                name, dlg.result_name, dlg.result_command, dlg.result_models))
 
     def _delete_preset(self):
-        name = self.preset_var.get()
-        if not name or name not in self.presets:
-            messagebox.showwarning("No Preset", "Please select a preset to delete.")
-            return
-        if name == AUTO_PRESET:
-            messagebox.showinfo("Auto Preset",
-                "The Auto preset is the default for every model and can't be deleted.")
-            return
-        if not messagebox.askyesno("Confirm Delete", f'Delete preset "{name}"?'):
-            return
-        del self.presets[name]
-        self._save(presets=self.presets)
-        self._refresh_preset_menu()
+        name = self.selection.view.preset
+        self._change_presets(lambda: self.selection.delete_preset(
+            name, confirm=lambda n: messagebox.askyesno("Confirm Delete", f'Delete preset "{n}"?')))
+
+    def _change_presets(self, change):
+        try:
+            view = change()
+        except PresetError as e:
+            return self._refused(e)
+        if view:  # None: the user said no
+            self._show_selection(view)
+
+    @staticmethod
+    def _refused(e):
+        getattr(messagebox, "show" + e.kind)(e.title, e.message)
 
 
     # ── Server health polling ─────────────────────────────────
@@ -1010,8 +926,9 @@ class CommandLauncherGUI:
 
     def run_commands(self):
         uvx_cmd = resolve_uvx_command(self.uvx_command.strip(), CONFIG_FILE)
+        llama_cmd = self.selection.view.command
 
-        if not self.llama_cmd:
+        if not llama_cmd:
             messagebox.showerror("No Command",
                 "No Llama command available. Please select a model and preset.")
             return
@@ -1035,9 +952,9 @@ class CommandLauncherGUI:
         try:
             if remove_stale_agents_entry(self.config):
                 self._save()
-            self._free_port(self.llama_cmd, 8081, self.llama_log)
+            self._free_port(llama_cmd, 8081, self.llama_log)
             self._llama_proc = subprocess.Popen(
-                self.llama_cmd,
+                llama_cmd,
                 shell=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,

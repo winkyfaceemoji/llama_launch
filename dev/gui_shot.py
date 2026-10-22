@@ -111,7 +111,8 @@ def main():
 
     def preset():
         mod.PresetDialog(root, "Edit preset", name="Auto", command="llama-server -m {model} --fit on",
-                         model_keywords=[], available_models=sorted(app._models)[:6])
+                         model_keywords=[], available_models=(app.selection.model_names() if hasattr(app, "selection")
+                                                           else sorted(app._models))[:6])
 
     def prompts(editable):
         texts = dict(mod.agent_prompts.effective(app.config), chat=app.config.get("system_prompt", ""))
