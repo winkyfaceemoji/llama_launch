@@ -53,7 +53,8 @@ Click **Settings** in the top-right corner at any time to change the models fold
 
 ```
 llama_launch/
-├── launcher.pyw          # the application
+├── launcher.pyw          # the application (starts it)
+├── launcher_app/         # its code, one module per area
 ├── proxy.py              # system prompt injection proxy (port 8080 → 8081)
 ├── mcp_guard.py          # starts the UVX MCP proxy (8001) with a Host check
 ├── agents/               # agents server (server.py, port 8002) and the job, plan and path code it uses
@@ -296,6 +297,9 @@ All settings live in a single `config.json` next to the launcher:
 | `open_browser` | Whether to open the Web UI when the server comes online |
 | `last_model` | Remembered model selection between sessions |
 | `previous_build` | The llama.cpp build before the last update (e.g. `b9776`), for roll back. Cleared after a roll back |
+| `theme` | `system`, `light` or `dark` (Settings → General) |
+
+If you edit `config.json` by hand and a value is wrong (say `open_browser` is `"yes"` instead of `true`, or the file isn't valid JSON), the launcher won't start: it names the key and leaves the file as it is, so nothing is overwritten. Fix the value, or delete the key to get the default.
 
 The API key lives in its own file, `api_key.txt`, not in `config.json`.
 

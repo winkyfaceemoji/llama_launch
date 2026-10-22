@@ -1,24 +1,24 @@
 # CLAUDE.md
 
-Tkinter launcher (`launcher.pyw`) that starts llama-server, the system prompt proxy (`proxy.py`), the UVX MCP proxy and the agents MCP server (`agents/server.py`) on this Windows PC. README.md covers what it does for the user.
+Tkinter launcher (`launcher.pyw`, code in the `launcher_app/` package) that starts llama-server, the system prompt proxy (`proxy.py`), the UVX MCP proxy and the agents MCP server (`agents/server.py`) on this Windows PC. README.md covers what it does for the user.
 
 ## Commands
 
 - Run the app: `pythonw launcher.pyw` (no console) or `python launcher.pyw` (errors go to the terminal).
-- Tests: `python -m unittest discover -s tests`. They cover `agents/` (job store, path policy, plans, runner, HTTP helpers including the approval-route check) and the pure helpers in `launcher.pyw` (it's loaded with `SourceFileLoader` because of the `.pyw` extension). The GUI and `agents/server.py` (needs `mcp`) have no unit tests; smoke-test the server on a spare port.
-- Syntax check: `python -m py_compile launcher.pyw proxy.py`.
+- Tests: `python -m unittest discover -s tests`. They cover `agents/` (job store, path policy, plans, runner, HTTP helpers including the approval-route check) and `launcher_app/` (the config store, model and preset selection, and the pure helpers; `test_launcher.py` reaches the old single-file names through a small lookup over the package's modules). The GUI and `agents/server.py` (needs `mcp`) have no unit tests; smoke-test the server on a spare port.
+- Syntax check: `python -m py_compile launcher.pyw proxy.py launcher_app/*.py`.
 - Run the proxy alone: `python proxy.py 8080 8081` (listen port, upstream port).
 - GUI screenshots: `python dev/gui_shot.py launcher.pyw <out dir> [--theme light|dark]` builds the window without launching anything and saves the home view, the model dropdown, the Settings, Preset, Folders, Prompts (editable and read-only) and Update dialogs, and the running layout. Building the window clears the model test lock, so it refuses to run during a test.
 - App icon: `python dev/make_icon.py` redraws `icon.ico` (window, taskbar and tray) from the dark palette. Rerun it and commit the `.ico` after changing `PALETTES["dark"]`.
 - Agents MCP server: the launcher starts it on `127.0.0.1:8002` (`uv run --script agents/server.py`, MCP at `/mcp`). **Never run it by hand while the launcher is running**: its startup cancels unfinished jobs in the real sandbox, including one the live server is applying. With the launcher stopped, use a spare port (`--port 18002`); it still touches the real sandbox.
 - Model test: `python eval/model_test.py` (the launcher's **Test this model** runs it). Needs the launcher stack running; 15 to 60 minutes of GPU, depending on the model.
-- Smoke-test a model without the GUI: run the Auto preset command (`AUTO_COMMAND` in `launcher.pyw`) with `-m` set to a real `.gguf`, then stream a `/v1/chat/completions` request through `:8080` and `:8081` and compare. The llama-server log shows the context `--fit` picked (`n_ctx = ...` up to b9776, `n_ctx_slot = ...` from b11636).
+- Smoke-test a model without the GUI: run the Auto preset command (`AUTO_COMMAND` in `launcher_app/selection.py`) with `-m` set to a real `.gguf`, then stream a `/v1/chat/completions` request through `:8080` and `:8081` and compare. The llama-server log shows the context `--fit` picked (`n_ctx = ...` up to b9776, `n_ctx_slot = ...` from b11636).
 
 ## Conventions
 
 - Standard library only, except pystray + Pillow for the tray icon (`_bootstrap()` installs them) and `mcp` in `agents/server.py` (run through `uv`).
 - Windows only: process control uses `netstat`, `taskkill` and `shell=True`.
-- `launcher.pyw` is one file split by `# SECTION N` banners. Keep new code in the matching section.
+- The launcher is the `launcher_app/` package, one module per area (ADR 0020): `paths`, `theme`, `config`, `selection`, `processes`, `updates`, `widgets`, `dialogs`, `views`, `window`. `launcher.pyw` is only the entry point. Keep new code in the module for its area.
 - Commit messages: short, lowercase, imperative (see `git log`).
 
 ## Project-wide gotchas
@@ -47,3 +47,5 @@ Tkinter launcher (`launcher.pyw`) that starts llama-server, the system prompt pr
 - [0017](docs/adr/0017-single-launcher-instance.md) One launcher per Windows session (named mutex); a second start shows the first's window
 - [0018](docs/adr/0018-no-plan-waiting-toast.md) No plan toast (supersedes 0015): pystray balloons showed unreliably and ADR 0016 removed the tray case; the Jobs button count is the only cue
 - [0019](docs/adr/0019-model-test-uses-your-prompts.md) Model tests measure the user's own prompts; results record a prompt version and the report ranks only the newest one
+- [0020](docs/adr/0020-launcher-package.md) The launcher is the `launcher_app/` package; `launcher.pyw` is only the entry point; colour names follow `set_palette` through `theme.follow`
+- [0021](docs/adr/0021-process-control-stays-in-window.md) Process control stays in the window; no server-stack module for now (risk outweighed value)
