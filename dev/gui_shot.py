@@ -79,6 +79,10 @@ def main():
         ImageGrab.grab(window_rect(win)).save(os.path.join(args.out, name))
         win.attributes("-topmost", False)
 
+    def method(name, old_name):
+        # The window's public method, or its private name before the views split.
+        return getattr(app, name, None) or getattr(app, old_name)
+
     def newest_dialog():
         return [w for w in root.winfo_children() if isinstance(w, tk.Toplevel)][-1]
 
@@ -89,9 +93,10 @@ def main():
 
     def dropdown():
         root.focus_force()
-        app.model_menu._show_popup()
-        menu_shot(app.model_menu._popup, "dropdown.png")
-        app.model_menu._popup = None
+        model_menu = getattr(getattr(app, "view", None), "model_menu", None) or app.model_menu  # views since ADR 0020
+        model_menu._show_popup()
+        menu_shot(model_menu._popup, "dropdown.png")
+        model_menu._popup = None
 
     def menu_shot(popup, name):
         # A borderless popup sits outside the window's frame: grab the window plus whatever hangs below it.
@@ -104,7 +109,7 @@ def main():
 
     def preset_menu():
         root.focus_force()
-        menu_shot(app._open_preset_menu(), "preset_menu.png")
+        menu_shot(method("open_preset_menu", "_open_preset_menu")(), "preset_menu.png")
 
     def settings_page(name):
         newest_dialog()._show(name)
@@ -135,7 +140,7 @@ def main():
         (lambda: None, lambda: shot(root, "home.png")),
         (dropdown, lambda: None),
         (preset_menu, lambda: None),
-        (app._open_settings, lambda: shot(newest_dialog(), "settings.png")),
+        (method("open_settings", "_open_settings"), lambda: shot(newest_dialog(), "settings.png")),
         (lambda: settings_page("agents"), lambda: shot(newest_dialog(), "settings_agents.png")),
         (lambda: settings_page("llama"), lambda: shot(newest_dialog(), "settings_llama.png")),
         (lambda: settings_page("advanced"), lambda: shot_dialog("settings_advanced.png")),
