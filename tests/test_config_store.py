@@ -67,6 +67,29 @@ class ConfigStoreTests(unittest.TestCase):
             ConfigStore.load(self.path)
         self.assertIn("Old", str(e.exception))
 
+    def test_a_bom_refuses_and_says_how_to_fix_it(self):
+        # proxy.py reads config.json too, so the launcher can't just skip the BOM.
+        with open(self.path, "wb") as f:
+            f.write(b'\xef\xbb\xbf{"llama_dir": "C:/m"}')
+        with self.assertRaises(ConfigError) as e:
+            ConfigStore.load(self.path)
+        self.assertIn("UTF-8 without BOM", str(e.exception))
+
+    def test_messages_read_as_one_sentence(self):
+        for presets, message in (
+                ({"x": {"command": "c", "models": 5}},
+                 """config.json: "presets": invalid preset 'x': 'models' must be a list."""),
+                ({"Old": 5}, """config.json: "presets": invalid preset 'Old': must be a command or an object.""")):
+            with self.subTest(presets=presets):
+                self.write({"presets": presets})
+                with self.assertRaises(ConfigError) as e:
+                    ConfigStore.load(self.path)
+                self.assertEqual(str(e.exception), message)
+        self.write({"theme": "purple"})
+        with self.assertRaises(ConfigError) as e:
+            ConfigStore.load(self.path)
+        self.assertEqual(str(e.exception), 'config.json: "theme": must be one of system, light, dark.')
+
     def test_an_unreadable_file_refuses(self):
         with open(self.path, "wb") as f:
             f.write(b'{"llama_dir": "C:/\xff"}')

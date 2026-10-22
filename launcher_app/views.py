@@ -14,13 +14,12 @@ from . import theme
 theme.follow(globals())  # colour names follow set_palette (ADR 0020)
 
 
-def _title_row(view, app, with_settings=True):
+def _title_row(view, app):
     # "Llama Launcher" on the window background, with Settings on the right (no header bar, like the Web UI).
     hdr = tk.Frame(view, bg=BG)
     hdr.grid(row=0, column=0, sticky="ew", padx=24, pady=(16, 0))
     tk.Label(hdr, text="Llama Launcher", font=FONT_TITLE, fg=TEXT_PRI, bg=BG).pack(side="left")
-    if with_settings:
-        small_btn(hdr, "Settings", app.open_settings).pack(side="right")
+    small_btn(hdr, "Settings", app.open_settings).pack(side="right")
 
 
 class SetupView(tk.Frame):

@@ -17,7 +17,7 @@ S = 512  # drawing size; shapes are given in 0..1 units
 
 
 def load_palette():
-    sys.path.insert(0, ROOT)  # the launcher_app package and the agents/ it imports
+    sys.path.insert(0, ROOT)  # so the launcher_app package imports
     from launcher_app.theme import PALETTES
     return PALETTES["dark"]
 

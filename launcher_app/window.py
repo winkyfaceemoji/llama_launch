@@ -16,9 +16,9 @@ import urllib.error
 import urllib.request
 import webbrowser
 from .paths import AGENTS_SERVER, API_KEY_FILE, CONFIG_FILE, ICON_FILE, MODEL_TEST_LOCK, ROOT
-from .theme import BG, CURRENT_THEME, DANGER, H_RUNNING, H_SETUP, W, apply_theme, apply_ttk_style, resolve_theme, set_dark_title_bar, set_palette, theme_setting, windows_light
+from .theme import BG, CURRENT_THEME, DANGER, H_RUNNING, H_SETUP, W, apply_theme, apply_ttk_style, resolve_theme, set_dark_title_bar, set_palette, windows_light
 from .selection import PresetError, Selection
-from .config import ConfigStore, UVX_COMMAND, backup_config, load_api_key, migrate_uvx_command, remove_stale_agents_entry, resolve_uvx_command, set_prompts, shipped_prompts
+from .config import ConfigError, ConfigStore, UVX_COMMAND, backup_config, load_api_key, migrate_uvx_command, remove_stale_agents_entry, resolve_uvx_command, set_prompts, shipped_prompts
 from .processes import clear_test_lock, health_status, is_own_process, listening_pids, model_test_command, write_test_lock
 from .updates import UpdateRunner
 from .widgets import _TRAY_AVAILABLE, _make_tray_image, popup_menu, pystray
@@ -38,7 +38,7 @@ class CommandLauncherGUI:
         self.llama_dir = self.config.get("llama_dir", "")
 
         # The palette must be set before any widget is built; widgets read it when created.
-        self._theme = theme_setting(self.config)
+        self._theme = self.config.get("theme", "system")  # the store refuses any other value
         self._theme_preview = None  # a theme picked in Settings but not saved yet
         set_palette(resolve_theme(self._theme, windows_light()))
         master.title("")
@@ -203,12 +203,12 @@ class CommandLauncherGUI:
     def start_update(self):
         installed, newest = self._update_builds
         self._save(previous_build=f"b{installed}")
-        model_path, mmproj = self.selection.view.model_files
+        model_files = self.selection.view.model_files  # (model path, mmproj), as chosen when Update was clicked
         runners = []
 
         def job(report):
             runners.append(UpdateRunner(report))
-            return runners[0].update(installed, newest, model_path, mmproj, API_KEY_FILE)
+            return runners[0].update(installed, newest, *model_files, API_KEY_FILE)
         UpdateDialog(self.master, f"Update to b{newest}", job,
                      on_done=lambda ok: self._update_done(ok, runners and runners[0].rolled_back))
 
@@ -224,10 +224,9 @@ class CommandLauncherGUI:
             self._save(previous_build=None)
 
     def _start_rollback(self, build):
-        model_path, mmproj = self.selection.view.model_files
+        model_files = self.selection.view.model_files
         UpdateDialog(self.master, f"Roll back to b{build}",
-                     lambda report: UpdateRunner(report).rollback_and_check(
-                         build, model_path, mmproj, API_KEY_FILE),
+                     lambda report: UpdateRunner(report).rollback_and_check(build, *model_files, API_KEY_FILE),
                      on_done=self._rollback_done)
 
     def _rollback_done(self, ok):
@@ -284,10 +283,11 @@ class CommandLauncherGUI:
 
     def _save(self, **changes):
         # Every config.json write goes through the store (None removes a key; no changes saves edits made
-        # in place by migrate_uvx_command, set_prompts and the like). A disk error shows as before.
+        # in place by migrate_uvx_command, set_prompts and the like). A disk error, or a value the store
+        # refuses, shows in a dialog and nothing is written.
         try:
             self.store.update(**changes) if changes else self.store.save()
-        except OSError as e:
+        except (OSError, ConfigError) as e:
             messagebox.showerror("Save Error", f"Could not save settings:\n{e}")
 
     def _set_open_browser(self, open_browser):
@@ -380,7 +380,8 @@ class CommandLauncherGUI:
 
     @staticmethod
     def _refused(e):
-        getattr(messagebox, "show" + e.kind)(e.title, e.message)
+        {"error": messagebox.showerror, "warning": messagebox.showwarning,
+         "info": messagebox.showinfo}[e.kind](e.title, e.message)
 
 
     # ── Server health polling ─────────────────────────────────
@@ -658,7 +659,6 @@ class CommandLauncherGUI:
 
         self._enter_running_state()
 
-        model_name = self.selection.view.model
         cwd = self.llama_dir if self.llama_dir else None
 
         try:
@@ -719,6 +719,5 @@ class CommandLauncherGUI:
 
         except Exception as e:
             self._append_log(self.llama_log, f"LAUNCH FAILED: {e}")
-            self._kill_all()
-            self.stop()  # the home view replaces the logs, so the reason goes in a dialog too
+            self.stop()  # kills whatever started  # the home view replaces the logs, so the reason goes in a dialog too
             messagebox.showerror("Launch failed", str(e))

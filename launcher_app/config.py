@@ -62,11 +62,11 @@ def _problem(key, value):
         # load_presets takes any non-object as an old-style command string; only a string is one.
         for name, preset in value.items():
             if not isinstance(preset, (str, dict)):
-                return f"has preset '{name}', which must be a command or an object"
+                return f"invalid preset '{name}': must be a command or an object"
         try:
             load_presets({"presets": value})
         except ValueError as e:
-            return str(e)
+            return str(e).replace("Invalid preset", "invalid preset", 1)
     return None
 
 
@@ -93,6 +93,8 @@ class ConfigStore:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except json.JSONDecodeError as e:
+            if e.msg.startswith("Unexpected UTF-8 BOM"):  # proxy.py reads it too, so don't just skip the BOM
+                raise ConfigError("config.json starts with a byte order mark: save it as UTF-8 without BOM") from None
             raise ConfigError(f"config.json isn't valid JSON: {e}") from None
         except UnicodeDecodeError:
             raise ConfigError("config.json isn't UTF-8 text") from None
@@ -108,7 +110,7 @@ class ConfigStore:
         for key, value in data.items():
             problem = _problem(key, value)
             if problem:
-                raise ConfigError(f'config.json: "{key}" {problem}.')
+                raise ConfigError(f'config.json: "{key}": {problem}.')
 
     def update(self, **changes):
         # Set keys (None removes one) and write. A bad value raises ConfigError before anything changes.
@@ -176,8 +178,6 @@ def resolve_uvx_command(cmd, config_file, guard_file=MCP_GUARD):
 # mcp-proxy is pinned: mcp_guard hooks how it starts uvicorn (ADR 0012).
 UVX_COMMAND = ('uv run --no-project --with mcp-proxy==0.13.0 python "{guard}" '
                '--named-server-config "{config}" --port 8001 --stateless')
-
-
 _OLD_UVX_COMMAND = 'uvx mcp-proxy --named-server-config "{config}" --port 8001 --stateless'
 
 

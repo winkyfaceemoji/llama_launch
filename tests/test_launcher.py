@@ -649,11 +649,6 @@ class ThemeTests(unittest.TestCase):
         self.assertEqual(launcher.resolve_theme("purple", False), "dark")
         self.assertEqual(launcher.resolve_theme(None, True), "light")
 
-    def test_theme_setting_from_config(self):
-        self.assertEqual(launcher.theme_setting({}), "system")
-        self.assertEqual(launcher.theme_setting({"theme": "dark"}), "dark")
-        self.assertEqual(launcher.theme_setting({"theme": "Dark"}), "system")
-        self.assertEqual(launcher.theme_setting({"theme": 3}), "system")
 
 
 class RemapColorsTests(unittest.TestCase):

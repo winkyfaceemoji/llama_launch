@@ -25,11 +25,11 @@ The same launcher, **with no visible change**, but with its code in modules that
   - `window`: the app.
 - **The config store checks values and refuses to start on a bad one.**
   - `ConfigStore.load()` checks every key it knows: `llama_dir`, `presets` (through `load_presets`), `open_browser`, `theme`, `uvx_command`, `last_model`, `previous_build`, `system_prompt`, `agent_prompts`. A bad value raises `ConfigError`, naming the key and the problem. The entry point shows it and exits, and nothing is rewritten.
-  - Keys it doesn't own (`mcpServers` and any others) pass through every save untouched by the store. `remove_stale_agents_entry` still drops the old `agents` entry from `mcpServers` at startup, as before.
+  - Keys it doesn't own (`mcpServers` and any others) pass through every save untouched by the store. `remove_stale_agents_entry` still drops the old `agents` entry from `mcpServers` at each launch, as before.
   - Changes go through `update(**changes)`, which checks each value before writing.
   - A fallback with a warning was rejected: the next save of anything would have written over the real value, losing it.
 - **Selection is a stateful module that saves through callbacks** (design "B3").
-  - It has `pick_model`, `pick_preset`, `refresh`, `set_folder`, `add_preset`, `edit_preset`, `delete_preset`, `model_names` and `preset_for_edit`. Each returns a `View`: what both dropdowns show and the launch command.
+  - It has `pick_model`, `pick_preset`, `refresh`, `set_folder`, `add_preset`, `edit_preset`, `delete_preset`, `model_names` and `preset_for_edit`. Each choice and preset change returns a `View`: what both dropdowns show and the launch command (`delete_preset` returns None when the user says no). `model_names` returns the scanned names for the preset dialog and `preset_for_edit` the chosen preset's name, command and keywords.
   - The command is derived on every change, never stored, so the Refresh bug class can't return.
   - `remember_model` and `save_presets` callbacks write through the config store.
   - Refusals raise `PresetError(kind, title, message)`, and the window shows them as today.
@@ -37,7 +37,7 @@ The same launcher, **with no visible change**, but with its code in modules that
   - `SetupView`, `HomeView` and `RunningView` take the window and call its methods: `launch()`, `stop()`, `pick_model(name)`, `refresh_models()`, `open_settings()`, `open_preset_menu()` and so on.
   - Switching views destroys the old one and builds the new one, so a fresh running view can't carry dots, labels or an open Connection row over from the last run.
   - There is no separate controller class: the window is the controller.
-- **Process control stays in the window** ([ADR 0021](../../adr/0021-process-control-stays-in-window.md)): launch, `_free_port`, `_kill_proc`, `_kill_all`, the health poll and the model test, with their ordering rules, untouched. The only change is a real `running` flag in place of `exit_btn.winfo_manager()`.
+- **Process control stays in the window** ([ADR 0021](../../adr/0021-process-control-stays-in-window.md)): launch, `_free_port`, `_kill_proc`, `_kill_all`, the health poll and the model test, keep their logic and ordering rules. The edits around them are mechanical: a real `running` flag in place of `exit_btn.winfo_manager()`, logs and health handed to the running view, `stop()` in place of `_exit_running_state`, and public names for what the views call.
 
 ## Order (each step committed and checked on its own)
 

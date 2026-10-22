@@ -92,12 +92,6 @@ H_RUNNING   = 750   # height of the running/log view
 LOG_MAX_LINES = 5000  # lines each log pane keeps; older ones are dropped so a long session stays responsive
 
 
-def theme_setting(config):
-    # The saved Settings choice; anything missing or unknown is "system".
-    theme = config.get("theme")
-    return theme if theme in THEMES else "system"
-
-
 def resolve_theme(setting, windows_light):
     # "light"/"dark" win; otherwise follow Windows. windows_light is None when the registry
     # can't be read, which counts as light (Windows' default).

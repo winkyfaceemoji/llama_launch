@@ -8,7 +8,7 @@ The restructure (ADR 0020) considered a server-stack module to own the four proc
 
 ## Decision
 
-Not done. Process control stays in the window class, untouched: `launch` (renamed from `run_commands`), `_start_agents_server`, `_free_port`, `_kill_proc`, `_kill_all`, the health poll and the model test. The only change is a real `running` flag in place of reading whether the Exit button is on screen.
+Not done. Process control stays in the window class: `launch`, `_start_agents_server`, `_free_port`, `_kill_proc`, `_kill_all`, the health poll and the model test. Their logic and ordering rules are unchanged. The edits around them are mechanical: a real `running` flag in place of reading whether the Exit button is on screen, `_append_log` and `_set_health` hand their lines to the running view, `_exit_running_state` became `stop()`, `run_commands` and `_start_model_test` became `launch` and `start_model_test` for the views, and a failed launch no longer runs `_kill_all` twice.
 
 Why, ranked by risk against value: it was the riskiest rewrite and the least valuable.
 - **The risk.** It rewrites working Windows process code with four ordering rules (test before kills, the health poll before kills, job cleanup after the agents server dies, the lock last) and `taskkill /T` and netstat specifics. A slip shows up only in use: a llama-server holding VRAM, a cancelled test job left running, a live apply marked failed.

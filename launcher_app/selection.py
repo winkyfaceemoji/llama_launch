@@ -4,15 +4,12 @@ import re
 from dataclasses import dataclass
 from .paths import MODELS_DIR
 
-
 # Leaves -c and -ngl unset so llama-server's --fit picks the largest context
 # that fits in free VRAM. --context-shift and --swa-full stay off (both are
 # off by default): a full chat stops instead of silently dropping messages.
 # No --tools: newer builds only offer file, shell and OS tools, and refuse to
 # start with an unknown one. The time comes from the time MCP server (ADR 0011).
 AUTO_PRESET = "Auto (fit to VRAM)"
-
-
 AUTO_COMMAND = (
     'llama-server -m "{model}" --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 '
     '--webui-mcp-proxy --port 8081'
@@ -240,14 +237,16 @@ class Selection:
             return None
         return AUTO_PRESET if AUTO_PRESET in matching else matching[0]
 
+    _AUTO_REFUSALS = {  # why Auto can't be edited or deleted, by action
+        "edit": "The Auto preset is built in and can't be edited. Use + Add for a preset of your own.",
+        "delete": "The Auto preset is the default for every model and can't be deleted.",
+    }
+
     def _editable(self, name, action):
         if not name or name not in self._presets:
             raise PresetError("warning", "No Preset", f"Please select a preset to {action}.")
         if name == AUTO_PRESET:
-            raise PresetError("info", "Auto Preset",
-                              "The Auto preset is built in and can't be edited. Use + Add for a preset of your own."
-                              if action == "edit" else
-                              "The Auto preset is the default for every model and can't be deleted.")
+            raise PresetError("info", "Auto Preset", self._AUTO_REFUSALS[action])
         return name
 
     @staticmethod
