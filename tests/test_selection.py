@@ -52,6 +52,27 @@ class StartupTests(unittest.TestCase):
         self.assertEqual(f.sel.pick_model("gemma-26b").presets, (AUTO_PRESET,))
 
 
+class ParenNameTests(unittest.TestCase):
+    # As in the single-file launcher: a name starting with "(" was taken for a placeholder such as
+    # "(no .gguf models found)", so such a model gets no presets (no command) and is never remembered.
+    PAREN = {"(test)": ("C:\\m\\(test).gguf", None), "qwen-9b": ("C:\\m\\qwen-9b.gguf", None)}
+
+    def test_no_presets_and_no_command(self):
+        v = Fixture(self.PAREN, last_model="(test)").sel.view
+        self.assertEqual((v.model, v.presets, v.preset, v.command), ("(test)", (NO_PRESETS,), NO_PRESETS, ""))
+
+    def test_picking_it_is_not_remembered(self):
+        f = Fixture(self.PAREN, last_model="qwen-9b")
+        f.sel.pick_model("(test)")
+        self.assertEqual(f.remembered, [])
+
+    def test_refresh_fallback_to_it_is_not_remembered(self):
+        f = Fixture(self.PAREN, last_model="qwen-9b")
+        del f.found["qwen-9b"]
+        self.assertEqual(f.sel.refresh().model, "(test)")
+        self.assertEqual(f.remembered, [])
+
+
 class PickTests(unittest.TestCase):
     def test_picking_a_model_remembers_it_and_resets_to_auto(self):
         f = Fixture(TWO, presets=QWEN_ONLY, last_model="Qwen-9B")

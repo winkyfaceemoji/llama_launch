@@ -161,7 +161,7 @@ class Selection:
     def pick_model(self, name):
         if name in self._found:
             self._model = name
-            self._remember(name)
+            self._remember_unless_placeholder(name)
             self._preset = self._first_preset()
         return self._rebuild()
 
@@ -176,7 +176,7 @@ class Selection:
             names = self._names()
             self._model = names[0] if names else None
             if self._model:
-                self._remember(self._model)
+                self._remember_unless_placeholder(self._model)
             self._preset = self._first_preset()
         elif self._preset not in self._matching():
             self._preset = self._first_preset()
@@ -226,8 +226,18 @@ class Selection:
     def _names(self):
         return sorted(self._found, key=str.lower)
 
+    @staticmethod
+    def _looks_like_placeholder(name):
+        # The single-file launcher took a name starting with "(" for a placeholder such as
+        # "(no .gguf models found)": no presets, never remembered. Kept so nothing changes.
+        return name.startswith("(")
+
+    def _remember_unless_placeholder(self, name):
+        if not self._looks_like_placeholder(name):
+            self._remember(name)
+
     def _matching(self):
-        if self._model is None:
+        if self._model is None or self._looks_like_placeholder(self._model):
             return []
         return [n for n, p in self._presets.items() if preset_matches_model(p, self._model)]
 
