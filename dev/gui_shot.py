@@ -22,6 +22,23 @@ from ctypes import wintypes
 from PIL import ImageGrab
 
 
+def package_names():
+    # The names launcher.pyw used to hold, looked up in launcher_app's modules (ADR 0020).
+    from launcher_app import config, dialogs, processes, selection, theme, updates, widgets, window
+    import agents.prompts
+
+    class Names:
+        _modules = (theme, config, selection, processes, updates, widgets, dialogs, window)
+        agent_prompts = agents.prompts
+
+        def __getattr__(self, name):
+            for module in self._modules:
+                if hasattr(module, name):
+                    return getattr(module, name)
+            raise AttributeError(name)
+    return Names()
+
+
 def window_rect(win):
     # The whole frame, title bar included.
     hwnd = ctypes.windll.user32.GetParent(win.winfo_id())
@@ -45,6 +62,9 @@ def main():
     loader = importlib.machinery.SourceFileLoader("launcher", path)
     mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("launcher", loader))
     loader.exec_module(mod)
+    if not hasattr(mod, "PresetDialog"):  # launcher.pyw is only the entry point since ADR 0020
+        mod = package_names()
+    mod.UpdateRunner.check = lambda self: None  # no WinGet call, and no update notice appearing at random
 
     root = tk.Tk()
     app = mod.CommandLauncherGUI(root)

@@ -6,8 +6,6 @@ The window, the taskbar and the tray all load icon.ico. Colours come from the da
 palette in launcher.pyw, whatever the theme: a dark square reads on a light and a dark
 taskbar. Each size is drawn large and scaled down, so it can be regenerated at will.
 """
-import importlib.machinery
-import importlib.util
 import os
 import sys
 
@@ -19,12 +17,9 @@ S = 512  # drawing size; shapes are given in 0..1 units
 
 
 def load_palette():
-    path = os.path.join(ROOT, "launcher.pyw")
-    sys.path.insert(0, ROOT)  # launcher.pyw imports agents/
-    loader = importlib.machinery.SourceFileLoader("launcher", path)
-    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("launcher", loader))
-    loader.exec_module(mod)
-    return mod.PALETTES["dark"]
+    sys.path.insert(0, ROOT)  # the launcher_app package and the agents/ it imports
+    from launcher_app.theme import PALETTES
+    return PALETTES["dark"]
 
 
 def u(*pts):

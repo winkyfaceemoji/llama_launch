@@ -1,5 +1,3 @@
-import importlib.machinery
-import importlib.util
 import os
 import subprocess
 import tempfile
@@ -9,11 +7,23 @@ from unittest import mock
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "launcher.pyw")
-_loader = importlib.machinery.SourceFileLoader("launcher", _PATH)
-_spec = importlib.util.spec_from_loader("launcher", _loader)
-launcher = importlib.util.module_from_spec(_spec)
-_loader.exec_module(launcher)
+from launcher_app import (config, dialogs, paths, processes, selection, theme, updates,  # noqa: E402
+                          widgets, window)
+
+
+class _Launcher:
+    # The names launcher.pyw used to hold, looked up in the package's modules at call time (ADR 0020),
+    # so set_palette's rebinding shows. Patch the defining module itself, never this.
+    _modules = (theme, paths, config, selection, processes, updates, widgets, dialogs, window)
+
+    def __getattr__(self, name):
+        for module in self._modules:
+            if hasattr(module, name):
+                return getattr(module, name)
+        raise AttributeError(name)
+
+
+launcher = _Launcher()
 
 
 class LoadApiKeyTests(unittest.TestCase):
@@ -42,7 +52,7 @@ class LoadApiKeyTests(unittest.TestCase):
 
 
 class ModelTestHelperTests(unittest.TestCase):
-    SCRIPT = os.path.join(os.path.dirname(_PATH), "eval", "model_test.py")
+    SCRIPT = os.path.join(paths.ROOT, "eval", "model_test.py")
 
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -417,8 +427,8 @@ class UpdateRunnerTests(unittest.TestCase):
         return _FakeProc(self.server_log)
 
     def patched(self, healthy=True, probe=None):
-        return (mock.patch.object(launcher, "wait_healthy", return_value=healthy),
-                mock.patch.object(launcher, "probe_server", return_value=probe or self.PROBE_PASS))
+        return (mock.patch.object(updates, "wait_healthy", return_value=healthy),
+                mock.patch.object(updates, "probe_server", return_value=probe or self.PROBE_PASS))
 
     # check()
 
@@ -487,7 +497,7 @@ class UpdateRunnerTests(unittest.TestCase):
         self.assertTrue(launcher.check_verdict(results)[0])
 
     def test_process_killed_when_wait_healthy_raises(self):
-        with mock.patch.object(launcher, "wait_healthy", side_effect=RuntimeError("boom")):
+        with mock.patch.object(updates, "wait_healthy", side_effect=RuntimeError("boom")):
             with self.assertRaises(RuntimeError):
                 self.runner.build_check(11636, "C:\\m\\a.gguf", None, self.key_file)
         self.assertIn(self.KILL, self.calls)
@@ -533,7 +543,7 @@ class UpdateRunnerTests(unittest.TestCase):
 
     def test_build_check_error_still_rolls_back(self):
         self.versions = [11636, 9776]
-        with mock.patch.object(launcher, "wait_healthy", side_effect=RuntimeError("boom")):
+        with mock.patch.object(updates, "wait_healthy", side_effect=RuntimeError("boom")):
             result = self.runner.update(9776, 11636, "C:\\m\\a.gguf", None, self.key_file)
         self.assertEqual(result, (False, "Build check failed: build check (boom). Rolled back to b9776."))
         self.assertIn(self.KILL, self.calls)
@@ -573,7 +583,7 @@ class UpdateRunnerTests(unittest.TestCase):
 
     def test_build_check_error_after_roll_back_is_reported(self):
         self.versions = [9776, 9776]
-        with mock.patch.object(launcher, "wait_healthy", side_effect=RuntimeError("boom")):
+        with mock.patch.object(updates, "wait_healthy", side_effect=RuntimeError("boom")):
             result = self.runner.rollback_and_check(9776, "C:\\m\\a.gguf", None, self.key_file)
         self.assertEqual(result, (True, "Rolled back to b9776. Build check failed: build check (boom)."))
 

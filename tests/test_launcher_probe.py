@@ -1,5 +1,3 @@
-import importlib.machinery
-import importlib.util
 import json
 import os
 import socket
@@ -10,11 +8,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "launcher.pyw")
-_loader = importlib.machinery.SourceFileLoader("launcher", _PATH)
-_spec = importlib.util.spec_from_loader("launcher", _loader)
-launcher = importlib.util.module_from_spec(_spec)
-_loader.exec_module(launcher)
+from launcher_app import updates  # noqa: E402
 
 KEY = "test-key"
 
@@ -78,32 +72,32 @@ class FakeServerTest(unittest.TestCase):
 
 class GoodServerTests(FakeServerTest):
     def test_all_checks_pass(self):
-        results = launcher.probe_server(self.base, KEY)
+        results = updates.probe_server(self.base, KEY)
         self.assertEqual([(name, ok) for name, ok, _ in results], [
             ("chat with key", True),
             ("chat without key", True),
             ("tools without key", True),
             ("cors-proxy without key", True),
         ])
-        self.assertTrue(launcher.check_verdict(results)[0])
+        self.assertTrue(updates.check_verdict(results)[0])
 
     def test_wrong_key_fails_chat_with_key(self):
-        name, ok, detail = launcher.probe_server(self.base, "wrong")[0]
+        name, ok, detail = updates.probe_server(self.base, "wrong")[0]
         self.assertEqual((name, ok), ("chat with key", False))
         self.assertIn("401", detail)
 
     def test_wait_healthy_true_when_ok(self):
-        self.assertTrue(launcher.wait_healthy(self.base, 2))
+        self.assertTrue(updates.wait_healthy(self.base, 2))
 
 
 class LeakyServerTests(FakeServerTest):
     handler = LeakyLlama
 
     def test_chat_without_key_fails_and_verdict_names_it(self):
-        results = launcher.probe_server(self.base, KEY)
+        results = updates.probe_server(self.base, KEY)
         self.assertEqual(results[1][:2], ("chat without key", False))
         self.assertIn("200", results[1][2])
-        passed, message = launcher.check_verdict(results)
+        passed, message = updates.check_verdict(results)
         self.assertFalse(passed)
         self.assertIn("chat without key", message)
 
@@ -113,13 +107,13 @@ class LoadingServerTests(FakeServerTest):
 
     def test_wait_healthy_false_at_timeout(self):
         start = time.monotonic()
-        self.assertFalse(launcher.wait_healthy(self.base, 2))
+        self.assertFalse(updates.wait_healthy(self.base, 2))
         self.assertLess(time.monotonic() - start, 4)
 
     def test_wait_healthy_stops_when_the_server_exits(self):
         # A build that crashes on start must not make the check sit out the whole timeout.
         start = time.monotonic()
-        self.assertFalse(launcher.wait_healthy(self.base, 30, alive=lambda: False))
+        self.assertFalse(updates.wait_healthy(self.base, 30, alive=lambda: False))
         self.assertLess(time.monotonic() - start, 4)
 
 
@@ -128,7 +122,7 @@ class NoServerTests(unittest.TestCase):
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))
             port = s.getsockname()[1]
-        results = launcher.probe_server(f"http://127.0.0.1:{port}", KEY, timeout=2)
+        results = updates.probe_server(f"http://127.0.0.1:{port}", KEY, timeout=2)
         self.assertEqual([ok for _, ok, _ in results], [False] * 4)
         self.assertTrue(all(detail for _, _, detail in results))
 
