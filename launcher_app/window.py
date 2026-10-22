@@ -20,7 +20,7 @@ import webbrowser
 from .paths import AGENTS_SERVER, AGENT_API_URL, API_KEY_FILE, CONFIG_FILE, ICON_FILE, MODEL_TEST_LOCK, ROOT
 from .theme import ACCENT, BG, BG_INPUT, BG_PANEL, BORDER, CURRENT_THEME, DANGER, DANGER_HOVER, FONT_BTN, FONT_BTN_SM, FONT_ICON, FONT_LOG, FONT_MONO, FONT_SMALL, FONT_TITLE, HOVER, H_CONFIG, H_NOTICE, H_RUNNING, H_SETUP, LOG_MAX_LINES, SUCCESS, SUCCESS_HOVER, TEXT_MUT, TEXT_PRI, TEXT_SEC, W, _palette, apply_theme, apply_ttk_style, resolve_theme, set_dark_title_bar, set_palette, theme_setting, windows_light
 from .selection import AUTO_PRESET, build_launch_command, detect_models, load_presets, preset_matches_model
-from .config import UVX_COMMAND, backup_config, load_api_key, load_config, migrate_uvx_command, remove_stale_agents_entry, resolve_uvx_command, save_config, set_prompts, shipped_prompts
+from .config import ConfigStore, UVX_COMMAND, backup_config, load_api_key, migrate_uvx_command, remove_stale_agents_entry, resolve_uvx_command, set_prompts, shipped_prompts
 from .processes import clear_test_lock, health_status, is_own_process, listening_pids, model_test_command, write_test_lock
 from .updates import UpdateRunner
 from .widgets import DropdownButton, LogTab, _TRAY_AVAILABLE, _make_tray_image, card, copy_btn, flat_btn, log_line_is_error, popup_menu, pystray, section_label, small_btn, style_toggle, trim_log
@@ -30,11 +30,12 @@ theme.follow(globals())  # colour names follow set_palette (ADR 0020)
 
 
 class CommandLauncherGUI:
-    def __init__(self, master):
+    def __init__(self, master, store=None):
         self.master = master
 
-        # Load persisted config — contains the llama.cpp folder path
-        self.config    = load_config()
+        # config.json, through the store: it checks every value and is the only writer (ConfigError if bad).
+        self.store     = store or ConfigStore.load()
+        self.config    = self.store.data  # read-only here: every change goes through _save
         self.llama_dir = self.config.get("llama_dir", "")
 
         # The palette must be set before any widget is built; widgets read it when created.
@@ -136,8 +137,7 @@ class CommandLauncherGUI:
             return
 
         self.llama_dir = path
-        self.config["llama_dir"] = path
-        save_config(self.config)
+        self._save(llama_dir=path)
 
         # Clear the setup screen and build the home screen in its place
         for widget in self.master.winfo_children():
@@ -164,7 +164,7 @@ class CommandLauncherGUI:
         self._open_browser = self.config.get("open_browser", True)
         self._models       = {}
         if migrate_uvx_command(self.config):
-            save_config(self.config)
+            self._save()
         self.uvx_command   = self.config.get("uvx_command", UVX_COMMAND)
         self.api_key       = load_api_key(API_KEY_FILE)
         # Only the jobs panel sends this one, so llama API key holders can't approve plans (ADR 0009).
@@ -378,15 +378,13 @@ class CommandLauncherGUI:
         def on_save(new_path):
             changed = new_path != self.llama_dir
             self.llama_dir = new_path
-            self.config["llama_dir"] = new_path
-            save_config(self.config)
+            self._save(llama_dir=new_path)
             if changed:
                 self._refresh_models()  # the model list and launch command must come from the new folder
 
         def on_save_uvx(cmd):
             self.uvx_command = cmd
-            self.config["uvx_command"] = cmd
-            save_config(self.config)
+            self._save(uvx_command=cmd)
 
         # The proxy and agents server read the prompts once at startup: edit only while they're stopped.
         running = bool(self.exit_btn.winfo_manager())
@@ -416,7 +414,7 @@ class CommandLauncherGUI:
             backup_config()
         except OSError as e:
             return f"Couldn't back up config.json first, so nothing was saved: {e}"
-        save_config(self.config)
+        self._save()
         return None
 
 
@@ -441,8 +439,7 @@ class CommandLauncherGUI:
 
     def _start_update(self):
         installed, newest = self._update_builds
-        self.config["previous_build"] = f"b{installed}"
-        save_config(self.config)
+        self._save(previous_build=f"b{installed}")
         model_path, mmproj = self._models.get(self.model_var.get(), (None, None))
         runners = []
 
@@ -459,8 +456,7 @@ class CommandLauncherGUI:
         elif rolled_back:
             # Back on the build previous_build names: nothing to roll back to. A failed
             # roll back keeps it, so Settings can retry from the broken build.
-            self.config.pop("previous_build", None)
-            save_config(self.config)
+            self._save(previous_build=None)
 
     def _start_rollback(self, build):
         model_path, mmproj = self._models.get(self.model_var.get(), (None, None))
@@ -472,8 +468,7 @@ class CommandLauncherGUI:
     def _rollback_done(self, ok):
         # Cleared so the startup notice offers the newer build again.
         if ok:
-            self.config.pop("previous_build", None)
-            save_config(self.config)
+            self._save(previous_build=None)
 
 
     # ── Window sizing ─────────────────────────────────────────
@@ -508,8 +503,7 @@ class CommandLauncherGUI:
         # From Settings' Save.
         self._theme_preview = None
         self._theme = theme
-        self.config["theme"] = theme
-        save_config(self.config)
+        self._save(theme=theme)
         name = resolve_theme(theme, windows_light())
         if name != CURRENT_THEME:
             apply_theme(self.master, name)
@@ -523,10 +517,17 @@ class CommandLauncherGUI:
                 apply_theme(self.master, name)
         self.master.after(3000, self._watch_windows_theme)
 
+    def _save(self, **changes):
+        # Every config.json write goes through the store (None removes a key; no changes saves edits made
+        # in place by migrate_uvx_command, set_prompts and the like). A disk error shows as before.
+        try:
+            self.store.update(**changes) if changes else self.store.save()
+        except OSError as e:
+            messagebox.showerror("Save Error", f"Could not save settings:\n{e}")
+
     def _set_open_browser(self, open_browser):
         self._open_browser = open_browser
-        self.config["open_browser"] = open_browser
-        save_config(self.config)
+        self._save(open_browser=open_browser)
 
 
     # ── Two-state view switching ──────────────────────────────
@@ -601,8 +602,7 @@ class CommandLauncherGUI:
     def _on_model_changed(self):
         m = self.model_var.get()
         if m and not m.startswith("("):
-            self.config["last_model"] = m
-            save_config(self.config)
+            self._save(last_model=m)
         self._refresh_preset_menu(reset=True)
 
     def _filtered_presets(self):
@@ -671,8 +671,7 @@ class CommandLauncherGUI:
             self.presets[dlg.result_name] = {
                 "command": dlg.result_command, "models": dlg.result_models
             }
-            self.config["presets"] = self.presets
-            save_config(self.config)
+            self._save(presets=self.presets)
             self._refresh_preset_menu()
             if dlg.result_name in self._filtered_presets():
                 self.preset_var.set(dlg.result_name)
@@ -703,8 +702,7 @@ class CommandLauncherGUI:
             self.presets[dlg.result_name] = {
                 "command": dlg.result_command, "models": dlg.result_models
             }
-            self.config["presets"] = self.presets
-            save_config(self.config)
+            self._save(presets=self.presets)
             self._refresh_preset_menu()
             if dlg.result_name in self._filtered_presets():
                 self.preset_var.set(dlg.result_name)
@@ -721,8 +719,7 @@ class CommandLauncherGUI:
         if not messagebox.askyesno("Confirm Delete", f'Delete preset "{name}"?'):
             return
         del self.presets[name]
-        self.config["presets"] = self.presets
-        save_config(self.config)
+        self._save(presets=self.presets)
         self._refresh_preset_menu()
 
 
@@ -1037,7 +1034,7 @@ class CommandLauncherGUI:
 
         try:
             if remove_stale_agents_entry(self.config):
-                save_config(self.config)
+                self._save()
             self._free_port(self.llama_cmd, 8081, self.llama_log)
             self._llama_proc = subprocess.Popen(
                 self.llama_cmd,

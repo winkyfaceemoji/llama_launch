@@ -1,12 +1,13 @@
 """config.json: defaults, loading, saving, prompts, the UVX command."""
 from agents import prompts as agent_prompts
-from tkinter import messagebox
 import json
 import os
 import secrets
 import shutil
 from .paths import CONFIG_FILE, MCP_GUARD
-from .selection import AUTO_COMMAND, AUTO_PRESET
+from .selection import AUTO_COMMAND, AUTO_PRESET, load_presets
+from .theme import THEMES
+from .updates import parse_build
 
 
 _DEFAULT_CONFIG = {
@@ -39,28 +40,86 @@ _DEFAULT_CONFIG = {
 }
 
 
-def load_config() -> dict:
-    if not os.path.exists(CONFIG_FILE):
+class ConfigError(Exception):
+    """A value in config.json the launcher can't use. The message names the key; nothing was written."""
+
+
+def _problem(key, value):
+    # What's wrong with one value of a key the launcher owns, or None. Keys it doesn't own pass.
+    if key in ("llama_dir", "last_model", "uvx_command", "system_prompt") and not isinstance(value, str):
+        return "must be text"
+    if key == "open_browser" and not isinstance(value, bool):
+        return "must be true or false"
+    if key == "theme" and value not in THEMES:
+        return "must be one of " + ", ".join(THEMES)
+    if key == "previous_build" and not (isinstance(value, str) and parse_build(value)):
+        return 'must be a build number like "b11706"'
+    if key == "agent_prompts" and not (isinstance(value, dict) and all(isinstance(v, str) for v in value.values())):
+        return "must map prompt names to text"
+    if key == "presets":
+        if not isinstance(value, dict):
+            return "must be an object of presets"
         try:
-            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump(_DEFAULT_CONFIG, f, indent=2, ensure_ascii=False)
-        except IOError:
-            pass
-        return dict(_DEFAULT_CONFIG)
-    try:
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (IOError, json.JSONDecodeError) as e:
-        print(f"Error reading config file: {e}")
-        return dict(_DEFAULT_CONFIG)
+            load_presets({"presets": value})
+        except ValueError as e:
+            return str(e)
+    return None
 
 
-def save_config(config: dict) -> None:
-    try:
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2, ensure_ascii=False)
-    except IOError as e:
-        messagebox.showerror("Save Error", f"Could not save settings:\n{e}")
+class ConfigStore:
+    # Owns config.json: the launcher's only reader and writer of it. Every value of a key the launcher
+    # uses is checked on load and before each write, and a bad one raises ConfigError naming the key, with
+    # nothing written: the launcher refuses to start rather than replace a value and lose it on the next
+    # save. Keys it doesn't own (mcpServers, which mcp-proxy reads, and any others) pass through untouched.
+    def __init__(self, path, data):
+        self.path = path
+        self.data = data  # the whole dict, for helpers that edit it in place; call save() after
+
+    @classmethod
+    def load(cls, path=None):
+        path = path or CONFIG_FILE
+        if not os.path.exists(path):
+            store = cls(path, json.loads(json.dumps(_DEFAULT_CONFIG)))
+            try:
+                store.save()
+            except OSError:
+                pass  # a read-only folder still runs, on the defaults
+            return store
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ConfigError(f"config.json isn't valid JSON: {e}") from None
+        if not isinstance(data, dict):
+            raise ConfigError("config.json must hold an object")
+        cls._check(data)
+        return cls(path, data)
+
+    @staticmethod
+    def _check(data):
+        for key, value in data.items():
+            problem = _problem(key, value)
+            if problem:
+                raise ConfigError(f'config.json: "{key}" {problem}.')
+
+    def get(self, key, default=None):
+        return self.data.get(key, default)
+
+    def update(self, **changes):
+        # Set keys (None removes one) and write. A bad value raises ConfigError before anything changes.
+        self._check({k: v for k, v in changes.items() if v is not None})
+        for key, value in changes.items():
+            if value is None:
+                self.data.pop(key, None)
+            else:
+                self.data[key] = value
+        self.save()
+
+    def save(self):
+        # Write the whole dict, after checking it (raises ConfigError, or OSError if the disk refuses).
+        self._check(self.data)
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump(self.data, f, indent=2, ensure_ascii=False)
 
 
 # The prompts the Prompts dialog shows: (key, tab name). "chat" is config["system_prompt"], which the proxy sends
