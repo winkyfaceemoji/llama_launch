@@ -40,7 +40,7 @@ class SetupView(tk.Frame):
         body.columnconfigure(0, weight=1)
         tk.Label(body, text="Where is your llama.cpp folder?",
                  font=FONT_BTN, fg=TEXT_PRI, bg=BG).grid(row=0, column=0, sticky="w", pady=(0, 4))
-        tk.Label(body, text="This folder is used as the working directory when launching servers.",
+        tk.Label(body, text="Where your models are; llama-server runs from here.",
                  font=FONT_SMALL, fg=TEXT_MUT, bg=BG).grid(row=1, column=0, sticky="w", pady=(0, 14))
 
         path_row = tk.Frame(body, bg=BG)
@@ -75,6 +75,7 @@ class _NoticeView(tk.Frame):
     # The llama.cpp update notice under the title, shown on home and running. Windows locks a running
     # llama-server.exe, so the running view shows it with Update disabled.
     def _build_notice(self, app, can_update):
+        self._can_update = can_update
         self._notice, notice_card = card(self)
         self._notice_label = tk.Label(notice_card, font=FONT_SMALL, fg=TEXT_PRI, bg=BG_PANEL,
                                       wraplength=320, justify="left")
@@ -88,8 +89,10 @@ class _NoticeView(tk.Frame):
         # builds: (installed, newest), or None to hide the notice.
         if builds:
             installed, newest = builds
+            # The terms matter only where Update can be clicked; elsewhere, say why it can't.
             self._notice_label.config(text=f"llama.cpp b{newest} is out (you have b{installed}). "
-                                           "Updating accepts the package's terms.")
+                                      + ("Updating accepts the package's terms." if self._can_update
+                                         else "Stop the servers to update."))
             self._notice.grid(row=1, column=0, padx=24, pady=(16, 0), sticky="ew")
         else:
             self._notice.grid_remove()

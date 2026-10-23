@@ -138,7 +138,7 @@ Click **Settings** (or press Ctrl+,). It opens on **General**, which links to th
 
 This needs llama.cpp installed through WinGet (package `ggml.llamacpp`). The Web UI is built into llama-server, so updating llama.cpp updates the Web UI too.
 
-- **Notice:** at startup the launcher asks WinGet in the background whether a newer build is out. If so, a row under the header shows both build numbers and an **Update** button. Nothing installs until you click it, and updating accepts the package's terms. If WinGet or the network isn't available, nothing shows.
+- **Notice:** at startup the launcher asks WinGet in the background whether a newer build is out. If so, a row under the header shows both build numbers and an **Update** button. Nothing installs until you click it, and updating accepts the package's terms. While the servers run, **Update** is greyed out and the row says to stop them first. If WinGet or the network isn't available, nothing shows.
 - **Servers stopped:** Windows locks a running `llama-server.exe`, so **Update** and roll back only work while the servers are stopped.
 - **Build check:** right after the update, the launcher starts the new build once on the spare port `18081` with the selected model and the API key, and checks that it reports the new version, comes online, answers a chat with the key, refuses chat, `/tools` and `/cors-proxy` without the key (also from a foreign web page), and logs the context size `--fit` picked. This uses the GPU for about 30 seconds. With no model selected, only the version is checked.
 - **Automatic roll back:** if any check fails, the launcher reinstalls the previous build and shows which check failed.
