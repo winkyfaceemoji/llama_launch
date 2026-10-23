@@ -77,6 +77,17 @@ def small_btn(parent, text, command, color=None, fg=None, **kw):
     )
 
 
+def outline_btn(parent, text, command, **kw):
+    # A ghost button inside a 1px border, for an action that stands alone beside text or a field, so it
+    # reads as a button rather than a label (design council, 2026-10-23). A Tk button on Windows draws no
+    # border of its own, so a frame does; pack or grid the returned frame; its .button is the button.
+    frame = tk.Frame(parent, bg=BORDER, padx=1, pady=1)
+    frame.button = small_btn(frame, text, command, color=parent.cget("bg"), **kw)
+    frame.button.config(pady=4)  # one less than small_btn, so the border keeps rows the same height
+    frame.button.pack()
+    return frame
+
+
 def copy_btn(parent, value):
     # A ghost "Copy" button that puts value() on the clipboard and says "Copied" for a moment.
     def copy():

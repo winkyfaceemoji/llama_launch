@@ -66,7 +66,7 @@ class CommandLauncherGUI:
         master.grid_columnconfigure(0, weight=1)
         master.grid_rowconfigure(0, weight=1)
         self.view = None            # the shown SetupView, HomeView or RunningView
-        self.running = False        # the servers are up: between Launch and Exit Processes
+        self.running = False        # the servers are up: between Launch and Stop Servers
         self._update_builds = None  # (installed, newest) once the startup check finds a newer build
         if not self.llama_dir:
             self._switch(SetupView)
@@ -309,7 +309,7 @@ class CommandLauncherGUI:
         self.master.geometry(f"{W}x{H_RUNNING}")
 
     def stop(self):
-        # Exit Processes: stop everything, then a fresh home view.
+        # Stop Servers: stop everything, then a fresh home view.
         self._stop_health_poll()  # first, so the kills below aren't reported as an agents crash
         self._kill_all()
         self._stop_elapsed()
@@ -444,7 +444,7 @@ class CommandLauncherGUI:
 
     def _set_test_btn(self, healthy):
         # Only while llama-server is online and no test is running. _polling drops
-        # a poll result that arrives after Exit Processes.
+        # a poll result that arrives after Stop Servers.
         busy = self._test_dialog is not None and self._test_dialog.busy()
         self.test_btn.config(state=tk.NORMAL if healthy and self._polling and not busy else tk.DISABLED)
 

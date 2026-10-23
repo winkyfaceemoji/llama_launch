@@ -103,7 +103,7 @@ Click **Launch Server**. The window switches to the running view, which shows:
 If a port the launcher needs (8080, 8081, 8001 or 8002) is still held by a leftover llama-server, proxy or agents server from an earlier run, the launcher stops it first. If any other program holds 8080, 8081 or 8001, the launch is cancelled and a dialog names that program and its PID. If another program holds 8002, only the agents server is skipped, and the UVX tab says why.
 
 ### Stopping
-Click **Exit Processes** to kill all four servers and return to the launcher screen.
+Click **Stop Servers** to kill all four servers and return to the launcher screen.
 
 ### System tray
 The launcher has its own llama icon on the taskbar, in the window corner and in the tray. Right-click the tray icon to **Show** the window or **Exit** (which stops the servers, like closing the window).
@@ -148,14 +148,14 @@ This needs llama.cpp installed through WinGet (package `ggml.llamacpp`). The Web
 
 ## Testing a model
 
-**Test this model**, next to **Exit Processes** in the running view, scores the loaded model so you can compare models on this PC. It's enabled while the status bar says `● online`.
+**Test this model**, next to **Stop Servers** in the running view, scores the loaded model so you can compare models on this PC. It's enabled while the status bar says `● online`.
 
 - **What it measures:** agent jobs (the stress test's organise, risky-plan review, research, plan and tool-choice cases), 40 fixed reasoning questions (maths, logic, instruction following, dates and times), and speed (tokens per second and the context `--fit` picked). Each model uses its own sampling defaults, so a gap of a few points means little.
 - **15 to 60 minutes of GPU,** depending on the model (gpt-oss-20b took 16). Web UI chat is paused while it runs: chat requests get a "model test is running" error until the test finishes or you stop it. The test's jobs never show in the Jobs panel.
 - **The dialog** streams the test's log. When the test finishes, the report opens in the browser.
 - **The report** is `eval/results/report.html`: one row per complete test, sorted by agent score, each expanding to per-area results and the model's wrong answers. It and the result files stay on this PC.
 - **Prompts:** a test measures the model with your prompts (Settings → Agents → Prompts), and each result records them with a short prompt version. The top rows rank only runs with the same prompts as the newest run; runs with other prompts are listed below, saying which prompts differed. After you change a prompt, rerun the models you want to compare. Results from before prompts were recorded aren't shown.
-- **Stop** (or closing the dialog) asks first, then ends the test, cancels its jobs and deletes its temporary folders. Nothing is added to the report. **Exit Processes** during a test stops it the same way, without asking.
+- **Stop** (or closing the dialog) asks first, then ends the test, cancels its jobs and deletes its temporary folders. Nothing is added to the report. **Stop Servers** during a test stops it the same way, without asking.
 
 ---
 
@@ -254,7 +254,7 @@ After updating the launcher, press Ctrl+F5 once in the Web UI so the browser dro
 
 - Jobs run one at a time and stop after 40 tool calls or 20 minutes. Tool results are cut to 6,000 characters, and older results are dropped from the model's context once it grows past 40,000.
 - `job_result` shows at most 8,000 characters per file and gives the full file path when it cuts.
-- **Exit Processes** cancels queued and running jobs. A job that was applying or restoring is marked failed; use **Restore** to undo what it finished.
+- **Stop Servers** cancels queued and running jobs. A job that was applying or restoring is marked failed; use **Restore** to undo what it finished.
 - A 12-14B model makes mistakes: read the plan and the review before approving.
 
 ---

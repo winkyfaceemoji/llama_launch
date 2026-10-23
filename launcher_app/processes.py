@@ -98,7 +98,7 @@ def write_test_lock(path):
 
 
 def clear_test_lock(path):
-    # Missing is fine. Never fatal: startup and Exit Processes clear it again.
+    # Missing is fine. Never fatal: startup and Stop Servers clear it again.
     try:
         agent_jobs._retry(lambda: os.remove(path))  # the proxy may be reading it
     except OSError:

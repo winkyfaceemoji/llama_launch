@@ -8,7 +8,7 @@ from .paths import AGENT_API_URL
 from .theme import (ACCENT, BG, BG_INPUT, BG_PANEL, BORDER, DANGER, DANGER_HOVER, FONT_BTN, FONT_BTN_SM, FONT_ICON,
                     FONT_LOG, FONT_MONO, FONT_SMALL, FONT_TITLE, HOVER, H_CONFIG, H_NOTICE, LOG_MAX_LINES, SUCCESS,
                     SUCCESS_HOVER, TEXT_MUT, TEXT_PRI, TEXT_SEC, _palette)
-from .widgets import (DropdownButton, LogTab, card, copy_btn, flat_btn, log_line_is_error, section_label, small_btn,
+from .widgets import (DropdownButton, LogTab, card, copy_btn, flat_btn, log_line_is_error, outline_btn, section_label, small_btn,
                       style_toggle, trim_log)
 from . import theme
 theme.follow(globals())  # colour names follow set_palette (ADR 0020)
@@ -19,7 +19,7 @@ def _title_row(view, app):
     hdr = tk.Frame(view, bg=BG)
     hdr.grid(row=0, column=0, sticky="ew", padx=24, pady=(16, 0))
     tk.Label(hdr, text="Llama Launcher", font=FONT_TITLE, fg=TEXT_PRI, bg=BG).pack(side="left")
-    small_btn(hdr, "Settings", app.open_settings).pack(side="right")
+    outline_btn(hdr, "Settings", app.open_settings).pack(side="right")
 
 
 class SetupView(tk.Frame):
@@ -52,7 +52,7 @@ class SetupView(tk.Frame):
                  insertbackground=TEXT_PRI, relief="flat",
                  highlightthickness=1, highlightbackground=BORDER,
                  highlightcolor=ACCENT).grid(row=0, column=0, sticky="ew", ipady=6)
-        small_btn(path_row, "Browse", self._browse).grid(row=0, column=1, padx=(8, 0))
+        outline_btn(path_row, "Browse", self._browse).grid(row=0, column=1, padx=(8, 0))
         flat_btn(body, "Confirm", self._confirm, color=ACCENT, fg=BG).grid(row=3, column=0, sticky="ew", pady=(16, 0))
 
     def _browse(self):
@@ -111,7 +111,7 @@ class HomeView(_NoticeView):
         self.model_var = tk.StringVar()
         self.model_menu = DropdownButton(model_card, self.model_var)
         self.model_menu.grid(row=0, column=1, sticky="ew", pady=10)
-        small_btn(model_card, "Refresh", app.refresh_models).grid(row=0, column=2, padx=(6, 12), pady=10)
+        outline_btn(model_card, "Refresh", app.refresh_models).grid(row=0, column=2, padx=(6, 12), pady=10)
 
         preset_outer, preset_card = card(self)
         preset_outer.grid(row=3, column=0, padx=24, pady=(0, 8), sticky="ew")
@@ -228,7 +228,7 @@ class RunningView(_NoticeView):
         self.llama_log, self.uvx_log, self.proxy_log = self._log_tabs  # in the order built above
         self.show_log(self.llama_log)
 
-        # Test this model + Exit. Test is enabled only while the health poll says online.
+        # Test this model + Stop Servers. Test is enabled only while the health poll says online.
         exit_row = tk.Frame(self, bg=BG)
         exit_row.grid(row=8, column=0, sticky="ew", padx=24, pady=(0, 24))
         # Outline button: a Tk button on Windows draws no border of its own, so a 1px frame does.
@@ -240,7 +240,7 @@ class RunningView(_NoticeView):
                                   font=("Segoe UI", 11, "bold"), relief="flat", bd=0,
                                   padx=14, pady=11, cursor="hand2")
         self.test_btn.pack()
-        tk.Button(exit_row, text="Exit Processes", command=app.stop,
+        tk.Button(exit_row, text="Stop Servers", command=app.stop,
                   bg=DANGER, fg=BG, activebackground=DANGER_HOVER, activeforeground=BG,
                   font=("Segoe UI", 11, "bold"), relief="flat", bd=0, pady=12, cursor="hand2",
                   ).pack(side="left", fill="x", expand=True)

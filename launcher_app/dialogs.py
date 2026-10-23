@@ -18,7 +18,7 @@ from .theme import ACCENT, BG, BG_INPUT, BORDER, DANGER, FONT_BTN, FONT_BTN_SM, 
 from .config import PROMPT_TABS
 from .processes import clear_test_lock, read_test_jobs, test_temp_dirs
 from .updates import _http, parse_build
-from .widgets import flat_btn, section_label, small_btn, style_toggle
+from .widgets import flat_btn, outline_btn, section_label, small_btn, style_toggle
 from . import theme
 theme.follow(globals())  # colour names follow set_palette (ADR 0020)
 
@@ -222,7 +222,7 @@ class SettingsDialog(tk.Toplevel):
                  insertbackground=TEXT_PRI, relief="flat",
                  highlightthickness=1, highlightbackground=BORDER,
                  highlightcolor=ACCENT).grid(row=0, column=0, sticky="ew", ipady=6)
-        small_btn(path_row, "Browse", self._browse).grid(row=0, column=1, padx=(8, 0))
+        outline_btn(path_row, "Browse", self._browse).grid(row=0, column=1, padx=(8, 0))
         tk.Label(page, text="Where your models are; llama-server runs from here.",
                  font=FONT_SMALL, fg=TEXT_MUT, bg=BG).pack(padx=20, anchor="w", pady=(0, 14))
 
@@ -264,11 +264,11 @@ class SettingsDialog(tk.Toplevel):
         page = self._page(body, "Agents", back=True)
         if on_open_folders:
             row = self._row(page, "Agent folders", "The folders agents may read and organise.")
-            small_btn(row, "Manage…", lambda: on_open_folders(self)).pack(side="right")
+            outline_btn(row, "Manage…", lambda: on_open_folders(self)).pack(side="right")
         if on_open_prompts:
             row = self._row(page, "Prompts", "What the chat and each agent job are told. Saved in their own dialog.")
-            small_btn(row, "Edit…" if prompts_editable else "View…",
-                      lambda: on_open_prompts(self)).pack(side="right")
+            outline_btn(row, "Edit…" if prompts_editable else "View…",
+                        lambda: on_open_prompts(self)).pack(side="right")
         return page
 
     def _llama_page(self, body):
@@ -276,7 +276,7 @@ class SettingsDialog(tk.Toplevel):
         if self._rollback_build:
             row = self._row(page, "Roll back",
                             "Reinstalls the build you had before the last update, then runs the build check.")
-            small_btn(row, f"Roll back to b{self._rollback_build}", self._rollback).pack(side="right")
+            outline_btn(row, f"Roll back to b{self._rollback_build}", self._rollback).pack(side="right")
         else:
             note = ("Roll back is available while the servers are stopped." if self._previous_build
                     else "No earlier build is recorded. After an update, you can roll back here.")
@@ -696,7 +696,7 @@ class TestDialog(tk.Toplevel):
             threading.Thread(target=self._stop_sequence, daemon=True).start()
 
     def stop_now(self):
-        # Exit Processes: the same sequence without the question, on the UI thread,
+        # Stop Servers: the same sequence without the question, on the UI thread,
         # so it ends before the agents server is killed.
         if self._phase == "running":
             self._begin_stop()
