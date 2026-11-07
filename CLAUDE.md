@@ -49,4 +49,4 @@ Tkinter launcher (`launcher.pyw`, code in the `launcher_app/` package) that star
 - [0019](docs/adr/0019-model-test-uses-your-prompts.md) Model tests measure the user's own prompts; results record a prompt version and the report ranks only the newest one
 - [0020](docs/adr/0020-launcher-package.md) The launcher is the `launcher_app/` package; `launcher.pyw` is only the entry point; colour names follow `set_palette` through `theme.follow`
 - [0021](docs/adr/0021-process-control-stays-in-window.md) Process control stays in the window; no server-stack module for now (risk outweighed value)
-- [0022](docs/adr/0022-own-title-strip.md) The main window draws its own title strip (minimise and close only); Windows' title bar is removed, not `overrideredirect`
+- [0023](docs/adr/0023-own-title-strips-everywhere.md) Every launcher window draws its own title strip (main: minimise and close; dialogs: their name and close); Windows' title bars are removed, not `overrideredirect` (supersedes 0022)

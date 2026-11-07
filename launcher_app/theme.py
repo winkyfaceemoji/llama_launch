@@ -1,6 +1,7 @@
 """Palettes, fonts, window sizes and live theme switching (ADR 0014, 0020)."""
 from tkinter import ttk
 import ctypes
+from ctypes import wintypes
 import tkinter as tk
 import winreg
 
@@ -166,6 +167,23 @@ def remove_title_bar(win):
         return True
     except Exception:
         return False
+
+
+def set_client_size(win, width, height):
+    # Size a window's inside to exactly width x height. Once remove_title_bar has run, Tk's sum for the
+    # frame no longer matches Windows' (the client came out 2 px wider, 16 for Settings), so set it,
+    # read the real client size, and correct once. Before that, the first set is already exact.
+    win.geometry(f"{width}x{height}")
+    win.update_idletasks()
+    try:
+        rect = wintypes.RECT()
+        ctypes.windll.user32.GetClientRect(ctypes.windll.user32.GetParent(win.winfo_id()), ctypes.byref(rect))
+        dx, dy = rect.right - width, rect.bottom - height
+    except Exception:
+        return
+    if dx or dy:
+        win.geometry(f"{width - dx}x{height - dy}")
+        win.update_idletasks()
 
 
 def start_window_drag(win):

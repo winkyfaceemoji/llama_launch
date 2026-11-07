@@ -224,14 +224,26 @@ class DropdownButton(tk.Frame):
         self._popup = None
 
 
+def close_like_x(win):
+    # Close a dialog the way its X would: its own WM_DELETE_WINDOW command when it has one (Settings
+    # cancels; Update and Test refuse while working), else destroy it.
+    command = win.protocol("WM_DELETE_WINDOW")
+    if command:
+        win.tk.call(command)
+    else:
+        win.destroy()
+
+
 class TitleBar(tk.Frame):
-    # The main window's own top strip (ADR 0022), in place of Windows' title bar: drag it to move the
-    # window; minimise and close at the top right, 46 x 32 like Windows' caption buttons. No icon, title
-    # or maximise. Hover colours are read at hover time, so they follow a theme switch.
-    def __init__(self, master, on_minimise, on_close):
+    # Every window's own top strip, in place of Windows' title bar (ADR 0023): drag it to move the window;
+    # close (and minimise, for the main window) at the top right, 46 x 32 like Windows' caption buttons; a
+    # dialog's name at the left. No icon or maximise. Hover colours are read at hover time, so they follow
+    # a theme switch.
+    def __init__(self, master, on_close, on_minimise=None, title=None):
         super().__init__(master, bg=BG, height=H_BAR)
         self.pack_propagate(False)
-        for glyph, command, hover in (("\ue8bb", on_close, "DANGER"), ("\ue921", on_minimise, "HOVER")):
+        buttons = [("\ue8bb", on_close, "DANGER")] + ([("\ue921", on_minimise, "HOVER")] if on_minimise else [])
+        for glyph, command, hover in buttons:
             box = tk.Frame(self, bg=BG, width=46, height=H_BAR)
             box.pack_propagate(False)
             box.pack(side="right")
@@ -241,4 +253,8 @@ class TitleBar(tk.Frame):
                 bg=theme._palette[role], fg=theme._palette["BG" if role == "DANGER" else "TEXT_PRI"]))
             label.bind("<Leave>", lambda e, w=label: w.config(bg=theme._palette["BG"], fg=theme._palette["TEXT_SEC"]))
             label.bind("<ButtonRelease-1>", lambda e, run=command: run())
+        if title:
+            name = tk.Label(self, text=title, font=FONT_BTN_SM, fg=TEXT_SEC, bg=BG)
+            name.pack(side="left", padx=20)
+            name.bind("<Button-1>", lambda e: theme.start_window_drag(self.winfo_toplevel()))
         self.bind("<Button-1>", lambda e: theme.start_window_drag(self.winfo_toplevel()))

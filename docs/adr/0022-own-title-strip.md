@@ -1,6 +1,6 @@
 # 0022. The main window draws its own title strip: minimise and close only
 
-Status: Accepted
+Status: Superseded by 0023
 
 ## Context
 

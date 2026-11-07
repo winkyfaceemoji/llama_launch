@@ -14,11 +14,11 @@ import time
 import tkinter as tk
 import webbrowser
 from .paths import MODEL_TEST_LOCK
-from .theme import ACCENT, BG, BG_INPUT, BORDER, DANGER, FONT_BTN, FONT_BTN_SM, FONT_LOG, FONT_MONO, FONT_SMALL, HOVER, TEXT_MUT, TEXT_PRI, TEXT_SEC, THEMES, W_SETTINGS
+from .theme import ACCENT, BG, BG_INPUT, BORDER, DANGER, FONT_BTN, FONT_BTN_SM, FONT_LOG, FONT_MONO, FONT_SMALL, HOVER, TEXT_MUT, TEXT_PRI, TEXT_SEC, THEMES, H_BAR, W_SETTINGS, set_client_size
 from .config import PROMPT_TABS
 from .processes import clear_test_lock, read_test_jobs, test_temp_dirs
 from .updates import _http, parse_build
-from .widgets import flat_btn, outline_btn, section_label, small_btn, style_toggle
+from .widgets import TitleBar, close_like_x, flat_btn, outline_btn, section_label, small_btn, style_toggle
 from . import theme
 theme.follow(globals())  # colour names follow set_palette (ADR 0020)
 
@@ -28,6 +28,7 @@ class PresetDialog(tk.Toplevel):
         super().__init__(parent)
         self.title(title)
         self.configure(bg=BG)
+        TitleBar(self, lambda: close_like_x(self), title=title).pack(fill="x")
         self.resizable(True, True)
         self.grab_set()
 
@@ -36,7 +37,7 @@ class PresetDialog(tk.Toplevel):
         self.result_models  = None
         self._available_models = available_models or []
 
-        section_label(self, "Preset name").pack(fill="x", padx=20, pady=(16, 2))
+        section_label(self, "Preset name").pack(fill="x", padx=20, pady=(4, 2))
         self.name_var = tk.StringVar(value=name)
         tk.Entry(self, textvariable=self.name_var,
                  font=FONT_MONO, bg=BG_INPUT, fg=TEXT_PRI,
@@ -126,6 +127,7 @@ class SettingsDialog(tk.Toplevel):
         super().__init__(parent)
         self.title("Settings")
         self.configure(bg=BG)
+        TitleBar(self, lambda: close_like_x(self), title="Settings").pack(fill="x")
         self.resizable(False, False)
         self.protocol("WM_DELETE_WINDOW", self._cancel)
         self.grab_set()
@@ -162,7 +164,7 @@ class SettingsDialog(tk.Toplevel):
             page.pack_forget()
         self._pages[name].pack(fill="both", expand=True)
         self.update_idletasks()
-        self.geometry(f"{W_SETTINGS}x{self.winfo_reqheight()}")
+        set_client_size(self, W_SETTINGS, self.winfo_reqheight())  # exact even after the title bar is gone
 
     # ── page building blocks ──────────────────────────────────
 
@@ -170,10 +172,10 @@ class SettingsDialog(tk.Toplevel):
         page = tk.Frame(body, bg=BG)
         if back:
             top = tk.Frame(page, bg=BG)
-            top.pack(fill="x", padx=12, pady=(12, 0))
+            top.pack(fill="x", padx=12)
             small_btn(top, "‹ General", lambda: self._show("general")).pack(side="left")
         tk.Label(page, text=title, font=FONT_BTN, fg=TEXT_PRI, bg=BG).pack(
-            anchor="w", padx=20, pady=(8 if back else 20, 12))
+            anchor="w", padx=20, pady=(8 if back else 4, 12))
         return page
 
     def _row(self, page, label, note=None):
@@ -368,12 +370,13 @@ class FoldersDialog(tk.Toplevel):
         super().__init__(parent)
         self.title("Agent folders")
         self.configure(bg=BG)
-        self.geometry(f"{W_SETTINGS}x320")
+        TitleBar(self, lambda: close_like_x(self), title="Agent folders").pack(fill="x")
+        self.geometry(f"{W_SETTINGS}x{320 + H_BAR}")
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.grab_set()
         self._parent = parent
         self._policy = policy
-        section_label(self, "Folders agents can read").pack(fill="x", padx=20, pady=(20, 6))
+        section_label(self, "Folders agents can read").pack(fill="x", padx=20, pady=(4, 6))
         note = f"Agents always write only to {policy.sandbox}. Local drives only."
         if error:
             note += f" The sandbox can't be created: {error}"
@@ -445,6 +448,7 @@ class PromptsDialog(tk.Toplevel):
         super().__init__(parent)
         self.title("Prompts")
         self.configure(bg=BG)
+        TitleBar(self, lambda: close_like_x(self), title="Prompts").pack(fill="x")
         self.resizable(True, True)
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.grab_set()
@@ -453,7 +457,7 @@ class PromptsDialog(tk.Toplevel):
         self._key = None
 
         tabs = tk.Frame(self, bg=BG)
-        tabs.pack(fill="x", padx=20, pady=(20, 8))
+        tabs.pack(fill="x", padx=20, pady=(4, 8))
         self._tab_btns = {}
         for key, name in PROMPT_TABS:
             b = tk.Button(tabs, text=name, font=FONT_BTN_SM, relief="flat", bd=0, padx=10, pady=5,
@@ -561,14 +565,14 @@ class UpdateDialog(tk.Toplevel):
         super().__init__(parent)
         self.title(title)
         self.configure(bg=BG)
+        TitleBar(self, lambda: close_like_x(self), title=title).pack(fill="x")
         self.geometry(f"{W_SETTINGS}x360")
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.grab_set()
         self._on_done = on_done
         self._working = True
-        section_label(self, title).pack(fill="x", padx=20, pady=(20, 6))
         border = tk.Frame(self, bg=BORDER, padx=1, pady=1)
-        border.pack(fill="both", expand=True, padx=20)
+        border.pack(fill="both", expand=True, padx=20, pady=(4, 0))
         self._log = tk.Text(border, font=FONT_LOG, bg=BG_INPUT, fg=TEXT_PRI, height=10,
                             relief="flat", state=tk.DISABLED, wrap="word")
         sb = ttk.Scrollbar(border, orient="vertical", command=self._log.yview)
@@ -622,15 +626,15 @@ class TestDialog(tk.Toplevel):
         super().__init__(parent)
         self.title("Model test")
         self.configure(bg=BG)
+        TitleBar(self, lambda: close_like_x(self), title="Model test").pack(fill="x")
         self.geometry(f"{W_SETTINGS}x420")
         self.protocol("WM_DELETE_WINDOW", self._close)
         self._proc = proc
         self._phase = "running"  # running / stopping / done
         self._report_path = None
         self._last = ""
-        section_label(self, "Model test").pack(fill="x", padx=20, pady=(20, 6))
         border = tk.Frame(self, bg=BORDER, padx=1, pady=1)
-        border.pack(fill="both", expand=True, padx=20)
+        border.pack(fill="both", expand=True, padx=20, pady=(4, 0))
         self._log = tk.Text(border, font=FONT_LOG, bg=BG_INPUT, fg=TEXT_PRI, height=10,
                             relief="flat", state=tk.DISABLED, wrap="word")
         sb = ttk.Scrollbar(border, orient="vertical", command=self._log.yview)
