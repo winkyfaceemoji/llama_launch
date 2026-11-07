@@ -3,7 +3,8 @@ import collections
 import re
 import tkinter as tk
 from .paths import ICON_FILE
-from .theme import ACCENT, BG, BG_INPUT, BG_PANEL, BORDER, FONT_BTN, FONT_BTN_SM, FONT_SMALL, HOVER, TEXT_MUT, TEXT_PRI, TEXT_SEC
+from .theme import (ACCENT, BG, BG_INPUT, BG_PANEL, BORDER, FONT_BTN, FONT_BTN_SM, FONT_CAPTION, FONT_SMALL, H_BAR,
+                    HOVER, TEXT_MUT, TEXT_PRI, TEXT_SEC)
 from . import theme
 theme.follow(globals())  # colour names follow set_palette (ADR 0020)
 
@@ -221,3 +222,23 @@ class DropdownButton(tk.Frame):
 
     def _forget_popup(self):
         self._popup = None
+
+
+class TitleBar(tk.Frame):
+    # The main window's own top strip (ADR 0022), in place of Windows' title bar: drag it to move the
+    # window; minimise and close at the top right, 46 x 32 like Windows' caption buttons. No icon, title
+    # or maximise. Hover colours are read at hover time, so they follow a theme switch.
+    def __init__(self, master, on_minimise, on_close):
+        super().__init__(master, bg=BG, height=H_BAR)
+        self.pack_propagate(False)
+        for glyph, command, hover in (("\ue8bb", on_close, "DANGER"), ("\ue921", on_minimise, "HOVER")):
+            box = tk.Frame(self, bg=BG, width=46, height=H_BAR)
+            box.pack_propagate(False)
+            box.pack(side="right")
+            label = tk.Label(box, text=glyph, font=FONT_CAPTION, fg=TEXT_SEC, bg=BG)
+            label.pack(fill="both", expand=True)
+            label.bind("<Enter>", lambda e, w=label, role=hover: w.config(
+                bg=theme._palette[role], fg=theme._palette["BG" if role == "DANGER" else "TEXT_PRI"]))
+            label.bind("<Leave>", lambda e, w=label: w.config(bg=theme._palette["BG"], fg=theme._palette["TEXT_SEC"]))
+            label.bind("<ButtonRelease-1>", lambda e, run=command: run())
+        self.bind("<Button-1>", lambda e: theme.start_window_drag(self.winfo_toplevel()))

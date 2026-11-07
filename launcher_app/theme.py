@@ -79,6 +79,7 @@ FONT_SMALL  = ("Segoe UI", 10)
 FONT_BTN    = ("Segoe UI", 10, "bold")
 FONT_BTN_SM = ("Segoe UI", 10)
 FONT_ICON   = ("Segoe UI Symbol", 13)   # the preset "⋯" button
+FONT_CAPTION = ("Segoe MDL2 Assets", 8)  # the title strip's minimise and close glyphs, as Windows draws them
 FONT_MONO   = ("Cascadia Code", 10)
 FONT_LOG    = ("Cascadia Code", 10)
 
@@ -89,6 +90,7 @@ H_CONFIG    = 280    # height of the main config view
 H_NOTICE    = 76     # added while the llama.cpp update notice shows
 W_SETTINGS      = 460   # settings dialog width (its height follows the page shown)
 H_RUNNING   = 750   # height of the running/log view
+H_BAR       = 32    # the main window's own title strip (ADR 0022), added to each view's height
 LOG_MAX_LINES = 5000  # lines each log pane keeps; older ones are dropped so a long session stays responsive
 
 
@@ -139,6 +141,40 @@ def set_dark_title_bar(win, dark):
         ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(value), ctypes.sizeof(value))
         # Windows repaints the frame only when told it changed (SWP_NOSIZE|NOMOVE|NOZORDER|NOACTIVATE|FRAMECHANGED).
         ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020)
+    except Exception:
+        pass
+
+
+def remove_title_bar(win):
+    # The main window draws its own minimise and close (ADR 0022). Clearing WS_CAPTION takes the icon,
+    # title and maximise with it and keeps the frame: resize edges and the taskbar entry. Tk rebuilds the
+    # window's style on resizable(), so call this again after each one. Returns True when it removed the
+    # bar: Tk sized the window with the bar in it, so the caller sizes it again or a blank band shows
+    # where the bar was. Asks for rounded corners too: without a title bar or resize edges (the fixed-size
+    # home view), Windows 11 would draw square ones with no border. Cosmetic: never raises.
+    try:
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetParent(win.winfo_id())
+        style = user32.GetWindowLongW(hwnd, -16)  # GWL_STYLE
+        if not style & 0x00C00000:  # WS_CAPTION
+            return False
+        user32.SetWindowLongW(hwnd, -16, style & ~0x00C00000)
+        # SWP_NOSIZE|NOMOVE|NOZORDER|NOACTIVATE|FRAMECHANGED, so Windows redraws the frame now.
+        user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020)
+        round_corners = ctypes.c_int(2)  # DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUND
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(round_corners), ctypes.sizeof(round_corners))
+        return True
+    except Exception:
+        return False
+
+
+def start_window_drag(win):
+    # Hand a press on the title strip to Windows as a press on a title bar, so Windows moves the window
+    # (and snaps it to screen edges) exactly as it would for a native one. Never raises.
+    try:
+        user32 = ctypes.windll.user32
+        user32.ReleaseCapture()
+        user32.SendMessageW(user32.GetParent(win.winfo_id()), 0x00A1, 2, 0)  # WM_NCLBUTTONDOWN, HTCAPTION
     except Exception:
         pass
 

@@ -16,12 +16,12 @@ import urllib.error
 import urllib.request
 import webbrowser
 from .paths import AGENTS_SERVER, API_KEY_FILE, CONFIG_FILE, ICON_FILE, MODEL_TEST_LOCK, ROOT
-from .theme import BG, CURRENT_THEME, DANGER, H_RUNNING, H_SETUP, W, apply_theme, apply_ttk_style, resolve_theme, set_dark_title_bar, set_palette, windows_light
+from .theme import BG, CURRENT_THEME, DANGER, H_BAR, H_RUNNING, H_SETUP, W, apply_theme, apply_ttk_style, remove_title_bar, resolve_theme, set_dark_title_bar, set_palette, windows_light
 from .selection import PresetError, Selection
 from .config import ConfigError, ConfigStore, UVX_COMMAND, backup_config, load_api_key, migrate_uvx_command, remove_stale_agents_entry, resolve_uvx_command, set_prompts, shipped_prompts
 from .processes import clear_test_lock, health_status, is_own_process, listening_pids, model_test_command, write_test_lock
 from .updates import UpdateRunner
-from .widgets import _TRAY_AVAILABLE, _make_tray_image, popup_menu, pystray
+from .widgets import _TRAY_AVAILABLE, TitleBar, _make_tray_image, popup_menu, pystray
 from .views import HomeView, RunningView, SetupView
 from .dialogs import FoldersDialog, PresetDialog, PromptsDialog, SettingsDialog, TestDialog, UpdateDialog
 from . import theme
@@ -63,14 +63,18 @@ class CommandLauncherGUI:
         # A model test lock left by a crash would keep Web UI chat paused.
         clear_test_lock(MODEL_TEST_LOCK)
 
+        # Our own title strip in place of Windows' title bar (ADR 0022): only minimise and close. The
+        # native bar comes off when the window first shows, and again after each resizable() call.
+        TitleBar(master, master.iconify, self._force_exit).grid(row=0, column=0, sticky="ew")
+        master.bind("<Map>", lambda e: e.widget is master and self._remove_title_bar(), add="+")
         master.grid_columnconfigure(0, weight=1)
-        master.grid_rowconfigure(0, weight=1)
+        master.grid_rowconfigure(1, weight=1)
         self.view = None            # the shown SetupView, HomeView or RunningView
         self.running = False        # the servers are up: between Launch and Stop Servers
         self._update_builds = None  # (installed, newest) once the startup check finds a newer build
         if not self.llama_dir:
             self._switch(SetupView)
-            master.geometry(f"{W}x{H_SETUP}")
+            master.geometry(f"{W}x{H_SETUP + H_BAR}")
         else:
             self._start()
 
@@ -82,7 +86,7 @@ class CommandLauncherGUI:
         if self.view is not None:
             self.view.destroy()
         self.view = view_class(self.master, self)
-        self.view.grid(row=0, column=0, sticky="nsew")
+        self.view.grid(row=1, column=0, sticky="nsew")
         return self.view
 
     def finish_setup(self, path):
@@ -136,6 +140,7 @@ class CommandLauncherGUI:
         home.show_selection(self.selection.view)
         home.show_update(self._update_builds)
         self.master.resizable(False, False)
+        self._remove_title_bar()  # resizable() rebuilds the window's style
         self._resize_config()
 
 
@@ -237,9 +242,21 @@ class CommandLauncherGUI:
 
     # ── Window sizing ─────────────────────────────────────────
 
+    def _remove_title_bar(self):
+        # Windows' title bar off (ADR 0022). Tk sized the window with the bar in it and then stretched the
+        # view into the freed space, so set the view's intended size again, or a blank band shows under it.
+        if not remove_title_bar(self.master):
+            return
+        if isinstance(self.view, SetupView):
+            self.master.geometry(f"{W}x{H_SETUP + H_BAR}")
+        elif isinstance(self.view, RunningView):
+            self.master.geometry(f"{W}x{H_RUNNING + H_BAR}")
+        else:
+            self._resize_config()
+
     def _resize_config(self):
         if isinstance(self.view, HomeView):
-            self.master.geometry(f"{W}x{self.view.height()}")
+            self.master.geometry(f"{W}x{self.view.height() + H_BAR}")
 
     def _on_escape(self, event):
         win = event.widget.winfo_toplevel()
@@ -306,7 +323,8 @@ class CommandLauncherGUI:
         self._llama_label_var, self._uvx_label_var = rv.llama_label_var, rv.uvx_label_var
         self._proxy_label_var, self._elapsed_var, self.test_btn = rv.proxy_label_var, rv.elapsed_var, rv.test_btn
         self.master.resizable(True, True)
-        self.master.geometry(f"{W}x{H_RUNNING}")
+        self._remove_title_bar()  # resizable() rebuilds the window's style
+        self.master.geometry(f"{W}x{H_RUNNING + H_BAR}")
 
     def stop(self):
         # Stop Servers: stop everything, then a fresh home view.
