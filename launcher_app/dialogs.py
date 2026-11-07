@@ -14,7 +14,7 @@ import time
 import tkinter as tk
 import webbrowser
 from .paths import MODEL_TEST_LOCK
-from .theme import ACCENT, BG, BG_INPUT, BORDER, DANGER, FONT_BTN, FONT_BTN_SM, FONT_LOG, FONT_MONO, FONT_SMALL, HOVER, TEXT_MUT, TEXT_PRI, TEXT_SEC, THEMES, H_BAR, W_SETTINGS, set_client_size
+from .theme import ACCENT, BG, BG_INPUT, BORDER, DANGER, FONT_BTN, FONT_BTN_SM, FONT_LOG, FONT_MONO, FONT_SMALL, HOVER, TEXT_MUT, TEXT_PRI, TEXT_SEC, THEMES, H_BAR, W_SETTINGS, set_client_size, set_resizable
 from .config import PROMPT_TABS
 from .processes import clear_test_lock, read_test_jobs, test_temp_dirs
 from .updates import _http, parse_build
@@ -128,7 +128,7 @@ class SettingsDialog(tk.Toplevel):
         self.title("Settings")
         self.configure(bg=BG)
         TitleBar(self, lambda: close_like_x(self), title="Settings").pack(fill="x")
-        self.resizable(False, False)
+        set_resizable(self, False)
         self.protocol("WM_DELETE_WINDOW", self._cancel)
         self.grab_set()
 

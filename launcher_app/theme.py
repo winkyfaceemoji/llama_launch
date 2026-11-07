@@ -153,13 +153,17 @@ def remove_title_bar(win):
     # bar: Tk sized the window with the bar in it, so the caller sizes it again or a blank band shows
     # where the bar was. Asks for rounded corners too: without a title bar or resize edges (the fixed-size
     # home view), Windows 11 would draw square ones with no border. Cosmetic: never raises.
+    # A window made fixed-size by set_resizable also loses its resize edges and maximise here.
     try:
         user32 = ctypes.windll.user32
         hwnd = user32.GetParent(win.winfo_id())
         style = user32.GetWindowLongW(hwnd, -16)  # GWL_STYLE
         if not style & 0x00C00000:  # WS_CAPTION
             return False
-        user32.SetWindowLongW(hwnd, -16, style & ~0x00C00000)
+        remove = 0x00C00000
+        if getattr(win, "_fixed_size", False):
+            remove |= 0x00040000 | 0x00010000  # WS_THICKFRAME, WS_MAXIMIZEBOX
+        user32.SetWindowLongW(hwnd, -16, style & ~remove)
         # SWP_NOSIZE|NOMOVE|NOZORDER|NOACTIVATE|FRAMECHANGED, so Windows redraws the frame now.
         user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020)
         round_corners = ctypes.c_int(2)  # DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUND
@@ -167,6 +171,17 @@ def remove_title_bar(win):
         return True
     except Exception:
         return False
+
+
+def set_resizable(win, resizable):
+    # Use instead of win.resizable() to make a window fixed-size, or resizable again, once its title bar
+    # comes off (a dialog that is always resizable can keep Tk's default). Tk is always told the
+    # window is resizable; a fixed one loses its resize edges in remove_title_bar instead. Tk pins a
+    # window it thinks is fixed to its width plus the frame of the title bar it thinks is still there
+    # (16 px more): Windows applied that on every step of a drag, Tk read the wider window back, and the
+    # window grew 16 px per step. Like resizable(), it rebuilds the style: remove the title bar after it.
+    win._fixed_size = not resizable
+    win.resizable(True, True)
 
 
 def set_client_size(win, width, height):
@@ -188,11 +203,14 @@ def set_client_size(win, width, height):
 
 def start_window_drag(win):
     # Hand a press on the title strip to Windows as a press on a title bar, so Windows moves the window
-    # (and snaps it to screen edges) exactly as it would for a native one. Never raises.
+    # (and snaps it to screen edges) exactly as it would for a native one. Posted, not sent: Windows'
+    # move loop then runs from Tk's own event loop. Sent from here, it ran inside this ctypes call with
+    # Python's lock released, and any Tk timer or event that fired during the drag killed the process.
+    # Never raises.
     try:
         user32 = ctypes.windll.user32
         user32.ReleaseCapture()
-        user32.SendMessageW(user32.GetParent(win.winfo_id()), 0x00A1, 2, 0)  # WM_NCLBUTTONDOWN, HTCAPTION
+        user32.PostMessageW(user32.GetParent(win.winfo_id()), 0x00A1, 2, 0)  # WM_NCLBUTTONDOWN, HTCAPTION
     except Exception:
         pass
 

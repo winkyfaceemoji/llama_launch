@@ -16,7 +16,7 @@ import urllib.error
 import urllib.request
 import webbrowser
 from .paths import AGENTS_SERVER, API_KEY_FILE, CONFIG_FILE, ICON_FILE, MODEL_TEST_LOCK, ROOT
-from .theme import BG, CURRENT_THEME, DANGER, H_BAR, H_RUNNING, H_SETUP, W, apply_theme, apply_ttk_style, remove_title_bar, resolve_theme, set_client_size, set_dark_title_bar, set_palette, windows_light
+from .theme import BG, CURRENT_THEME, DANGER, H_BAR, H_RUNNING, H_SETUP, W, apply_theme, apply_ttk_style, remove_title_bar, resolve_theme, set_client_size, set_dark_title_bar, set_resizable, set_palette, windows_light
 from .selection import PresetError, Selection
 from .config import ConfigError, ConfigStore, UVX_COMMAND, backup_config, load_api_key, migrate_uvx_command, remove_stale_agents_entry, resolve_uvx_command, set_prompts, shipped_prompts
 from .processes import clear_test_lock, health_status, is_own_process, listening_pids, model_test_command, write_test_lock
@@ -43,7 +43,7 @@ class CommandLauncherGUI:
         set_palette(resolve_theme(self._theme, windows_light()))
         master.title("")
         master.configure(bg=BG)
-        master.resizable(False, False)
+        set_resizable(master, False)
         master.iconbitmap(default=ICON_FILE)  # default= gives every dialog the icon too
 
         apply_ttk_style()
@@ -143,7 +143,7 @@ class CommandLauncherGUI:
         home = self._switch(HomeView)
         home.show_selection(self.selection.view)
         home.show_update(self._update_builds)
-        self.master.resizable(False, False)
+        set_resizable(self.master, False)
         self._remove_title_bar()  # resizable() rebuilds the window's style
         self._resize_config()
 
@@ -332,7 +332,7 @@ class CommandLauncherGUI:
         self.llama_log, self.uvx_log, self.proxy_log = rv.llama_log, rv.uvx_log, rv.proxy_log
         self._llama_label_var, self._uvx_label_var = rv.llama_label_var, rv.uvx_label_var
         self._proxy_label_var, self._elapsed_var, self.test_btn = rv.proxy_label_var, rv.elapsed_var, rv.test_btn
-        self.master.resizable(True, True)
+        set_resizable(self.master, True)
         self._remove_title_bar()  # resizable() rebuilds the window's style
         set_client_size(self.master, W, H_RUNNING + H_BAR)
 
