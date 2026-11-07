@@ -29,7 +29,6 @@ class PresetDialog(tk.Toplevel):
         self.title(title)
         self.configure(bg=BG)
         self.resizable(True, True)
-        self.geometry("720x540")
         self.grab_set()
 
         self.result_name    = None
@@ -45,9 +44,7 @@ class PresetDialog(tk.Toplevel):
                  highlightthickness=1, highlightbackground=BORDER,
                  highlightcolor=ACCENT).pack(fill="x", padx=20, ipady=6)
 
-        section_label(self, "Applies to models").pack(fill="x", padx=20, pady=(14, 2))
-        tk.Label(self, text="Select models this preset applies to — leave none selected to match all",
-                 font=FONT_SMALL, fg=TEXT_MUT, bg=BG).pack(padx=20, anchor="w", pady=(0, 4))
+        section_label(self, "Applies to models (none selected: all)").pack(fill="x", padx=20, pady=(14, 2))
 
         list_frame = tk.Frame(self, bg=BORDER)
         list_frame.pack(fill="x", padx=20)
@@ -79,11 +76,13 @@ class PresetDialog(tk.Toplevel):
             self.models_listbox.insert(tk.END, "(no models found — will match all)")
             self.models_listbox.config(fg=TEXT_MUT)
 
-        section_label(self, "Command template: use {model} as the model path placeholder").pack(
-            fill="x", padx=20, pady=(14, 2)
-        )
+        # The button row is packed before the command box, at the bottom, so a short window shrinks the box
+        # and never cuts off Save.
+        btn_row = tk.Frame(self, bg=BG)
+        btn_row.pack(side="bottom", padx=20, pady=14, fill="x")
+        section_label(self, "Command ({model} is the model's path)").pack(fill="x", padx=20, pady=(14, 2))
         self.cmd_text = tk.Text(
-            self, height=6, font=FONT_MONO,
+            self, height=3, font=FONT_MONO,
             bg=BG_INPUT, fg=TEXT_PRI, insertbackground=TEXT_PRI,
             relief="flat", wrap="word",
             highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT,
@@ -91,10 +90,10 @@ class PresetDialog(tk.Toplevel):
         self.cmd_text.pack(padx=20, fill="both", expand=True)
         self.cmd_text.insert("1.0", command)
 
-        btn_row = tk.Frame(self, bg=BG)
-        btn_row.pack(padx=20, pady=14, fill="x")
         flat_btn(btn_row, "Save", self._save, color=ACCENT, fg=BG).pack(side="left", padx=(0, 8))
         small_btn(btn_row, "Cancel", self.destroy).pack(side="left")
+        self.update_idletasks()
+        self.geometry(f"{W_SETTINGS}x{self.winfo_reqheight()}")  # Settings' width; tall enough for its content
 
     def _save(self):
         name = self.name_var.get().strip()
@@ -447,7 +446,6 @@ class PromptsDialog(tk.Toplevel):
         self.title("Prompts")
         self.configure(bg=BG)
         self.resizable(True, True)
-        self.geometry("760x580")
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.grab_set()
         self._parent, self._shipped, self._editable, self._on_save = parent, shipped, editable, on_save
@@ -469,6 +467,10 @@ class PromptsDialog(tk.Toplevel):
         self._status = tk.Label(self, font=FONT_SMALL, fg=TEXT_SEC, bg=BG, anchor="w")
         self._status.pack(fill="x", padx=20, pady=(2, 8))
 
+        # The button row is packed before the text box, at the bottom, so a short window shrinks the box
+        # and never cuts off the row.
+        row = tk.Frame(self, bg=BG)
+        row.pack(side="bottom", fill="x", padx=20, pady=14)
         box = tk.Frame(self, bg=BG)
         box.pack(fill="both", expand=True, padx=20)
         scrollbar = ttk.Scrollbar(box, orient="vertical")
@@ -481,8 +483,6 @@ class PromptsDialog(tk.Toplevel):
         self._text.pack(side="left", fill="both", expand=True)
         self._text.bind("<<Modified>>", self._on_modified)
 
-        row = tk.Frame(self, bg=BG)
-        row.pack(fill="x", padx=20, pady=14)
         if editable:
             flat_btn(row, "Save", self._save, color=ACCENT, fg=BG).pack(side="left", padx=(0, 8))
             small_btn(row, "Reset to default", self._reset).pack(side="left")
@@ -491,6 +491,8 @@ class PromptsDialog(tk.Toplevel):
                      font=FONT_SMALL, fg=TEXT_SEC, bg=BG).pack(side="left")
         small_btn(row, "Close", self._close).pack(side="right")
         self._select("chat")
+        self.update_idletasks()
+        self.geometry(f"760x{self.winfo_reqheight()}")  # tall enough for its content, like Settings
 
     def _current(self):
         return self._text.get("1.0", "end-1c")

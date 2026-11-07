@@ -48,11 +48,13 @@ def trim_log(widget, max_lines):
 
 
 def style_toggle(button, on):
-    # One button of a segmented choice (Settings' Yes/No and Theme, the log tabs).
+    # One button of a segmented choice (Settings' Yes/No and Theme, the log and Prompts tabs). The chosen
+    # one is a muted grey, not the ACCENT fill, which means an action (Save, Confirm); design council,
+    # 2026-11-07. Colour only, no bold: a bold label is wider and would shift the tabs when one is picked.
     if on:
-        button.config(bg=ACCENT, fg=BG, activebackground=ACCENT, activeforeground=BG)
+        button.config(bg=BORDER, fg=TEXT_PRI, activebackground=BORDER, activeforeground=TEXT_PRI)
     else:
-        button.config(bg=BG_INPUT, fg=TEXT_SEC, activebackground=BORDER, activeforeground=TEXT_PRI)
+        button.config(bg=BG_INPUT, fg=TEXT_MUT, activebackground=HOVER, activeforeground=TEXT_PRI)
 
 
 def flat_btn(parent, text, command, color=None, fg=None, **kw):
