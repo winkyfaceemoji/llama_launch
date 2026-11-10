@@ -87,7 +87,7 @@ FONT_LOG    = ("Cascadia Code", 10)
 # Window dimensions — fixed size, no manual resizing
 W           = 480
 H_SETUP     = 280    # height of the first-run setup screen
-H_CONFIG    = 280    # height of the main config view
+H_CONFIG    = 260    # height of the main config view (Model and Preset share one card)
 H_NOTICE    = 76     # added while the llama.cpp update notice shows
 W_SETTINGS      = 460   # settings dialog width (its height follows the page shown)
 H_RUNNING   = 750   # height of the running/log view

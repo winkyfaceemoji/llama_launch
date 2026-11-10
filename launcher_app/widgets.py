@@ -137,8 +137,9 @@ class _MenuProxy:
         self._items.append((label, command or (lambda: None)))
 
 
-def popup_menu(anchor, items, width=None, right=False, on_close=None):
+def popup_menu(anchor, items, width=None, right=False, on_close=None, selected=None):
     # A themed borderless menu under anchor; items are (label, command) or (label, command, fg).
+    # The item labelled selected (a dropdown's current choice) gets the chosen-option grey, as style_toggle.
     # It closes on a pick, on focus loss or on Esc, and returns the popup window.
     anchor.update_idletasks()
     popup = tk.Toplevel(anchor)
@@ -158,7 +159,7 @@ def popup_menu(anchor, items, width=None, right=False, on_close=None):
             close()  # first, so a dialog the command opens doesn't sit under the menu
             c()
         tk.Button(inner, text=label, anchor="w",
-                  bg=BG_INPUT, fg=fg[0] if fg else TEXT_PRI,
+                  bg=BORDER if label == selected else BG_INPUT, fg=fg[0] if fg else TEXT_PRI,
                   activebackground=ACCENT, activeforeground=BG,
                   font=FONT_SMALL, relief="flat", bd=0,
                   highlightthickness=0, padx=10, pady=5,
@@ -218,7 +219,8 @@ class DropdownButton(tk.Frame):
 
     def _show_popup(self):
         self.update_idletasks()
-        self._popup = popup_menu(self, self.menu._items, width=self.winfo_width(), on_close=self._forget_popup)
+        self._popup = popup_menu(self, self.menu._items, width=self.winfo_width(), on_close=self._forget_popup,
+                                 selected=self._var.get())
 
     def _forget_popup(self):
         self._popup = None

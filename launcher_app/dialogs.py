@@ -47,7 +47,9 @@ class PresetDialog(tk.Toplevel):
 
         section_label(self, "Applies to models (none selected: all)").pack(fill="x", padx=20, pady=(14, 2))
 
-        list_frame = tk.Frame(self, bg=BORDER)
+        # A 1px border and a little inner padding, like the entry and text boxes (a Listbox has no padx).
+        list_frame = tk.Frame(self, bg=BG_INPUT, highlightthickness=1, highlightbackground=BORDER,
+                              highlightcolor=BORDER)
         list_frame.pack(fill="x", padx=20)
         scrollbar = ttk.Scrollbar(list_frame, orient="vertical")
         self.models_listbox = tk.Listbox(
@@ -61,7 +63,7 @@ class PresetDialog(tk.Toplevel):
             height=min(max(len(self._available_models), 1), 5),
         )
         scrollbar.config(command=self.models_listbox.yview)
-        self.models_listbox.pack(side="left", fill="x", expand=True)
+        self.models_listbox.pack(side="left", fill="x", expand=True, padx=(8, 0), pady=6)
         if self._available_models:
             scrollbar.pack(side="right", fill="y")
 
@@ -85,7 +87,7 @@ class PresetDialog(tk.Toplevel):
         self.cmd_text = tk.Text(
             self, height=3, font=FONT_MONO,
             bg=BG_INPUT, fg=TEXT_PRI, insertbackground=TEXT_PRI,
-            relief="flat", wrap="word",
+            relief="flat", wrap="word", padx=8, pady=6,
             highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT,
         )
         self.cmd_text.pack(padx=20, fill="both", expand=True)
@@ -383,9 +385,12 @@ class FoldersDialog(tk.Toplevel):
         tk.Label(self, text=note,
                  font=FONT_SMALL, fg=TEXT_MUT, bg=BG, wraplength=W_SETTINGS - 40,
                  justify="left").pack(padx=20, anchor="w")
-        self._list = tk.Listbox(self, font=FONT_MONO, bg=BG_INPUT, fg=TEXT_PRI, relief="flat",
-                                highlightthickness=1, highlightbackground=BORDER, height=8)
-        self._list.pack(fill="both", expand=True, padx=20, pady=10)
+        box = tk.Frame(self, bg=BG_INPUT, highlightthickness=1, highlightbackground=BORDER, highlightcolor=BORDER)
+        box.pack(fill="both", expand=True, padx=20, pady=10)
+        self._list = tk.Listbox(box, font=FONT_MONO, bg=BG_INPUT, fg=TEXT_PRI, relief="flat", bd=0,
+                                selectbackground=ACCENT, selectforeground=BG, activestyle="none",
+                                highlightthickness=0, height=8)
+        self._list.pack(fill="both", expand=True, padx=8, pady=6)
         row = tk.Frame(self, bg=BG)
         row.pack(fill="x", padx=20, pady=(0, 20))
         flat_btn(row, "Add folder…", self._add).pack(side="left", padx=(0, 8))
@@ -478,7 +483,9 @@ class PromptsDialog(tk.Toplevel):
         box = tk.Frame(self, bg=BG)
         box.pack(fill="both", expand=True, padx=20)
         scrollbar = ttk.Scrollbar(box, orient="vertical")
-        self._text = tk.Text(box, font=FONT_MONO, bg=BG_INPUT, fg=TEXT_PRI, insertbackground=TEXT_PRI,
+        # Read-only text is a step quieter than editable text, so the lock shows in the box itself.
+        self._text = tk.Text(box, font=FONT_MONO, bg=BG_INPUT, fg=TEXT_PRI if editable else TEXT_SEC,
+                             insertbackground=TEXT_PRI,
                              relief="flat", wrap="word", padx=8, pady=6, undo=True,
                              highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT,
                              yscrollcommand=scrollbar.set)
@@ -490,9 +497,6 @@ class PromptsDialog(tk.Toplevel):
         if editable:
             flat_btn(row, "Save", self._save, color=ACCENT, fg=BG).pack(side="left", padx=(0, 8))
             small_btn(row, "Reset to default", self._reset).pack(side="left")
-        else:
-            tk.Label(row, text="The servers are running, so these are read-only. Stop them to edit.",
-                     font=FONT_SMALL, fg=TEXT_SEC, bg=BG).pack(side="left")
         small_btn(row, "Close", self._close).pack(side="right")
         self._select("chat")
         self.update_idletasks()
@@ -525,7 +529,9 @@ class PromptsDialog(tk.Toplevel):
         # A blank agent prompt means the shipped one, so it isn't "modified".
         modified = text != self._shipped[self._key] and (self._key == "chat" or text.strip())
         state = "Modified from the default" if modified else "Default"
-        self._status.config(text=f"{state}  ·  {len(text):,} characters")
+        # While the servers run, the lock is said first, on the line under the tabs where the eye already is.
+        lock = "" if self._editable else "Read-only: stop the servers to edit  ·  "
+        self._status.config(text=f"{lock}{state}  ·  {len(text):,} characters")
 
     def _reset(self):
         self._text.delete("1.0", "end")
@@ -608,7 +614,7 @@ class UpdateDialog(tk.Toplevel):
 
     def _finish(self, ok, message):
         self._working = False
-        self._status.config(text=message, fg=TEXT_PRI)
+        self._status.config(text=message, fg=TEXT_PRI if ok else DANGER)  # failure in red, as the Test dialog
         self._close_btn.config(state=tk.NORMAL)
         if self._on_done:
             self._on_done(ok)

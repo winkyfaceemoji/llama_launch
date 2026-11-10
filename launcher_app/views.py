@@ -107,26 +107,24 @@ class HomeView(_NoticeView):
         _title_row(self, app)
         self._build_notice(app, can_update=True)
 
-        model_outer, model_card = card(self)
-        model_outer.grid(row=2, column=0, padx=24, pady=(16, 8), sticky="ew")
-        model_card.grid_columnconfigure(1, weight=1)
-        section_label(model_card, "Model").grid(row=0, column=0, sticky="w", padx=(12, 6), pady=10)
+        # Model and Preset share one card and its columns, so both dropdowns end at the same x.
+        choice_outer, choice = card(self)
+        choice_outer.grid(row=2, column=0, padx=24, pady=(16, 8), sticky="ew")
+        choice.grid_columnconfigure(1, weight=1)
+        section_label(choice, "Model").grid(row=0, column=0, sticky="w", padx=(12, 6), pady=(10, 5))
         self.model_var = tk.StringVar()
-        self.model_menu = DropdownButton(model_card, self.model_var)
-        self.model_menu.grid(row=0, column=1, sticky="ew", pady=10)
-        outline_btn(model_card, "Refresh", app.refresh_models).grid(row=0, column=2, padx=(6, 12), pady=10)
+        self.model_menu = DropdownButton(choice, self.model_var)
+        self.model_menu.grid(row=0, column=1, sticky="ew", pady=(10, 5))
+        outline_btn(choice, "Refresh", app.refresh_models).grid(row=0, column=2, padx=(6, 12), pady=(10, 5))
 
-        preset_outer, preset_card = card(self)
-        preset_outer.grid(row=3, column=0, padx=24, pady=(0, 8), sticky="ew")
-        preset_card.grid_columnconfigure(1, weight=1)
-        section_label(preset_card, "Preset").grid(row=0, column=0, sticky="w", padx=(12, 6), pady=10)
+        section_label(choice, "Preset").grid(row=1, column=0, sticky="w", padx=(12, 6), pady=(5, 10))
         self.preset_var = tk.StringVar()
-        self.preset_menu = DropdownButton(preset_card, self.preset_var)
-        self.preset_menu.grid(row=0, column=1, sticky="ew", pady=10)
+        self.preset_menu = DropdownButton(choice, self.preset_var)
+        self.preset_menu.grid(row=1, column=1, sticky="ew", pady=(5, 10))
         # + Add, Edit and Delete live behind one "⋯" button, so the row holds just the choice.
-        self.preset_more = small_btn(preset_card, "⋯", app.open_preset_menu, width=3)
+        self.preset_more = small_btn(choice, "⋯", app.open_preset_menu, width=3)
         self.preset_more.config(font=FONT_ICON, pady=0)
-        self.preset_more.grid(row=0, column=2, padx=(6, 12), pady=10)
+        self.preset_more.grid(row=1, column=2, padx=(6, 12), pady=(5, 10))
 
         tk.Button(self, text="Launch Server", command=app.launch,
                   bg=SUCCESS, fg=BG, activebackground=SUCCESS_HOVER, activeforeground=BG,
@@ -221,12 +219,14 @@ class RunningView(_NoticeView):
             txt.configure(yscrollcommand=sb.set)
             sb.pack(side="right", fill="y")
             txt.pack(side="left", fill="both", expand=True)
-            tab = tk.Frame(tab_row, bg=BG)
+            # The tab's frame and dot share the unshown tab's fill, so a dot reads as part of its own tab.
+            tab = tk.Frame(tab_row, bg=BG_INPUT)
             tab.pack(side="left", padx=(0, 3))
             btn = tk.Button(tab, text=name, font=FONT_BTN_SM, relief="flat", bd=0, padx=10, pady=4,
                             cursor="hand2", command=lambda t=txt: self.show_log(t))
             btn.pack(side="left")
-            dot = tk.Label(tab, text="●", font=FONT_SMALL, fg=DANGER, bg=BG)  # packed only after an error line
+            dot = tk.Label(tab, text="●", font=FONT_SMALL, fg=DANGER, bg=BG_INPUT, cursor="hand2")  # packed after an error line
+            dot.bind("<Button-1>", lambda e, t=txt: self.show_log(t))
             self._log_tabs[txt] = LogTab(frame, btn, dot, label_var)
         self.llama_log, self.uvx_log, self.proxy_log = self._log_tabs  # in the order built above
         self.show_log(self.llama_log)
@@ -275,7 +275,7 @@ class RunningView(_NoticeView):
         widget.insert("end", text + "\n")
         trim_log(widget, LOG_MAX_LINES)
         if widget is not self._shown_log and log_line_is_error(text):
-            self._log_tabs[widget].dot.pack(side="left", padx=(0, 4))
+            self._log_tabs[widget].dot.pack(side="left", padx=(0, 8))
         if self.autoscroll_var.get():
             widget.see("end")
         widget.config(state=tk.DISABLED)
