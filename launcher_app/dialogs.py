@@ -277,7 +277,7 @@ class SettingsDialog(tk.Toplevel):
     def _llama_page(self, body):
         page = self._page(body, "llama.cpp", back=True)
         if self._rollback_build:
-            row = self._row(page, "Roll back",
+            row = self._row(page, "Earlier build",  # the button says "Roll back"; the label names what it acts on
                             "Reinstalls the build you had before the last update, then runs the build check.")
             outline_btn(row, f"Roll back to b{self._rollback_build}", self._rollback).pack(side="right")
         else:
@@ -378,7 +378,9 @@ class FoldersDialog(tk.Toplevel):
         self.grab_set()
         self._parent = parent
         self._policy = policy
-        section_label(self, "Folders agents can read").pack(fill="x", padx=20, pady=(4, 6))
+        # A heading in primary text over the muted note, as Settings' rows are.
+        tk.Label(self, text="Folders agents can read", font=FONT_SMALL, fg=TEXT_PRI, bg=BG,
+                 anchor="w").pack(fill="x", padx=20, pady=(8, 10))
         note = f"Agents always write only to {policy.sandbox}. Local drives only."
         if error:
             note += f" The sandbox can't be created: {error}"
