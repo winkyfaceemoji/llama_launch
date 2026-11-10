@@ -6,7 +6,8 @@ Builds the window from the given launcher.pyw (any version) and saves home.png,
 dropdown.png, preset_menu.png, settings.png (and its agents, llama and advanced pages), preset.png, folders.png, prompts.png (editable),
 prompts_running.png (read-only), update.png and running.png. A view
 an older version can't build is skipped with a note. It never clicks Launch or starts a
-process: the running view is only the layout with a few sample log lines, and the update
+process, and it stubs out launch, _kill_all and the config writes so a stray click or Enter
+can't either: the running view is only the layout with a few sample log lines, and the update
 dialog runs a fake job. Building the window clears the model test lock, so it refuses to
 run while one exists.
 """
@@ -65,6 +66,13 @@ def main():
     if not hasattr(mod, "PresetDialog"):  # launcher.pyw is only the entry point since ADR 0020
         mod = package_names()
     mod.UpdateRunner.check = lambda self: None  # no WinGet call, and no update notice appearing at random
+    # The window sits on top of a live desktop: a stray click or Enter must not launch the servers (one did,
+    # killing a llama-server already on 8081), write config.json or kill anything.
+    mod.CommandLauncherGUI.launch = lambda self: None
+    mod.CommandLauncherGUI._kill_all = lambda self: None
+    if hasattr(mod, "ConfigStore"):
+        mod.ConfigStore.save = lambda self: None
+        mod.ConfigStore.update = lambda self, **changes: None
 
     root = tk.Tk()
     app = mod.CommandLauncherGUI(root)
