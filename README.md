@@ -45,7 +45,7 @@ pythonw launcher.pyw
 
 On the first launch, a setup screen asks you to locate your **models folder** — the directory where your `.gguf` files live. This path is saved to `config.json`. Make sure `llama-server` is on your system `PATH` so the launcher can find it regardless of working directory.
 
-Click **Settings** in the top-right corner at any time to change the models folder, the theme and the other options below. Presets are managed from the **⋯** button next to the Preset dropdown (+ Add preset, Edit, Delete).
+Click **Settings** in the top-right corner at any time to change the models folder, the theme and the other options below. Presets are managed from the **⋯** button next to the Preset dropdown (+ Add preset, Edit preset, Delete preset).
 
 ---
 
@@ -183,7 +183,7 @@ Never add `--tools` (any of them) or `--agent` to a preset: they include `exec_s
 
 The launcher adds `--api-key-file` to every preset's command, so you don't need to put it in your own presets.
 
-Use the **⋯** button next to the preset dropdown (**+ Add preset**, **Edit**, **Delete**) to manage your own presets.
+Use the **⋯** button next to the preset dropdown (**+ Add preset**, **Edit preset**, **Delete preset**) to manage your own presets.
 
 ---
 

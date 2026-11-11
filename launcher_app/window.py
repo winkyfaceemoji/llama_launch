@@ -370,8 +370,8 @@ class CommandLauncherGUI:
             self._preset_popup = None
             return None
         self._preset_popup = popup_menu(self.view.preset_more, [("+ Add preset", self._add_preset),
-                                                            ("Edit", self._edit_preset),
-                                                            ("Delete", self._delete_preset, DANGER)], right=True)
+                                                            ("Edit preset", self._edit_preset),
+                                                            ("Delete preset", self._delete_preset, DANGER)], right=True)
         return self._preset_popup
 
     def _add_preset(self):
@@ -718,7 +718,7 @@ class CommandLauncherGUI:
                 errors="replace",
                 cwd=cwd,
             )
-            self._uvx_label_var.set(f"UVX Proxy  ·  PID {self._uvx_proc.pid}")
+            self._uvx_label_var.set(f"UVX proxy  ·  PID {self._uvx_proc.pid}")
             self._append_log(self.uvx_log, f"Launched (PID {self._uvx_proc.pid})")
             self._stream_output(self._uvx_proc, self.uvx_log)
 
@@ -737,7 +737,7 @@ class CommandLauncherGUI:
                 encoding="utf-8",
                 errors="replace",
             )
-            self._proxy_label_var.set(f"System Prompt Proxy  ·  PID {self._proxy_proc.pid}")
+            self._proxy_label_var.set(f"System prompt proxy  ·  PID {self._proxy_proc.pid}")
             self._append_log(self.proxy_log, f"Launched (PID {self._proxy_proc.pid})")
             self._stream_output(self._proxy_proc, self.proxy_log)
 

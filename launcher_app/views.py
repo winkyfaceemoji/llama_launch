@@ -195,8 +195,8 @@ class RunningView(_NoticeView):
 
         # One log area with a tab per process, so each log gets the full height.
         self.llama_label_var = tk.StringVar(value="llama-server")
-        self.uvx_label_var = tk.StringVar(value="UVX Proxy")
-        self.proxy_label_var = tk.StringVar(value="System Prompt Proxy")
+        self.uvx_label_var = tk.StringVar(value="UVX proxy")
+        self.proxy_label_var = tk.StringVar(value="System prompt proxy")
         log_pane = tk.Frame(self, bg=BG)
         log_pane.grid(row=7, column=0, sticky="nsew", padx=24, pady=(8, 8))
         tab_row = tk.Frame(log_pane, bg=BG)
@@ -209,8 +209,8 @@ class RunningView(_NoticeView):
         body.grid_rowconfigure(0, weight=1)
         body.grid_columnconfigure(0, weight=1)
         self._log_tabs = {}  # Text widget -> LogTab
-        for name, label_var in (("llama-server", self.llama_label_var), ("UVX Proxy", self.uvx_label_var),
-                                ("Prompt Proxy", self.proxy_label_var)):
+        for name, label_var in (("llama-server", self.llama_label_var), ("UVX proxy", self.uvx_label_var),
+                                ("Prompt proxy", self.proxy_label_var)):
             frame = tk.Frame(body, bg=BG_INPUT)
             frame.grid(row=0, column=0, sticky="nsew")
             txt = tk.Text(frame, font=FONT_LOG, bg=BG_INPUT, fg=TEXT_PRI, insertbackground=TEXT_PRI,
